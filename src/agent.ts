@@ -28,6 +28,13 @@ import { log } from "./utils/log.js";
  * 决定循环转不转的是模型，不是代码。这就是 Agent 与聊天机器人的分界线。
  */
 
+/** 结构化 UI 事件（TTY 渲染；非 TTY 不注入即不产生） */
+export type AgentEvent =
+  | { type: "tool_start"; name: string; input: unknown }
+  | { type: "tool_end"; name: string }
+  | { type: "thinking"; text: string | null }
+  | { type: "stream_end" };
+
 export interface AgentOptions {
   /** 覆盖模型调用（测试注入假后端；也服务于 P2 的 Backend 策略化） */
   callModel?: (input: ModelInput) => Promise<ModelOutput>;
@@ -37,7 +44,9 @@ export interface AgentOptions {
   spinner?: SpinnerLike;
   /** confirm 权限询问的回调；默认拒绝（fail-closed：未注入确认能力的调用方不自动放行） */
   askUser?: (question: string) => Promise<boolean>;
-  /** 初始模式：default / plan（只读）/ bypass（--yolo） */
+  /** 结构化 UI 事件（工具调用 / 流结束 / thinking） */
+  events?: (ev: AgentEvent) => void;
+  /** 初始模式：default / plan（只读）/ bypass（--yolo）/ auto */
   mode?: Mode;
 }
 
@@ -51,6 +60,7 @@ export class Agent {
   private readonly print: (text: string) => void;
   private readonly spinner: SpinnerLike;
   private readonly askUser: (question: string) => Promise<boolean>;
+  private readonly events?: (ev: AgentEvent) => void;
   /** 会话级白名单：确认过一次的 shell:<command> / 工具名不再问 */
   private readonly allowlist = new Set<string>();
   /** 统一注册表（P5 核心）：内置/子Agent/Plan/MCP 全挂这里，循环只认 resolve */
@@ -63,6 +73,7 @@ export class Agent {
     this.print = opts.print ?? ((text) => process.stdout.write(text));
     this.spinner = opts.spinner ?? new Spinner();
     this.askUser = opts.askUser ?? (async () => false);
+    this.events = opts.events;
     this.mode = opts.mode ?? "default";
 
     // 能力挂载：内置工具 → Plan 工具 → agent(子 Agent) 工具
@@ -187,6 +198,7 @@ export class Agent {
       });
       // 模型纯工具调用（无文本）时 onText 不触发，这里兜底停表
       this.spinner.stop();
+      this.events?.({ type: "stream_end" });
 
       // 记录模型完整回复（文本 + 工具调用）
       this.messages.push({ role: "assistant", content: reply.content });
@@ -258,6 +270,7 @@ export class Agent {
     input: Record<string, any>,
   ): Promise<string> {
     this.spinner.start(`running ${mp.name}…`);
+    this.events?.({ type: "tool_start", name: mp.name, input });
     try {
       const raw = await mp.handler(input, this.ctx);
       // 空输出统一标记：模型看到 "(empty output)" 知道工具执行完毕、只是没产出，
@@ -268,6 +281,7 @@ export class Agent {
       // handler 抛错（如 MCP server 掉线）不炸循环：转为结果喂回模型
       return `Error: ${mp.name} failed: ${(err as Error).message}`;
     } finally {
+      this.events?.({ type: "tool_end", name: mp.name });
       this.spinner.stop();
     }
   }

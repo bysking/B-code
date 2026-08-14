@@ -4,6 +4,10 @@ import { clearSessionFile, loadSession, saveSession } from "./session.js";
 import { resolveSkill, discoverSkills } from "./skills.js";
 import { saveMemory } from "./memory.js";
 import { closeAllMcpConnections } from "./mcp.js";
+import { AppController } from "./ui/controller.js";
+import { mountTtyApp } from "./ui/render.js";
+import { BUILTIN_SLASH_ITEMS } from "./ui/slash.js";
+import type { SpinnerLike } from "./ui.js";
 import type { Mode } from "./permissions.js";
 
 /**
@@ -72,9 +76,164 @@ function initialMode(args: Pick<CliArgs, "plan" | "yolo" | "auto">): Mode {
   return args.plan ? "plan" : args.auto ? "auto" : args.yolo ? "bypass" : "default";
 }
 
+const CONFIRM_OPTIONS = [
+  { label: "No", value: "no" },
+  { label: "Yes", value: "yes" },
+];
+
+/** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
+async function runTtyCli(args: CliArgs): Promise<void> {
+  const ctrl = new AppController();
+
+  const agent = new Agent({
+    mode: initialMode(args),
+    print: (t) => ctrl.streamText(t),
+    askUser: async (question) => (await ctrl.ask(question, CONFIRM_OPTIONS)) === "yes",
+    spinner: {
+      start: (m) => ctrl.setBusy(m),
+      update: () => {},
+      stop: () => ctrl.setBusy(null),
+    } satisfies SpinnerLike,
+    events: (ev) => {
+      switch (ev.type) {
+        case "tool_start":
+          ctrl.toolStart(ev.name, ev.input);
+          break;
+        case "tool_end":
+          ctrl.toolEnd(ev.name);
+          break;
+        case "stream_end":
+          ctrl.finishStream();
+          break;
+        case "thinking":
+          ctrl.setBusy(ev.text);
+          break;
+      }
+    },
+  });
+
+  await agent.initMcp();
+
+  // 斜杠菜单候选：内置命令 + user-invocable 技能
+  ctrl.setSlashItems([
+    ...BUILTIN_SLASH_ITEMS,
+    ...discoverSkills()
+      .filter((s) => s.userInvocable)
+      .map((s) => ({ name: s.name, description: s.description })),
+  ]);
+
+  const initialOutput: string[] = [];
+  if (args.resume) {
+    const saved = await loadSession();
+    if (saved && saved.length > 0) {
+      agent.loadHistory(saved);
+      initialOutput.push(`(resumed ${saved.length} messages)`);
+    } else {
+      initialOutput.push("(no session to resume)");
+    }
+  }
+  if (args.plan) initialOutput.push("(plan mode: read-only)");
+  if (args.auto) initialOutput.push("(auto mode: classifier gates write/shell)");
+  if (args.goal) initialOutput.push(`(pursuing goal: ${args.goal})`);
+  if (args.loop > 0 && args.instruction) initialOutput.push(`(loop every ${args.loop}s; Ctrl-C to stop)`);
+
+  const oneShot = Boolean(args.instruction) && !args.goal && args.loop <= 0;
+
+  let running = false;
+  const quit = (code: number): void => {
+    unmount?.();
+    closeAllMcpConnections();
+    process.exit(code);
+  };
+  let unmount: (() => void) | null = null;
+
+  const { unmount: unmountApp } = mountTtyApp(
+    ctrl,
+    {
+      onExit: () => quit(130),
+      onSubmit: (text) => void handle(text),
+    },
+    initialOutput,
+  );
+  unmount = unmountApp;
+
+  async function handle(input: string) {
+    if (running) return;
+    running = true;
+    try {
+      const trimmed = input.trim();
+      if (trimmed === "exit" || trimmed === "quit") {
+        quit(0);
+        return;
+      }
+      if (trimmed === "/clear") {
+        agent.clearHistory();
+        await clearSessionFile();
+        ctrl.clearAll();
+        ctrl.pushOutput("(history cleared)");
+        return;
+      }
+      if (trimmed === "/plan" || trimmed === "/yolo" || trimmed === "/default") {
+        agent.setMode(trimmed.slice(1) as Mode);
+        ctrl.pushOutput(`(mode → ${trimmed.slice(1)})`);
+        return;
+      }
+      if (trimmed === "/skills") {
+        const skills = discoverSkills()
+          .filter((s) => s.userInvocable)
+          .map((s) => `/${s.name}: ${s.description}`)
+          .join("\n");
+        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : "(no skills)");
+        return;
+      }
+      if (trimmed.startsWith("/remember ")) {
+        const fact = trimmed.slice("/remember ".length).trim();
+        const name =
+          fact.split(/\W+/).filter(Boolean).slice(0, 4).join("_").toLowerCase() || "fact";
+        saveMemory(name, fact, "reference", fact);
+        ctrl.pushOutput(`(saved to memory: ${name})`);
+        return;
+      }
+
+      // 技能调用优先（含 $ARGUMENTS 替换），未命中走普通对话
+      const effective = resolveSkill(trimmed) ?? trimmed;
+      ctrl.pushUser(trimmed);
+
+      if (args.goal) {
+        await agent.pursueGoal(args.goal, effective || "Continue working toward the goal.");
+        await saveSession(agent.history());
+        quit(0);
+        return;
+      }
+      await agent.chat(effective);
+      await saveSession(agent.history());
+
+      if (args.loop > 0) {
+        setTimeout(() => void handle(args.instruction ?? ""), args.loop * 1000);
+      } else if (oneShot) {
+        quit(0);
+      }
+    } finally {
+      running = false;
+    }
+  }
+
+  // 启动即执行模式（one-shot / goal / loop）；否则进入 REPL 等用户输入
+  if (args.instruction || args.goal) {
+    await handle(args.instruction || "Continue working toward the goal.");
+  }
+}
+
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const { resume, plan, yolo, auto, goal, loop, instruction } = parseCliArgs(argv);
   const replMode = !instruction && !goal && !(loop > 0);
+
+  // TTY 交互路径：ink 声明式渲染（思考/工具块/markdown/选择/斜杠菜单）。
+  // 非 TTY（管道/CI/脚本）走下方 readline 分支，语义保持不变。
+  if (process.stdout.isTTY && process.stdin.isTTY) {
+    await runTtyCli({ resume, plan, yolo, auto, goal, loop, instruction });
+    return;
+  }
 
   let rl: readline.Interface | null = null;
   let awaitingAnswer: ((ok: boolean) => void) | null = null;
