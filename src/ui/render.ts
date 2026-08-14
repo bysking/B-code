@@ -26,6 +26,9 @@ export function mountTtyApp(
       onExit: hooks.onExit,
       initialOutput,
     }),
+    // 关闭 ink 默认 exitOnCtrlC：否则 Ctrl+C 被 ink 吞掉，我们自己的
+    // "第一次提示 / 第二次退出 / 打印恢复命令" 协议永远收不到事件
+    { exitOnCtrlC: false },
   );
   return { instance, unmount: () => instance.unmount() };
 }
