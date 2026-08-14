@@ -1,5 +1,5 @@
 {
-  "name": "b-code",
+  "name": "@bysking/b-code",
   "version": "0.1.0",
   "description": "A coding agent built from scratch — your own Claude Code",
   "type": "module",
