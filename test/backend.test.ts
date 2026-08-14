@@ -1,0 +1,189 @@
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { createServer, type Server } from "node:http";
+import {
+  toOpenAITools,
+  toOpenAIMessages,
+  fromOpenAIResponse,
+  defaultModel,
+  callModel,
+} from "../src/backend.js";
+
+// 集成冒烟：本地起一个 OpenAI 兼容 mock 服务，env 指向它后 callModel 的真实 HTTP 链路。
+// 同时验证代理层（undici EnvHttpProxyAgent）注入后不破坏直连请求。
+
+let server: Server;
+let baseUrl: string;
+
+const savedApiKey = process.env.OPENAI_API_KEY;
+const savedBaseUrl = process.env.OPENAI_BASE_URL;
+const savedModel = process.env.B_CODE_MODEL;
+const savedProxy = process.env.HTTP_PROXY;
+const savedNoProxy = process.env.NO_PROXY;
+
+before(async () => {
+  server = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    if (req.url?.includes("/chat/completions")) {
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "mock says hi", tool_calls: [] },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  if (addr && typeof addr === "object") baseUrl = `http://127.0.0.1:${addr.port}/v1`;
+});
+
+after(async () => {
+  await new Promise((r) => server.close(r));
+  for (const [k, v] of [
+    ["OPENAI_API_KEY", savedApiKey],
+    ["OPENAI_BASE_URL", savedBaseUrl],
+    ["B_CODE_MODEL", savedModel],
+    ["HTTP_PROXY", savedProxy],
+    ["NO_PROXY", savedNoProxy],
+  ] as const) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
+test("callModel 真实 HTTP 链路：本地 OpenAI 兼容服务 → 归一化文本块", async () => {
+  process.env.OPENAI_API_KEY = "test-key";
+  process.env.OPENAI_BASE_URL = baseUrl;
+  process.env.B_CODE_MODEL = "mock-model";
+  process.env.NO_PROXY = "127.0.0.1"; // 代理层存在时，本机直连不被代理
+  delete process.env.HTTP_PROXY;
+
+  const out = await callModel({
+    model: "mock-model",
+    system: "sys",
+    tools: [],
+    messages: [{ role: "user", content: "ping" }],
+  });
+  assert.deepEqual(out.content, [{ type: "text", text: "mock says hi" }]);
+});
+
+const sampleTool = {
+  name: "read_file",
+  description: "Read a file",
+  input_schema: { type: "object", properties: { file_path: { type: "string" } } },
+} as const;
+
+test("toOpenAITools：Anthropic 工具 → OpenAI function 格式", () => {
+  const [tool] = toOpenAITools([sampleTool]);
+  assert.equal(tool.type, "function");
+  assert.equal(tool.function.name, "read_file");
+  assert.equal(tool.function.description, "Read a file");
+  assert.deepEqual(tool.function.parameters, sampleTool.input_schema);
+});
+
+test("toOpenAIMessages：纯文本 user 消息直传", () => {
+  const out = toOpenAIMessages([{ role: "user", content: "hello" }]);
+  assert.deepEqual(out, [{ role: "user", content: "hello" }]);
+});
+
+test("toOpenAIMessages：assistant 的 text + tool_use 合并为一条", () => {
+  const input = [
+    {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "finding..." },
+        {
+          type: "tool_use" as const,
+          id: "t1",
+          name: "read_file",
+          input: { file_path: "x.ts" },
+        },
+      ],
+    },
+  ];
+  const [msg] = toOpenAIMessages(input);
+  assert.equal(msg.role, "assistant");
+  assert.equal(msg.content, "finding...");
+  assert.equal(msg.tool_calls.length, 1);
+  assert.equal(msg.tool_calls[0].id, "t1");
+  assert.equal(msg.tool_calls[0].function.name, "read_file");
+  assert.equal(msg.tool_calls[0].function.arguments, '{"file_path":"x.ts"}');
+});
+
+test("toOpenAIMessages：无 tool_use 的 assistant 不带 tool_calls 字段", () => {
+  const input = [{ role: "assistant" as const, content: [{ type: "text" as const, text: "hi" }] }];
+  const [msg] = toOpenAIMessages(input);
+  assert.equal(msg.tool_calls, undefined);
+});
+
+test("toOpenAIMessages：tool_result 块 → role=tool 且带 tool_call_id", () => {
+  const input = [
+    {
+      role: "user" as const,
+      content: [
+        { type: "tool_result" as const, tool_use_id: "t1", content: "file contents" },
+      ],
+    },
+  ];
+  const [msg] = toOpenAIMessages(input);
+  assert.equal(msg.role, "tool");
+  assert.equal(msg.tool_call_id, "t1");
+  assert.equal(msg.content, "file contents");
+});
+
+test("fromOpenAIResponse：纯文本回复 → text 块", () => {
+  const out = fromOpenAIResponse({ choices: [{ message: { content: "done", tool_calls: [] } }] });
+  assert.deepEqual(out.content, [{ type: "text", text: "done" }]);
+});
+
+test("fromOpenAIResponse：content=null + tool_calls → tool_use 块，参数 JSON 已解析", () => {
+  const out = fromOpenAIResponse({
+    choices: [
+      {
+        message: {
+          content: null,
+          tool_calls: [
+            {
+              id: "call-1",
+              type: "function",
+              function: { name: "grep_search", arguments: '{"pattern":"TODO"}' },
+            },
+          ],
+        },
+      },
+    ],
+  });
+  assert.deepEqual(out.content, [
+    { type: "tool_use", id: "call-1", name: "grep_search", input: { pattern: "TODO" } },
+  ]);
+});
+
+test("fromOpenAIResponse：损坏的 arguments JSON → 空对象而非崩溃", () => {
+  const out = fromOpenAIResponse({
+    choices: [
+      {
+        message: {
+          content: null,
+          tool_calls: [{ id: "c", type: "function", function: { name: "x", arguments: "{bad" } }],
+        },
+      },
+    ],
+  });
+  const block = out.content[0];
+  assert.equal(block?.type, "tool_use");
+  assert.deepEqual((block as { input: unknown }).input, {});
+});
+
+test("defaultModel：显式 B_CODE_MODEL 优先", () => {
+  process.env.B_CODE_MODEL = "my-model";
+  assert.equal(defaultModel(), "my-model");
+  delete process.env.B_CODE_MODEL;
+});

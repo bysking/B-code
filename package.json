@@ -7,14 +7,15 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/"
+    "test": "node --import tsx --test --test-force-exit --test-concurrency=1 test/*.test.ts"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "undici": "^6.28.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

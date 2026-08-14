@@ -648,3 +648,34 @@ src/
 ---
 
 > **收尾一句话：** 源码文档教你"从零造出 Agent"，本文档教你把这份 Agent 变成"**可生长的平台**"。做到 Phase 7 时你会拥有一个内核稳定、六接口齐备、新能力一行注册即可接入的属于自己的 Coding Agent——**这就是你自己的、可持续扩展的 Claude Code。**
+
+---
+
+## Part 5 · 平台兼容与日志前置（2026-08-14 增补）
+
+> 规划文档的 P0–P7 专注功能演进；本节补充"跨设备能跑、出问题能查"的基础设施，
+> 它们不改变任何功能的验收标准，只保证功能在 Windows / macOS / Linux 与 CI 环境下一致可复现。
+
+### 5.1 已落地：数据根目录 + 日志（P0b）
+
+| 模块 | 文件 | 约定 |
+|------|------|------|
+| 统一数据根目录 | `src/utils/paths.ts` | `basePath = $B_CODE_HOME \|\| os.homedir()/.b-code`；所有数据（会话/日志/记忆/mcp.json）以它为根；`safeName()` 清洗 Windows 非法字符 |
+| 调试日志 | `src/utils/log.ts` | `B_CODE_LOG_LEVEL`(debug/info/warn/error，默认 info) + `B_CODE_LOG_FILE` 落盘到 `{basePath}/logs/b-code-YYYY-MM-DD.log`；**日志走 stderr**，stdout 专供模型文本 |
+
+**设计理由**
+- `os.homedir()` 天然跨平台（Win→USERPROFILE，POSIX→HOME），无需手写分支。
+- 环境变量覆盖是测试隔离 / 换机迁移 / CI 注入的唯一正解；相对路径直接报错防歧义。
+- 日志与 Agent 输出分离（stderr/stdout），one-shot 输出与管道不被日志污染；P6 无人值守靠日志复盘。
+
+### 5.2 兼容清单：分档时机
+
+| 时机 | 项 | 说明 |
+|------|-----|------|
+| 🟢 已做（P0b） | 路径/目录/safeName + 日志 | 见 5.1 |
+| 🟢 已做（P0b） | **代理穿透** | 自包含用 `undici@6`（与 Node 22 内置同源，兼容器外 v8 会报 `invalid onRequestStart`）；`EnvHttpProxyAgent` 自动读 HTTP(S)_PROXY/NO_PROXY，未设则直连；两个 fetch 路径统一走它 |
+| 🟢 已做（P0b） | **EOL 保持** | `edit_file` 检测文件主导换行符（CRLF 计数 vs LF），CRLF 文件把 new_string 的 `\n` 统一转 `\r\n`，杜绝混行换行与 git 全红 diff；两向都有测试 |
+| 🔵 各阶段落 | 错误分类 + 退出码 | P2 CLI 一起定（P6 自治要吃退出码） |
+| 🔵 各阶段落 | 六接口/注册表 | P5–P7 再落（文档明文"先别过度抽象"） |
+| 🔵 各阶段落 | 信号/Ctrl-C 优雅退出 | P3 权限 confirm 交互更关键 |
+| 🔵 各阶段落 | skill/MCP 目录可配置 | P4/P5 各自接入时支持 env 覆盖（对齐 B_CODE_HOME 哲学） |

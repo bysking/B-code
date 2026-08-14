@@ -14,6 +14,9 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
+      undici:
+        specifier: ^6.28.0
+        version: 6.28.0
     devDependencies:
       '@types/node':
         specifier: ^26.2.0
@@ -362,6 +365,10 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
+  undici@6.28.0:
+    resolution: {integrity: sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==}
+    engines: {node: '>=18.17'}
+
 snapshots:
 
   '@anthropic-ai/sdk@0.117.1':
@@ -593,3 +600,5 @@ snapshots:
       '@typescript/typescript-win32-x64': 7.0.2
 
   undici-types@8.3.0: {}
+
+  undici@6.28.0: {}
