@@ -5,12 +5,13 @@ import { registerBuiltinTools } from "./tools.js";
 import { registerPlanTools } from "./plan.js";
 import { runSubAgent } from "./subagent.js";
 import { loadMcpServers } from "./mcp.js";
-import { Registry, type RuntimeContext } from "./registry.js";
+import { Registry, type RuntimeContext, type UserOption } from "./registry.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateResult, maybeCompact } from "./context.js";
 import { classifyAction, evaluateGoal, renderTranscript } from "./autonomy.js";
 import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
-import { recallMemories } from "./memory.js";
+import { recallMemories, registerMemoryTool } from "./memory.js";
+import { registerAskUserTool } from "./ask-user.js";
 import { buildSkillDescriptions } from "./skills.js";
 import { Spinner, type SpinnerLike } from "./ui.js";
 import { dirs } from "./utils/paths.js";
@@ -31,7 +32,7 @@ import { log } from "./utils/log.js";
 /** 结构化 UI 事件（TTY 渲染；非 TTY 不注入即不产生） */
 export type AgentEvent =
   | { type: "tool_start"; name: string; input: unknown }
-  | { type: "tool_end"; name: string }
+  | { type: "tool_end"; name: string; output?: string }
   | { type: "thinking"; text: string | null }
   | { type: "stream_end" };
 
@@ -46,6 +47,15 @@ export interface AgentOptions {
   askUser?: (question: string) => Promise<boolean>;
   /** 结构化 UI 事件（工具调用 / 流结束 / thinking） */
   events?: (ev: AgentEvent) => void;
+  /** 模型询问用户选择（Select 渲染）；缺省 headless：返回默认首项 */
+  askChoice?: (question: string, options: UserOption[]) => Promise<string>;
+  /** 模型询问用户文本输入（AskInput 渲染）；缺省 headless：返回 null */
+  askTextInput?: (question: string) => Promise<string | null>;
+  /** 模型询问用户分组两选（TabsSelect 渲染）；缺省 headless：返回默认 "tab / 首项" */
+  askGroupedInput?: (
+    question: string,
+    groups: { title: string; options: UserOption[] }[],
+  ) => Promise<string>;
   /** 初始模式：default / plan（只读）/ bypass（--yolo）/ auto */
   mode?: Mode;
 }
@@ -81,8 +91,16 @@ export class Agent {
       callModel: this.call,
       model: this.model,
       setMode: (m) => this.setMode(m),
+      // headless 缺省：选择取默认首项（安全），文本返回 null（无法获取）
+      askUser:
+        opts.askChoice ??
+        (async (_q, options) => options[0]?.value ?? "no"),
+      askUserText: opts.askTextInput ?? (async () => null),
+      askGrouped: opts.askGroupedInput ?? (async (_q, groups) => `${groups[0]?.title ?? ""} / ${groups[0]?.options[0]?.label ?? ""}`),
     };
     registerBuiltinTools(this.registry);
+    registerAskUserTool(this.registry);
+    registerMemoryTool(this.registry);
     registerPlanTools(this.registry, { plansDir: dirs.plansDir() });
     this.registry.register({
       name: "agent",
@@ -302,17 +320,20 @@ export class Agent {
   ): Promise<string> {
     this.spinner.start(`running ${mp.name}…`);
     this.events?.({ type: "tool_start", name: mp.name, input });
+    let output: string | undefined;
     try {
       const raw = await mp.handler(input, this.ctx);
       // 空输出统一标记：模型看到 "(empty output)" 知道工具执行完毕、只是没产出，
       // 不会误判为"没执行/还在跑"而重复调用
-      const text = raw == null || String(raw).trim() === "" ? "(empty output)" : String(raw);
-      return truncateResult(text);
+      output = raw == null || String(raw).trim() === "" ? "(empty output)" : String(raw);
+      return truncateResult(output);
     } catch (err) {
       // handler 抛错（如 MCP server 掉线）不炸循环：转为结果喂回模型
-      return `Error: ${mp.name} failed: ${(err as Error).message}`;
+      output = `Error: ${mp.name} failed: ${(err as Error).message}`;
+      return output;
     } finally {
-      this.events?.({ type: "tool_end", name: mp.name });
+      // output 随事件透传给 UI（Ctrl+O 面板可回看）
+      this.events?.({ type: "tool_end", name: mp.name, output });
       this.spinner.stop();
     }
   }

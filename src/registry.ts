@@ -13,11 +13,22 @@ import type { Mode } from "./permissions.js";
 
 export type ToolMode = "read" | "write" | "shell" | "external";
 
+export interface UserOption {
+  label: string;
+  value: string;
+}
+
 export interface RuntimeContext {
   callModel: (input: ModelInput) => Promise<ModelOutput>;
   model: string;
   /** 供 plan 模式工具切换当前模式状态机 */
   setMode(mode: Mode): void;
+  /** 询问用户选择（Select 渲染）；headless 环境提供默认拒答实现 */
+  askUser?(question: string, options: UserOption[]): Promise<string>;
+  /** 询问用户文本输入（AskInput 渲染）；headless 返回 null */
+  askUserText?(question: string): Promise<string | null>;
+  /** 询问用户分组两选（TabsSelect 渲染：←→切tab，↑↓选组内项）；headless 返回默认 `${tab} / ${label}` */
+  askGrouped?(question: string, groups: { title: string; options: UserOption[] }[]): Promise<string>;
 }
 
 export interface MountPoint {
@@ -32,6 +43,8 @@ export interface MountPoint {
   deferred?: boolean;
   /** plan（只读）模式下仍允许执行（如 write_plan 写自己的计划文件） */
   allowInPlan?: boolean;
+  /** 无条件放行（如 ask_user 这类"与用户对话"的工具，不该再触发一次权限确认） */
+  selfGranted?: boolean;
 }
 
 export class Registry {

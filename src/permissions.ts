@@ -41,7 +41,10 @@ export function checkPermission(
   input: Record<string, any>,
   mode: Mode,
 ): Permission {
-  // ① deny 优先：shell 工具命中危险命令（任何模式绕不过，含 --yolo）
+  // ① 自授权工具放行（如 ask_user：它是"与用户对话"，不该再触发一次权限确认）
+  if (mp.selfGranted) return "allow";
+
+  // ② deny 优先：shell 工具命中危险命令（任何模式绕不过，含 --yolo）
   if (
     mp.mode === "shell" &&
     DANGEROUS_PATTERNS.some((re) => re.test(String(input.command ?? "")))

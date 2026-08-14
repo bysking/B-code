@@ -99,6 +99,10 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     mode: initialMode(args),
     print: (t) => ctrl.streamText(t),
     askUser: async (question) => (await ctrl.ask(question, CONFIRM_OPTIONS)) === "yes",
+    // 模型主动询问（ask_user 工具）：选择走 Select、文本走 AskInput
+    askChoice: (question, options) => ctrl.ask(question, options),
+    askTextInput: (question) => ctrl.askText(question),
+    askGroupedInput: (question, groups) => ctrl.askGrouped(question, groups),
     spinner: {
       start: (m) => ctrl.setBusy(m),
       update: () => {},
@@ -110,7 +114,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           ctrl.toolStart(ev.name, ev.input);
           break;
         case "tool_end":
-          ctrl.toolEnd(ev.name);
+          ctrl.toolEnd(ev.name, ev.output);
           break;
         case "stream_end":
           ctrl.finishStream();

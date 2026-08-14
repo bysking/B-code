@@ -77,6 +77,42 @@ test("渲染：斜杠菜单打开显示候选", async () => {
   frame.cleanup();
 });
 
+test("渲染：askText 文本输入提问渲染，交付后关闭", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  const p = ctrl.askText("请输入分支名:");
+  await wait(30);
+  const open = frame.lastFrame() ?? "";
+  assert.ok(open.includes("请输入分支名:"), "问题渲染");
+  ctrl.resolveAskText("feature/x");
+  assert.equal(await p, "feature/x");
+  assert.equal(ctrl.askTextState, null);
+  frame.cleanup();
+});
+
+test("渲染：Ctrl+O 面板打开展示工具真实输出，关闭后消失", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.streamText("");
+  ctrl.toolStart("read_file", { file_path: "x.ts" });
+  ctrl.toolEnd("read_file", "export const x = 1;\nline2\nline3\n");
+  await wait(30);
+  // 未打开面板时不显示输出
+  assert.ok(!(frame.lastFrame() ?? "").includes("line2"));
+
+  ctrl.toggleOutputPanel(true);
+  await wait(30);
+  const open = frame.lastFrame() ?? "";
+  assert.ok(open.includes("工具输出"), "面板标题");
+  assert.ok(open.includes("line2"), "真实输出渲染");
+  assert.ok(open.includes("read_file"));
+
+  ctrl.toggleOutputPanel(false);
+  await wait(30);
+  assert.ok(!(frame.lastFrame() ?? "").includes("line2"), "关闭后回主视图");
+  frame.cleanup();
+});
+
 test("渲染：权限确认（ask）显示选项", async () => {
   const ctrl = new AppController();
   const frame = renderApp(ctrl);

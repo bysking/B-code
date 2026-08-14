@@ -1,10 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { AppController, SlashItem } from "./controller.js";
+import type { AppController, SlashItem, ToolCallDisplay } from "./controller.js";
+
+/** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
+function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
+  return ctrl.turns.flatMap((t) => t.tools);
+}
 import { MessageList } from "./message-list.js";
 import { Select } from "./select.js";
+import { TabsSelect } from "./tabs-select.js";
 import { SlashMenu } from "./slash-menu.js";
 import { InputBox } from "./input-box.js";
+import { OutputPanel } from "./output-panel.js";
+import { AskInput } from "./ask-input.js";
 import { buildSlash } from "./slash.js";
 
 /**
@@ -36,10 +44,14 @@ export function App({
   const [quitArmed, setQuitArmed] = useState(false);
 
   useInput((_input, key) => {
-    // Ctrl+C：有确认框 → 取消（选默认拒绝）；执行中 → 双击才真正退出
+    // Ctrl+C：有选择框 → 取消；有文本输入 → 取消；执行中 → 双击才真正退出
     if (key.ctrl && _input === "c") {
       if (ctrl.askState) {
         ctrl.resolveAsk(ctrl.askState.options[0]?.value ?? "");
+        return;
+      }
+      if (ctrl.askTextState) {
+        ctrl.resolveAskText("", true);
         return;
       }
       if (quitArmed) {
@@ -51,7 +63,20 @@ export function App({
       setTimeout(() => setQuitArmed(false), 2000);
       return;
     }
-    // Esc：执行中软中断（当前步骤落袋后停），回到可输入状态
+    // Ctrl+O：切换工具输出面板（再次按下或 Esc 关闭）
+    if (key.ctrl && _input === "o") {
+      ctrl.toggleOutputPanel();
+      return;
+    }
+    // Esc：先关输出面板 / 取消文本输入；执行中再是软中断
+    if (key.escape && ctrl.outputPanel) {
+      ctrl.toggleOutputPanel(false);
+      return;
+    }
+    if (key.escape && ctrl.askTextState) {
+      ctrl.resolveAskText("", true);
+      return;
+    }
     if (key.escape && !ctrl.askState && ctrl.busy !== null) {
       onInterrupt();
     }
@@ -95,8 +120,17 @@ export function App({
         <MessageList turns={ctrl.turns} busy={ctrl.busy} />
       </Box>
 
-      {ctrl.askState ? (
+      {ctrl.askGroup ? (
+        <TabsSelect ask={ctrl.askGroup} onResolve={(v) => ctrl.resolveAskGroup(v)} />
+      ) : ctrl.askState ? (
         <Select ask={ctrl.askState} onResolve={(v) => ctrl.resolveAsk(v)} />
+      ) : null}
+
+      {ctrl.askTextState ? (
+        <AskInput
+          question={ctrl.askTextState.question}
+          onSubmit={(v) => ctrl.resolveAskText(v)}
+        />
       ) : null}
 
       {ctrl.slashOpen ? (
@@ -109,12 +143,14 @@ export function App({
         />
       ) : null}
 
+      {ctrl.outputPanel ? <OutputPanel tools={allToolOutputs(ctrl)} /> : null}
+
       <InputBox
         key={inputNonce}
         value={input}
         onChange={handleChange}
         onSubmit={handleSubmit}
-        disabled={!!ctrl.askState}
+        disabled={!!ctrl.askState || !!ctrl.askTextState}
       />
     </Box>
   );

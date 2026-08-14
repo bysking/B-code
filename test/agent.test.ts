@@ -256,6 +256,19 @@ test("权限 plan 模式：写文件被 deny（只读约束由代码强制）", 
   assert.ok(result.content.includes("Denied"), "plan 下写文件被 permission 系统拦截");
 });
 
+test("events：tool_end 携带工具真实输出（Ctrl+O 面板数据源）", async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "read_file", input: { file_path: filePath } }] },
+    { text: "ok" },
+  ]);
+  const events: import("../src/agent.js").AgentEvent[] = [];
+  const agent = new Agent({ callModel: fn, print: () => {}, events: (e) => events.push(e) });
+  await agent.chat("read");
+  const end = events.find((e) => e.type === "tool_end");
+  assert.ok(end && end.type === "tool_end");
+  assert.ok(String(end.output).includes("hello world"), "tool_end 带文件内容");
+});
+
 test("interrupt：Esc 软中断在循环边界生效，不再发起新的模型调用", async () => {
   let calls = 0;
   let release!: () => void;

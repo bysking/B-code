@@ -11,6 +11,8 @@ export interface ToolCallDisplay {
   name: string;
   input: string;
   done: boolean;
+  /** 工具/子 agent 的真实输出（Ctrl+O 面板回看用；可能被截断过） */
+  output?: string;
 }
 
 export interface Turn {
@@ -32,6 +34,12 @@ export interface AskState {
   options: AskOption[];
 }
 
+/** 两级选择（tab 组 × 组内选项） */
+export interface AskGroupState {
+  question: string;
+  groups: { title: string; options: AskOption[] }[];
+}
+
 export interface SlashItem {
   name: string;
   description: string;
@@ -51,10 +59,18 @@ export class AppController {
   busy: string | null = null;
   /** 待回答的选择（权限确认等）；null = 无（字段与方法 ask() 区分命名） */
   askState: AskState | null = null;
+  /** 两级选择（tab 组）：非空时 TabsSelect 渲染，替代单层 Select */
+  askGroup: AskGroupState | null = null;
   /** / 斜杠菜单状态 */
   slashOpen = false;
   slashQuery = "";
   slashItems: SlashItem[] = [];
+  /** Ctrl+O 工具输出面板（展示全部已执行工具的真实输出） */
+  outputPanel = false;
+  /** 文本输入提问（askText）：null = 无 */
+  askTextState: { question: string } | null = null;
+
+  private askTextResolver: ((value: string | null) => void) | null = null;
 
   private nextToolId = 0;
   private nextUserTurnId = 0;
@@ -129,11 +145,12 @@ export class AppController {
     this.bump();
   }
 
-  toolEnd(name: string) {
+  toolEnd(name: string, output?: string) {
     const turn = this.activeAssistant();
     const tool = turn?.tools.filter((t) => t.name === name && !t.done).at(-1);
     if (tool) {
       tool.done = true;
+      if (output !== undefined) tool.output = output;
       this.bump();
     }
   }
@@ -169,6 +186,44 @@ export class AppController {
     res?.(value);
   }
 
+  /** 两级（tab 组）选择提问 */
+  askGrouped(
+    question: string,
+    groups: { title: string; options: AskOption[] }[],
+  ): Promise<string> {
+    return new Promise((resolve) => {
+      this.askGroup = { question, groups };
+      this.askResolver = resolve;
+      this.bump();
+    });
+  }
+
+  /** 由 TabsSelect 调用交付并关闭 */
+  resolveAskGroup(value: string) {
+    const res = this.askResolver;
+    this.askGroup = null;
+    this.askResolver = null;
+    this.bump();
+    res?.(value);
+  }
+
+  /** 文本输入提问：返回用户输入（Esc 取消 → null） */
+  askText(question: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.askTextState = { question };
+      this.askTextResolver = resolve;
+      this.bump();
+    });
+  }
+
+  resolveAskText(value: string, cancelled = false) {
+    const res = this.askTextResolver;
+    this.askTextState = null;
+    this.askTextResolver = null;
+    this.bump();
+    res?.(cancelled ? null : value);
+  }
+
   // ── / 斜杠菜单 ─────────────────────────────────────────────
   openSlash(query = "") {
     this.slashOpen = true;
@@ -190,6 +245,12 @@ export class AppController {
 
   setSlashItems(items: SlashItem[]) {
     this.slashItems = items;
+    this.bump();
+  }
+
+  /** Ctrl+O：切换工具输出面板（force 可指定开/关） */
+  toggleOutputPanel(force?: boolean) {
+    this.outputPanel = force ?? !this.outputPanel;
     this.bump();
   }
 }

@@ -60,3 +60,15 @@ test("不同项目目录记忆互不可见（隔离）", () => {
   const inB = recallMemories("secret a", 3, cwd2);
   assert.equal(inB, "", "b 项目召不到 a 项目的记忆");
 });
+
+test("中文召回：无空格文本靠二叉分词命中", () => {
+  saveMemory("备份服务器", "运维", "project", "备份服务器是 192.168.1.99，密码在 1Password", cwd1);
+  const recalled = recallMemories("备份服务器地址是什么?", 3, cwd1);
+  assert.ok(recalled.includes("192.168.1.99"), `中文二叉应命中: ${recalled}`);
+});
+
+test("英文召回不受影响（回归）", () => {
+  saveMemory("postgres db", "database", "project", "host db:5432", cwd1);
+  const recalled = recallMemories("postgres server", 3, cwd1);
+  assert.ok(recalled.includes("postgres db"));
+});
