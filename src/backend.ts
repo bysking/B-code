@@ -277,14 +277,18 @@ export class OpenAIBackend implements ModelBackend {
   }
 }
 
-/** Anthropic 原生后端：官方 SDK 流式 */
+/** Anthropic 原生后端：官方 SDK 流式（ANTHROPIC_BASE_URL 可自定义端点） */
 export class AnthropicBackend implements ModelBackend {
   readonly kind = "anthropic";
-  private client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY ?? "",
-    // SDK 走 fetch；注入代理穿透的包装，保持双后端行为一致
-    fetch: proxiedFetch as unknown as ClientOptions["fetch"],
-  });
+  private client = (() => {
+    const baseURL = process.env.ANTHROPIC_BASE_URL;
+    return new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+      // SDK 走 fetch；注入代理穿透的包装，保持双后端行为一致
+      fetch: proxiedFetch as unknown as ClientOptions["fetch"],
+      ...(baseURL ? { baseURL } : {}),
+    });
+  })();
 
   async call(input: ModelInput): Promise<ModelOutput> {
     if (!process.env.ANTHROPIC_API_KEY) {
