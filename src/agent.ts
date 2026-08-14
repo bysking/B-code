@@ -3,6 +3,7 @@ import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages
 import { callModel, defaultModel, type ModelInput, type ModelOutput } from "./backend.js";
 import { executeTool, toolDefinitions } from "./tools.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { Spinner, type SpinnerLike } from "./ui.js";
 
 /**
  * Agent = 核心循环引擎（施工图 L2 内核，P1 最小版）
@@ -19,8 +20,10 @@ import { buildSystemPrompt } from "./prompt.js";
 export interface AgentOptions {
   /** 覆盖模型调用（测试注入假后端；也服务于 P2 的 Backend 策略化） */
   callModel?: (input: ModelInput) => Promise<ModelOutput>;
-  /** 模型文本的输出口（UI 层注入；测试注入 no-op 避免裸写 stdout 干扰 TAP 协议） */
+  /** 模型文本的输出口（UI 层注入；默认直写，SSE 来一块打一块）。测试注入 no-op 避免裸写 stdout 干扰 TAP */
   print?: (text: string) => void;
+  /** loading 指示器；默认真 Spinner（非 TTY 自动静默），测试注入记录型替身 */
+  spinner?: SpinnerLike;
 }
 
 export class Agent {
@@ -29,10 +32,12 @@ export class Agent {
   public readonly model = defaultModel();
   private readonly call: (input: ModelInput) => Promise<ModelOutput>;
   private readonly print: (text: string) => void;
+  private readonly spinner: SpinnerLike;
 
   constructor(opts: AgentOptions = {}) {
     this.call = opts.callModel ?? callModel;
     this.print = opts.print ?? ((text) => process.stdout.write(text));
+    this.spinner = opts.spinner ?? new Spinner();
   }
 
   /** 会话历史（P2 会话持久化直接序列化它） */
@@ -56,14 +61,21 @@ export class Agent {
     const system = buildSystemPrompt();
 
     while (true) {
+      // 模型思考期：转起来；首个文本 token 到达即停（看下面 onText）
+      this.spinner.start("thinking…");
       const reply = await this.call({
         model: this.model,
         system,
         tools: toolDefinitions,
         messages: this.messages,
-        // 流式文本直接进 UI；返回的 content 仍是完整消息（历史/工具提取不受影响）
-        onText: (delta) => this.print(delta),
+        // 流式文本直接进 UI；首个 delta 到达意味着模型已出字，停 spinner
+        onText: (delta) => {
+          this.spinner.stop();
+          this.print(delta);
+        },
       });
+      // 模型纯工具调用（无文本）时 onText 不触发，这里兜底停表
+      this.spinner.stop();
 
       // 记录模型完整回复（文本 + 工具调用）
       this.messages.push({ role: "assistant", content: reply.content });
@@ -77,7 +89,14 @@ export class Agent {
       for (const tu of toolUses) {
         // 工具调用的进度提示走 print 缝（与模型文本同一条 UI 通道）
         this.print(`  → ${tu.name}(${JSON.stringify(tu.input)})\n`);
-        const output = await executeTool(tu.name, (tu.input ?? {}) as Record<string, any>);
+        // 工具执行期：继续转
+        this.spinner.start(`running ${tu.name}…`);
+        let output: string;
+        try {
+          output = await executeTool(tu.name, (tu.input ?? {}) as Record<string, any>);
+        } finally {
+          this.spinner.stop();
+        }
         // tool_result 必须关联到对应的 tool_use_id
         results.push({ type: "tool_result", tool_use_id: tu.id, content: output });
       }

@@ -74,6 +74,52 @@ test("callModel 真实 HTTP 链路：SSE 流式 → 文本增量回调 + 归一�
   assert.deepEqual(out.content, [{ type: "text", text: "mock says hi" }]);
 });
 
+test("真·流式：第一块文本在 callModel resolve 之前到达（打字机地基）", async () => {
+  // server 分两段发送、中间停顿 80ms；旧实现 resp.text() 会等全部到齐才回调，
+  // 这个用例在旧实现下必然失败（无第一段提前到达的效果）
+  const evtServer = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write('data: {"choices":[{"delta":{"content":"first-frag"}}]}\n\n');
+    setTimeout(() => {
+      res.write('data: {"choices":[{"delta":{"content":"-second"}}]}\n\n');
+      res.write("data: [DONE]\n\n");
+      res.end();
+    }, 80);
+  });
+  await new Promise<void>((r) => evtServer.listen(0, "127.0.0.1", r));
+  const addr = evtServer.address();
+  const evtUrl = `http://127.0.0.1:${addr && typeof addr === "object" ? addr.port : 0}/v1`;
+
+  const saved = process.env.OPENAI_BASE_URL;
+  process.env.OPENAI_BASE_URL = evtUrl;
+  try {
+    const got: string[] = [];
+    let resolved = false;
+    const pending = callModel({
+      model: "mock-model",
+      system: [{ type: "text", text: "sys" }],
+      tools: [],
+      messages: [{ role: "user", content: "go" }],
+      onText: (d) => got.push(d),
+    }).then((out) => {
+      resolved = true;
+      return out;
+    });
+
+    await new Promise((r) => setTimeout(r, 30)); // 停顿时长内，第一块应已到达
+    assert.equal(resolved, false, "callModel 尚未 resolve 时第一块就已到达");
+    assert.deepEqual(got, ["first-frag"], "30ms 时只有第一块被回调");
+
+    const out = await pending;
+    assert.equal(resolved, true);
+    assert.deepEqual(out.content, [{ type: "text", text: "first-frag-second" }]);
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = saved;
+    await new Promise((r) => evtServer.close(r));
+  }
+});
+
 test("callModel SSE 流式：tool_calls 分片按 index 合并为完整参数", async () => {
   // 独立 server：一次请求返回工具调用流（name 整块 + arguments 分片）
   const toolServer = createServer((req, res) => {

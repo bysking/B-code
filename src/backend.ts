@@ -142,59 +142,42 @@ export function fromOpenAIResponse(data: any): ModelOutput {
 
 // ── 统一调用入口 ──────────────────────────────────────────────────
 
-/** SSE 逐块解析 OpenAI 流式响应：文本增量进 onText，tool_calls 按 index 合并 */
-function parseOpenAIStream(
-  body: string,
-  onText?: (delta: string) => void,
-): { content: string; toolCalls: { id: string; name: string; args: string }[] } {
-  const toolMap = new Map<number, { id: string; name: string; args: string }>();
-  let content = "";
-
-  for (const rawLine of body.split("\n")) {
-    const line = rawLine.trim();
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (data === "[DONE]") continue;
-
-    let chunk: any;
-    try {
-      chunk = JSON.parse(data);
-    } catch {
-      continue; // 忽略非 JSON 心跳行
-    }
-    const delta = chunk.choices?.[0]?.delta;
-    if (!delta) continue;
-
-    if (delta.content) {
-      content += delta.content;
-      onText?.(delta.content);
-    }
-
-    // OpenAI 的 tool_calls 按 index 分多个 chunk 到达，逐块拼接
-    for (const tc of delta.tool_calls ?? []) {
-      const idx: number = tc.index ?? 0;
-      const entry = toolMap.get(idx) ?? { id: `call_${idx}`, name: "", args: "" };
-      toolMap.set(idx, entry);
-      if (tc.id) entry.id = tc.id;
-      if (tc.function?.name) entry.name = tc.function.name; // name 整块到达，覆盖式
-      if (tc.function?.arguments) entry.args += tc.function.arguments; // arguments 分片，拼接式
-    }
-  }
-
-  const toolCalls = [...toolMap.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, v]) => v);
-  return { content, toolCalls };
+/**
+ * OpenAI SSE 流的增量解析状态
+ * 修复要点：之前用 resp.text() 一次性读完才解析，"流"在读取点就断了——
+ * 打字机/流式效果必须在读取的同时逐块回调。这里存中间态，reader 边收边喂。
+ */
+interface OpenAIStreamCtx {
+  content: string;
+  toolMap: Map<number, { id: string; name: string; args: string }>;
+  onText?: (delta: string) => void;
 }
 
-/** OpenAI 流式响应 → 归一化输出（复用 fromOpenAIResponse 语义） */
-function fromOpenAIStream(body: string, onText?: (delta: string) => void): ModelOutput {
-  const { content, toolCalls } = parseOpenAIStream(body, onText);
+function applyOpenAIDelta(ctx: OpenAIStreamCtx, delta: any): void {
+  if (delta.content) {
+    ctx.content += delta.content;
+    ctx.onText?.(delta.content);
+  }
+  // OpenAI 的 tool_calls 按 index 分多个 chunk 到达，逐块拼接
+  for (const tc of delta.tool_calls ?? []) {
+    const idx: number = tc.index ?? 0;
+    const entry = ctx.toolMap.get(idx) ?? { id: `call_${idx}`, name: "", args: "" };
+    ctx.toolMap.set(idx, entry);
+    if (tc.id) entry.id = tc.id;
+    if (tc.function?.name) entry.name = tc.function.name; // name 整块到达，覆盖式
+    if (tc.function?.arguments) entry.args += tc.function.arguments; // arguments 分片，拼接式
+  }
+}
+
+function finishOpenAIStream(ctx: OpenAIStreamCtx): ModelOutput {
+  const toolCalls = [...ctx.toolMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => v);
   return fromOpenAIResponse({
     choices: [
       {
         message: {
-          content: content || null,
+          content: ctx.content || null,
           tool_calls: toolCalls.map((t) => ({
             id: t.id,
             type: "function",
@@ -204,6 +187,52 @@ function fromOpenAIStream(body: string, onText?: (delta: string) => void): Model
       },
     ],
   });
+}
+
+/** 逐行喂给 SSE 解析器：多块 TCP 到达时 buffer 残尾，下一段续接 */
+function feedSSELine(ctx: OpenAIStreamCtx, line: string): void {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) return;
+  const data = trimmed.slice(5).trim();
+  if (data === "[DONE]") return;
+  let chunk: any;
+  try {
+    chunk = JSON.parse(data);
+  } catch {
+    return; // 忽略心跳/非 JSON 行
+  }
+  const delta = chunk.choices?.[0]?.delta;
+  if (delta) applyOpenAIDelta(ctx, delta);
+}
+
+/**
+ * 真正流式读取：resp.body reader 边收边解析，onText 随数据到达即时触发
+ * （不再等整包响应体落地）。这是打次字号效果的地基。
+ */
+async function streamOpenAISSE(
+  resp: Awaited<ReturnType<typeof undiciFetch>>,
+  onText?: (delta: string) => void,
+): Promise<ModelOutput> {
+  const ctx: OpenAIStreamCtx = { content: "", toolMap: new Map(), onText };
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // 残尾留待下段
+      for (const line of lines) feedSSELine(ctx, line);
+    }
+  }
+  if (buffer.trim()) feedSSELine(ctx, buffer); // 流结束的最后一截
+
+  // 非流式降级服务可能发出普通 JSON 行而非 SSE：data: 前缀缺失 → 空输出。
+  // 降级由调用方（content-type 判断）分流，这里不重复处理。
+  return finishOpenAIStream(ctx);
 }
 
 export async function callModel(input: ModelInput): Promise<ModelOutput> {
@@ -226,14 +255,13 @@ export async function callModel(input: ModelInput): Promise<ModelOutput> {
       throw new Error(`OpenAI API ${resp.status}: ${await resp.text()}`);
     }
 
-    const contentType = resp.headers.get("content-type") ?? "";
-    const raw = await resp.text();
-
-    // 兼容性：部分 OpenAI 兼容服务即使请求 stream:true 也返回普通 JSON
-    if (!contentType.includes("text/event-stream")) {
-      return fromOpenAIResponse(JSON.parse(raw));
+    // 兼容性：部分 OpenAI 兼容服务即使请求 stream:true 也返回普通 JSON → 非流式降级
+    const isSSE = (resp.headers.get("content-type") ?? "").includes("text/event-stream");
+    if (!isSSE) {
+      return fromOpenAIResponse(JSON.parse(await resp.text()));
     }
-    return fromOpenAIStream(raw, input.onText);
+    // 真·流式：reader 边收边回调，onText 随数据到达即时触发（打字机的地基）
+    return streamOpenAISSE(resp, input.onText);
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {

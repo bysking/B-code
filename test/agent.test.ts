@@ -119,3 +119,20 @@ test("循环：模型状态失忆时的兜底（下一轮直接文本）", async
   // 第二轮越界 → 文本收尾，循环必终止（防死循环护栏）
   assert.equal(calls.length, 2);
 });
+
+test("spinner 生命周期：模型期 thinking、工具期 running，start/stop 配平", async () => {
+  const { fn } = makeScriptedBackend([1, -1], filePath);
+  const events: string[] = [];
+  const recording: import("../src/ui.js").SpinnerLike = {
+    start: (m) => events.push(`start:${m}`),
+    stop: () => events.push("stop"),
+  };
+  const agent = new Agent({ callModel: fn, print: () => {}, spinner: recording });
+  await agent.chat("read it");
+
+  assert.ok(events.some((e) => e.includes("thinking")), "模型期有 thinking");
+  assert.ok(events.some((e) => e.includes("running read_file")), "工具期有 running");
+  const starts = events.filter((e) => e.startsWith("start")).length;
+  const stops = events.filter((e) => e === "stop").length;
+  assert.equal(starts, stops, "每个 start 都必须配一个 stop（spinner 不残留）");
+});

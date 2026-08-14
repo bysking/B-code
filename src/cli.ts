@@ -25,6 +25,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const { resume, instruction } = parseCliArgs(argv);
+  // 模型文本经 Agent 默认 print 直写：后端 SSE 来多少块就实时打多少（不做人为节流）
   const agent = new Agent();
 
   if (resume) {
