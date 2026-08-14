@@ -4,6 +4,13 @@
   "description": "A coding agent built from scratch — your own Claude Code",
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "bcode": "bin/bcode.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
@@ -14,17 +21,17 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
-    "@types/react": "^19.2.18",
     "dotenv": "^17.4.2",
     "ink": "^7.1.1",
     "ink-text-input": "^6.0.0",
     "react": "^19.2.8",
+    "tsx": "^4.23.12",
     "undici": "^6.28.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
     "ink-testing-library": "^4.0.0",
-    "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }
 }

@@ -14,11 +14,13 @@ import type { Mode } from "./permissions.js";
 /**
  * CLI 外壳（施工图 L1 cli.ts）
  *
- *   pnpm dev "Read x"            one-shot：执行一条指令后保存退出（可含权限确认）
- *   pnpm dev                     REPL：交互式多轮，每轮自动保存
- *   pnpm dev --resume            REPL，先恢复上次会话
- *   pnpm dev --plan "..."        Plan 模式：写/编辑/shell 全部拦截（只读规划）
- *   pnpm dev --yolo "..."        bypass：跳过 confirm（危险命令 deny 仍拦得住）
+ * 全局安装后 bcode 即当前工具（开发态等价于 pnpm dev）：
+ *   bcode "Read x"               one-shot：执行一条指令后保存退出（可含权限确认）
+ *   bcode                        REPL：交互式多轮，每轮自动保存
+ *   bcode --resume               REPL，先恢复上次会话（--session <id> 恢复指定会话）
+ *   bcode --plan "..."           Plan 模式：写/编辑/shell 全部拦截（只读规划）
+ *   bcode --yolo "..."           bypass：跳过 confirm（危险命令 deny 仍拦得住）
+ *   bcode --goal <条件> "p"      Auto 追目标；--auto/--loop <秒> 自治
  *
  * readline 延迟创建：one-shot 只有在权限确认真正发生时（askUser 第一次被调用）
  * 才挂到 stdin——否则脚本管道提前到达的 y/n 会被过早消费掉，confirm 就永远等不到答案。
@@ -238,7 +240,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
 
 /** 恢复会话命令提示（带会话 id），供退出口调用 */
 function printResumeHint(sessionId: string): void {
-  process.stdout.write(`\n想恢复本次会话，执行:\n  pnpm dev --resume --session ${sessionId}\n`);
+  process.stdout.write(`\n想恢复本次会话，执行:\n  bcode --resume --session ${sessionId}\n`);
 }
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
