@@ -16,11 +16,13 @@ import { buildSlash } from "./slash.js";
 export function App({
   ctrl,
   onSubmit,
+  onInterrupt,
   onExit,
   initialOutput,
 }: {
   ctrl: AppController;
   onSubmit: (text: string) => void;
+  onInterrupt: () => void;
   onExit: () => void;
   initialOutput?: string[];
 }) {
@@ -30,9 +32,29 @@ export function App({
   const [input, setInput] = useState("");
   // 补全时 ++ 强制 TextInput 重挂：让光标回到新文本末尾（"补全词 + 空格"之后）
   const [inputNonce, setInputNonce] = useState(0);
+  // 双 Ctrl+C：第一次提示，第二次真正退出（2s 内有效）
+  const [quitArmed, setQuitArmed] = useState(false);
 
   useInput((_input, key) => {
-    if (key.ctrl && _input === "c") onExit();
+    // Ctrl+C：有确认框 → 取消（选默认拒绝）；执行中 → 双击才真正退出
+    if (key.ctrl && _input === "c") {
+      if (ctrl.askState) {
+        ctrl.resolveAsk(ctrl.askState.options[0]?.value ?? "");
+        return;
+      }
+      if (quitArmed) {
+        onExit();
+        return;
+      }
+      setQuitArmed(true);
+      ctrl.pushOutput("(再按一次 Ctrl+C 退出)");
+      setTimeout(() => setQuitArmed(false), 2000);
+      return;
+    }
+    // Esc：执行中软中断（当前步骤落袋后停），回到可输入状态
+    if (key.escape && !ctrl.askState && ctrl.busy !== null) {
+      onInterrupt();
+    }
   });
 
   const handleChange = (value: string) => {

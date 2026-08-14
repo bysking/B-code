@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseCliArgs } from "../src/cli.js";
 
-const base = { resume: false, plan: false, yolo: false, auto: false, goal: "", loop: 0, instruction: "" };
+const base = { resume: false, plan: false, yolo: false, auto: false, goal: "", loop: 0, session: "", instruction: "" };
 
 test("parseCliArgs：无参数 → 纯 REPL，默认模式", () => {
   assert.deepEqual(parseCliArgs([]), base);

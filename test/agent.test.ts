@@ -256,6 +256,29 @@ test("权限 plan 模式：写文件被 deny（只读约束由代码强制）", 
   assert.ok(result.content.includes("Denied"), "plan 下写文件被 permission 系统拦截");
 });
 
+test("interrupt：Esc 软中断在循环边界生效，不再发起新的模型调用", async () => {
+  let calls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const fn = async (_input: ModelInput): Promise<ModelOutput> => {
+    calls++;
+    await gate; // 模拟一次"长时间在飞"的模型调用
+    return { content: [{ type: "text", text: "done" }] };
+  };
+  const agent = new Agent({ callModel: fn, print: () => {} });
+  const p = agent.chat("go");
+  await new Promise((r) => setTimeout(r, 10));
+  agent.interrupt(); // Esc
+  release();
+  await p;
+
+  assert.equal(agent.interruptedByUser, true);
+  assert.equal(calls, 1, "中断后循环停在边界，不再发起第二轮");
+  assert.equal(agent.history().length, 2, "user + 一次 assistant 回复");
+});
+
 test("spinner 生命周期：模型期 thinking、工具期 running，start/stop 配平", async () => {
   const { fn } = makeScriptedBackend([1, -1], filePath);
   const events: string[] = [];

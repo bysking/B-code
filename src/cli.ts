@@ -7,6 +7,7 @@ import { closeAllMcpConnections } from "./mcp.js";
 import { AppController } from "./ui/controller.js";
 import { mountTtyApp } from "./ui/render.js";
 import { BUILTIN_SLASH_ITEMS } from "./ui/slash.js";
+import { newSessionId } from "./session.js";
 import type { SpinnerLike } from "./ui.js";
 import type { Mode } from "./permissions.js";
 
@@ -32,6 +33,8 @@ export interface CliArgs {
   goal: string;
   /** --loop <秒>：定时重投间隔（0 = 不启用） */
   loop: number;
+  /** --session <id>：恢复指定会话 */
+  session: string;
   instruction: string;
 }
 
@@ -40,6 +43,7 @@ const FLAG_ONLY = new Set(["--resume", "--plan", "--yolo", "--auto"]);
 export function parseCliArgs(argv: string[]): CliArgs {
   let goal = "";
   let loop = 0;
+  let session = "";
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? "";
@@ -51,6 +55,9 @@ export function parseCliArgs(argv: string[]): CliArgs {
     } else if (a === "--loop") {
       const n = Number(argv[i + 1] ?? 0);
       loop = Number.isFinite(n) && n > 0 ? n : 0;
+      i++;
+    } else if (a === "--session") {
+      session = argv[i + 1] ?? "";
       i++;
     } else {
       rest.push(a);
@@ -67,6 +74,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     auto: rest.includes("--auto"),
     goal,
     loop,
+    session,
     instruction,
   };
 }
@@ -82,7 +90,7 @@ const CONFIRM_OPTIONS = [
 ];
 
 /** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
-async function runTtyCli(args: CliArgs): Promise<void> {
+async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const ctrl = new AppController();
 
   const agent = new Agent({
@@ -123,14 +131,12 @@ async function runTtyCli(args: CliArgs): Promise<void> {
   ]);
 
   const initialOutput: string[] = [];
-  if (args.resume) {
-    const saved = await loadSession();
-    if (saved && saved.length > 0) {
-      agent.loadHistory(saved);
-      initialOutput.push(`(resumed ${saved.length} messages)`);
-    } else {
-      initialOutput.push("(no session to resume)");
-    }
+  const saved = await (args.session ? loadSession(args.session) : args.resume ? loadSession() : null);
+  if (saved && saved.length > 0) {
+    agent.loadHistory(saved);
+    initialOutput.push(`(resumed ${saved.length} messages)`);
+  } else if (args.resume || args.session) {
+    initialOutput.push("(no session to resume)");
   }
   if (args.plan) initialOutput.push("(plan mode: read-only)");
   if (args.auto) initialOutput.push("(auto mode: classifier gates write/shell)");
@@ -141,6 +147,7 @@ async function runTtyCli(args: CliArgs): Promise<void> {
 
   let running = false;
   const quit = (code: number): void => {
+    printResumeHint(sessionId);
     unmount?.();
     closeAllMcpConnections();
     process.exit(code);
@@ -151,6 +158,7 @@ async function runTtyCli(args: CliArgs): Promise<void> {
     ctrl,
     {
       onExit: () => quit(130),
+      onInterrupt: () => agent.interrupt(), // Esc：软中断当前 chat
       onSubmit: (text) => void handle(text),
     },
     initialOutput,
@@ -201,12 +209,16 @@ async function runTtyCli(args: CliArgs): Promise<void> {
 
       if (args.goal) {
         await agent.pursueGoal(args.goal, effective || "Continue working toward the goal.");
-        await saveSession(agent.history());
+        await saveSession(agent.history(), sessionId);
         quit(0);
         return;
       }
       await agent.chat(effective);
-      await saveSession(agent.history());
+      await saveSession(agent.history(), sessionId);
+
+      if (agent.interruptedByUser) {
+        ctrl.pushOutput("(interrupted — 可以输入新指令或继续)");
+      }
 
       if (args.loop > 0) {
         setTimeout(() => void handle(args.instruction ?? ""), args.loop * 1000);
@@ -224,14 +236,20 @@ async function runTtyCli(args: CliArgs): Promise<void> {
   }
 }
 
+/** 恢复会话命令提示（带会话 id），供退出口调用 */
+function printResumeHint(sessionId: string): void {
+  process.stdout.write(`\n想恢复本次会话，执行:\n  pnpm dev --resume --session ${sessionId}\n`);
+}
+
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const { resume, plan, yolo, auto, goal, loop, instruction } = parseCliArgs(argv);
+  const { resume, plan, yolo, auto, goal, loop, session, instruction } = parseCliArgs(argv);
   const replMode = !instruction && !goal && !(loop > 0);
+  const sessionId = newSessionId(); // 本次会话 id（退出时打印恢复命令用）
 
   // TTY 交互路径：ink 声明式渲染（思考/工具块/markdown/选择/斜杠菜单）。
   // 非 TTY（管道/CI/脚本）走下方 readline 分支，语义保持不变。
   if (process.stdout.isTTY && process.stdin.isTTY) {
-    await runTtyCli({ resume, plan, yolo, auto, goal, loop, instruction });
+    await runTtyCli({ resume, plan, yolo, auto, goal, loop, session, instruction }, sessionId);
     return;
   }
 
@@ -249,7 +267,10 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     return true;
   };
 
-  const finish = () => process.exit(0);
+  const finish = () => {
+    printResumeHint(sessionId);
+    process.exit(0);
+  };
 
   /** 读取当前 rl（getter 形式避免 TS 控制流把闭包赋值的 rl 收窄成 never） */
   const currentRl = () => rl;
@@ -320,7 +341,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         busy = true;
         try {
           await agent.chat(skillPrompt);
-          await saveSession(agent.history());
+          await saveSession(agent.history(), sessionId);
         } finally {
           busy = false;
           if (closing) finish();
@@ -331,7 +352,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       busy = true;
       try {
         await agent.chat(input);
-        await saveSession(agent.history());
+        await saveSession(agent.history(), sessionId);
       } finally {
         busy = false;
         if (closing) finish();
@@ -383,14 +404,12 @@ const agent = new Agent({
   // P5：启动时挂载 mcp.json 配置的服务器（失败仅记日志，不阻塞）
   await agent.initMcp();
 
-  if (resume) {
-    const saved = await loadSession();
-    if (saved && saved.length > 0) {
-      agent.loadHistory(saved);
-      process.stdout.write(`(resumed ${saved.length} messages)\n`);
-    } else {
-      process.stdout.write("(no session to resume)\n");
-    }
+  const saved = await (session ? loadSession(session) : resume ? loadSession() : null);
+  if (saved && saved.length > 0) {
+    agent.loadHistory(saved);
+    process.stdout.write(`(resumed ${saved.length} messages)\n`);
+  } else if (resume || session) {
+    process.stdout.write("(no session to resume)\n");
   }
 
   // ── goal 模式：无人值守追条件（评估器回灌直到达成）────────────
@@ -399,7 +418,7 @@ const agent = new Agent({
     try {
       await agent.pursueGoal(goal, instruction || "Continue working toward the goal.");
     } finally {
-      await saveSession(agent.history());
+      await saveSession(agent.history(), sessionId);
       busy = false;
     }
     closeAllMcpConnections();
@@ -437,7 +456,7 @@ const agent = new Agent({
     try {
       await agent.chat(effective);
     } finally {
-      await saveSession(agent.history());
+      await saveSession(agent.history(), sessionId);
       busy = false;
     }
     process.stdout.write("\n(done)\n");

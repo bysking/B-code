@@ -11,7 +11,13 @@ function renderApp(
   onExit: () => void = () => {},
 ) {
   const frame = render(
-    React.createElement(App, { ctrl, onSubmit, onExit, initialOutput: undefined }),
+    React.createElement(App, {
+      ctrl,
+      onSubmit,
+      onInterrupt: () => {},
+      onExit,
+      initialOutput: undefined,
+    }),
   );
   return frame;
 }

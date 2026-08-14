@@ -110,6 +110,20 @@ export class Agent {
     this.mode = mode;
   }
 
+  // ── 用户中断（Esc）──────────────────────────────────────
+  private interrupted = false;
+  private lastInterrupted = false;
+
+  /** 请求中断当前 chat：在循环边界生效（等当前模型/工具步骤落袋后停，不再发起新一轮） */
+  interrupt(): void {
+    this.interrupted = true;
+  }
+
+  /** 最近一次 chat 是否因用户中断而（提前）结束 */
+  get interruptedByUser(): boolean {
+    return this.lastInterrupted;
+  }
+
   /** 面向 eval/classify 的脱敏对话记录（tool 细节不展开） */
   transcriptText(): string {
     return renderTranscript(this.messages);
@@ -169,6 +183,7 @@ export class Agent {
 
   /** 处理一次用户输入，可能包含多轮工具调用 */
   async chat(userText: string): Promise<void> {
+    this.lastInterrupted = false;
     this.messages.push({ role: "user", content: userText });
 
     // P4：以当前用户输入为 query 做记忆召回 + 技能描述，注入 system 动态块末尾
@@ -179,6 +194,14 @@ export class Agent {
     });
 
     while (true) {
+      // 用户中断（Esc）：等当前步骤落袋后在此停住，不发起新一轮（软中断）
+      if (this.interrupted) {
+        this.interrupted = false;
+        this.lastInterrupted = true;
+        this.events?.({ type: "stream_end" });
+        break;
+      }
+
       // 上下文管理：消息超阈值先 LLM 摘要压缩（内部一次独立模型调用）
       this.messages = await this.compactIfNeeded();
 
@@ -206,7 +229,15 @@ export class Agent {
       const toolUses = reply.content.filter(
         (b): b is Anthropic.ToolUseBlockParam => b.type === "tool_use",
       );
-      if (toolUses.length === 0) break;
+      if (toolUses.length === 0) {
+        // 正常完成但 Esc 已按下（如纯文本回复）→ 也标记为用户中断（本就不需要继续）
+        if (this.interrupted) {
+          this.interrupted = false;
+          this.lastInterrupted = true;
+          this.events?.({ type: "stream_end" });
+        }
+        break;
+      }
 
       const results: Anthropic.ToolResultBlockParam[] = [];
       for (const tu of toolUses) {

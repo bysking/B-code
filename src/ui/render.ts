@@ -15,13 +15,14 @@ export interface TtyMount {
 
 export function mountTtyApp(
   ctrl: AppController,
-  hooks: { onSubmit: (text: string) => void; onExit: () => void },
+  hooks: { onSubmit: (text: string) => void; onInterrupt: () => void; onExit: () => void },
   initialOutput?: string[],
 ): TtyMount {
   const instance = render(
     React.createElement(App, {
       ctrl,
       onSubmit: hooks.onSubmit,
+      onInterrupt: hooks.onInterrupt,
       onExit: hooks.onExit,
       initialOutput,
     }),
