@@ -36,6 +36,27 @@ function makeScriptedBackend(script: number[], readFilePath: string) {
   return { fn, calls };
 }
 
+/** 按剧本返回任意工具调用（权限用例用） */
+function makeToolScriptedBackend(
+  script: Array<{ tools: Array<{ name: string; input: Record<string, any> }> } | { text: string }>,
+) {
+  let step = 0;
+  const fn = async (input: ModelInput): Promise<ModelOutput> => {
+    const s = script[step] ?? { text: "all done" };
+    step++;
+    if ("text" in s) return { content: [{ type: "text", text: s.text }] };
+    return {
+      content: s.tools.map((t, i) => ({
+        type: "tool_use" as const,
+        id: `tu-${step}-${i}`,
+        name: t.name,
+        input: t.input,
+      })),
+    };
+  };
+  return { fn };
+}
+
 let dir: string;
 let filePath: string;
 
@@ -118,6 +139,76 @@ test("循环：模型状态失忆时的兜底（下一轮直接文本）", async
 
   // 第二轮越界 → 文本收尾，循环必终止（防死循环护栏）
   assert.equal(calls.length, 2);
+});
+
+test("权限 deny：危险命令被拦，不进工具执行", async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "run_shell", input: { command: "rm -rf /tmp/b-code-target" } }] },
+    { text: "ok" },
+  ]);
+  const agent = new Agent({ callModel: fn, print: () => {}, mode: "bypass" }); // yolo 也拦
+  await agent.chat("run it");
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as {
+    content: string;
+  };
+  assert.ok(result.content.includes("Denied"), `应返回拒绝信息，实际: ${result.content}`);
+});
+
+test("权限 confirm：第一次询问并放行，同命令二次不再问（会话白名单）", async () => {
+  const target = join(dir, "perm.txt");
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "write_file", input: { file_path: target, content: "v1" } }] },
+    { tools: [{ name: "write_file", input: { file_path: target, content: "v2" } }] },
+    { text: "done" },
+  ]);
+  let asks = 0;
+  const agent = new Agent({
+    callModel: fn,
+    print: () => {},
+    askUser: async () => {
+      asks++;
+      return true;
+    },
+  });
+  await agent.chat("write twice");
+
+  assert.equal(asks, 1, "第一次 confirm + 白名单命中第二次不询问");
+  const { readFile } = await import("node:fs/promises");
+  assert.equal(await readFile(target, "utf-8"), "v2", "两次写入都真实执行");
+});
+
+test("权限 confirm：用户拒绝 → user rejected 喂回，工具不执行", async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "write_file", input: { file_path: join(dir, "nope.txt"), content: "x" } }] },
+    { text: "fine" },
+  ]);
+  const agent = new Agent({ callModel: fn, print: () => {}, askUser: async () => false });
+  await agent.chat("write it");
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as {
+    content: string;
+  };
+  assert.ok(result.content.includes("user rejected"));
+  const { access } = await import("node:fs/promises");
+  await assert.rejects(() => access(join(dir, "nope.txt")), /ENOENT/, "文件不应被创建");
+});
+
+test("权限 plan 模式：写文件被 deny（只读约束由代码强制）", async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "write_file", input: { file_path: join(dir, "plan.txt"), content: "x" } }] },
+    { text: "ok" },
+  ]);
+  const agent = new Agent({ callModel: fn, print: () => {}, mode: "plan" });
+  await agent.chat("write in plan");
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as {
+    content: string;
+  };
+  assert.ok(result.content.includes("Denied"), "plan 下写文件被 permission 系统拦截");
 });
 
 test("spinner 生命周期：模型期 thinking、工具期 running，start/stop 配平", async () => {
