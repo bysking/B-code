@@ -95,6 +95,16 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   /** 读取当前 rl（getter 形式避免 TS 控制流把闭包赋值的 rl 收窄成 never） */
   const currentRl = () => rl;
 
+  /**
+   * chat 结束后的提示符刷新：先补换行再 prompt。
+   * 模型回复不保证以 \n 结尾，若 `> ` 贴着回复尾，readline 下一个输入触发的
+   * 行重绘（clearLine）会把同行内容整行擦掉——表现为"回复刚出来就消失一块"。
+   */
+  const nextPrompt = (rl: readline.Interface) => {
+    process.stdout.write("\n");
+    rl.prompt();
+  };
+
   /** 延迟创建共享 readline（REPL 一上来就建；one-shot 等首次 confirm 才建） */
   const getRl = (): readline.Interface => {
     const existing = currentRl();
@@ -155,7 +165,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         } finally {
           busy = false;
           if (closing) finish();
-          else created.prompt();
+          else nextPrompt(created);
         }
         return;
       }
@@ -166,7 +176,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       } finally {
         busy = false;
         if (closing) finish();
-        else created.prompt();
+        else nextPrompt(created);
       }
     });
     created.on("close", () => {
