@@ -196,6 +196,51 @@ test("权限 confirm：用户拒绝 → user rejected 喂回，工具不执行",
   await assert.rejects(() => access(join(dir, "nope.txt")), /ENOENT/, "文件不应被创建");
 });
 
+test("空输出兜底：handler 返回空串 → 喂回 (empty output)", async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "noop", input: {} }] },
+    { text: "thanks" },
+  ]);
+  const agent = new Agent({ callModel: fn, print: () => {} });
+  // 注册一个"执行成功但无输出"的工具
+  agent.registry.register({
+    name: "noop",
+    description: "no-op",
+    inputSchema: { type: "object", properties: {} },
+    mode: "read",
+    handler: () => "",
+  });
+  await agent.chat("run it");
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as {
+    content: string;
+  };
+  assert.equal(result.content, "(empty output)", "空结果以 (empty output) 标记喂回");
+});
+
+test("空输出兜底：纯空白字符串同样标记", async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: "whitespace", input: {} }] },
+    { text: "ok" },
+  ]);
+  const agent = new Agent({ callModel: fn, print: () => {} });
+  agent.registry.register({
+    name: "whitespace",
+    description: "w",
+    inputSchema: { type: "object", properties: {} },
+    mode: "read",
+    handler: () => "   \n  ",
+  });
+  await agent.chat("run it");
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as {
+    content: string;
+  };
+  assert.equal(result.content, "(empty output)");
+});
+
 test("权限 plan 模式：写文件被 deny（只读约束由代码强制）", async () => {
   const { fn } = makeToolScriptedBackend([
     { tools: [{ name: "write_file", input: { file_path: join(dir, "plan.txt"), content: "x" } }] },

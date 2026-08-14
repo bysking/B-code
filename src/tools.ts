@@ -1,84 +1,14 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { readFile, writeFile, readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { exec } from "node:child_process";
 import { statSync } from "node:fs";
+import type { Registry } from "./registry.js";
 
 /**
- * 工具三要素：name（模型引用）+ description（模型理解）+ input_schema（模型生成参数）
- * 这个数组直接作为 tools 参数传给模型后端。
+ * 内置工具加载器（builtin-loader）：把 6 个核心工具注册进统一注册表。
+ * 实现函数保持不变；能力接入方式从 switch 分发变为"注册 + resolve"，
+ * 内核循环只认 registry.resolve(name)。
  */
-export const toolDefinitions: Anthropic.Tool[] = [
-  {
-    name: "read_file",
-    description: "Read the contents of a file.",
-    input_schema: {
-      type: "object",
-      properties: {
-        file_path: { type: "string", description: "The path to the file to read" },
-      },
-      required: ["file_path"],
-    },
-  },
-  {
-    name: "write_file",
-    description: "Write content to a file. Creates it if missing, overwrites if it exists.",
-    input_schema: {
-      type: "object",
-      properties: {
-        file_path: { type: "string", description: "The path to the file to write" },
-        content: { type: "string", description: "The content to write" },
-      },
-      required: ["file_path", "content"],
-    },
-  },
-  {
-    name: "edit_file",
-    description: "Replace an exact string in a file with new content. old_string must match exactly and be unique.",
-    input_schema: {
-      type: "object",
-      properties: {
-        file_path: { type: "string", description: "The path to the file to edit" },
-        old_string: { type: "string", description: "The exact string to find" },
-        new_string: { type: "string", description: "The string to replace it with" },
-      },
-      required: ["file_path", "old_string", "new_string"],
-    },
-  },
-  {
-    name: "list_files",
-    description: "List files matching a glob pattern (e.g. '**/*.ts').",
-    input_schema: {
-      type: "object",
-      properties: {
-        pattern: { type: "string", description: "Glob pattern to match files" },
-        path: { type: "string", description: "Base directory. Defaults to cwd." },
-      },
-      required: ["pattern"],
-    },
-  },
-  {
-    name: "grep_search",
-    description: "Search for a regex pattern in files. Returns matching lines with paths and line numbers.",
-    input_schema: {
-      type: "object",
-      properties: {
-        pattern: { type: "string", description: "The regex pattern to search for" },
-        path: { type: "string", description: "Directory or file to search." },
-      },
-      required: ["pattern"],
-    },
-  },
-  {
-    name: "run_shell",
-    description: "Execute a shell command and return its output.",
-    input_schema: {
-      type: "object",
-      properties: { command: { type: "string", description: "The shell command to execute" } },
-      required: ["command"],
-    },
-  },
-];
 
 /** 跳过这些目录，避免递归爆炸（node_modules / .git 对模型无意义） */
 const IGNORED_DIRS = new Set(["node_modules", ".git", ".b-code"]);
@@ -237,22 +167,97 @@ function runShellTool(input: { command: string }): Promise<string> {
   });
 }
 
-/**
- * 工具执行器：按名字分派。模型只传"工具名 + 参数"，这里是映射表。
- * （P5 会收敛到注册表，P1 先按施工图建议用 switch）
- */
-export async function executeTool(
-  name: string,
-  input: Record<string, any>,
-): Promise<string> {
-  switch (name) {
-    case "read_file": return readFileTool(input as { file_path: string });
-    case "write_file": return writeFileTool(input as { file_path: string; content: string });
-    case "edit_file":
-      return editFileTool(input as { file_path: string; old_string: string; new_string: string });
-    case "list_files": return listFilesTool(input as { pattern?: string; path?: string });
-    case "grep_search": return grepSearchTool(input as { pattern: string; path?: string });
-    case "run_shell": return runShellTool(input as { command: string });
-    default: return `Unknown tool: ${name}`;
-  }
+/** 注册全部内置工具（handler 包一层实现函数，mode 供权限层判定） */
+export function registerBuiltinTools(registry: Registry): void {
+  registry.register({
+    name: "read_file",
+    description: "Read the contents of a file.",
+    inputSchema: {
+      type: "object",
+      properties: { file_path: { type: "string", description: "The path to the file to read" } },
+      required: ["file_path"],
+    },
+    mode: "read",
+    kind: "builtin",
+    handler: (input) => readFileTool(input as { file_path: string }),
+  });
+
+  registry.register({
+    name: "write_file",
+    description: "Write content to a file. Creates it if missing, overwrites if it exists.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: { type: "string", description: "The path to the file to write" },
+        content: { type: "string", description: "The content to write" },
+      },
+      required: ["file_path", "content"],
+    },
+    mode: "write",
+    kind: "builtin",
+    handler: (input) => writeFileTool(input as { file_path: string; content: string }),
+  });
+
+  registry.register({
+    name: "edit_file",
+    description: "Replace an exact string in a file with new content. old_string must match exactly and be unique.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: { type: "string", description: "The path to the file to edit" },
+        old_string: { type: "string", description: "The exact string to find" },
+        new_string: { type: "string", description: "The string to replace it with" },
+      },
+      required: ["file_path", "old_string", "new_string"],
+    },
+    mode: "write",
+    kind: "builtin",
+    handler: (input) =>
+      editFileTool(input as { file_path: string; old_string: string; new_string: string }),
+  });
+
+  registry.register({
+    name: "list_files",
+    description: "List files matching a glob pattern (e.g. '**/*.ts').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Glob pattern to match files" },
+        path: { type: "string", description: "Base directory. Defaults to cwd." },
+      },
+      required: ["pattern"],
+    },
+    mode: "read",
+    kind: "builtin",
+    handler: (input) => listFilesTool(input as { pattern?: string; path?: string }),
+  });
+
+  registry.register({
+    name: "grep_search",
+    description: "Search for a regex pattern in files. Returns matching lines with paths and line numbers.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "The regex pattern to search for" },
+        path: { type: "string", description: "Directory or file to search." },
+      },
+      required: ["pattern"],
+    },
+    mode: "read",
+    kind: "builtin",
+    handler: (input) => grepSearchTool(input as { pattern: string; path?: string }),
+  });
+
+  registry.register({
+    name: "run_shell",
+    description: "Execute a shell command and return its output.",
+    inputSchema: {
+      type: "object",
+      properties: { command: { type: "string", description: "The shell command to execute" } },
+      required: ["command"],
+    },
+    mode: "shell",
+    kind: "builtin",
+    handler: (input) => runShellTool(input as { command: string }),
+  });
 }

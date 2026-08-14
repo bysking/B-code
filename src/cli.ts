@@ -3,6 +3,7 @@ import { Agent } from "./agent.js";
 import { clearSessionFile, loadSession, saveSession } from "./session.js";
 import { resolveSkill, discoverSkills } from "./skills.js";
 import { saveMemory } from "./memory.js";
+import { closeAllMcpConnections } from "./mcp.js";
 import type { Mode } from "./permissions.js";
 
 /**
@@ -177,6 +178,9 @@ const agent = new Agent({
       }),
   });
 
+  // P5：启动时挂载 mcp.json 配置的服务器（失败仅记日志，不阻塞）
+  await agent.initMcp();
+
   if (resume) {
     const saved = await loadSession();
     if (saved && saved.length > 0) {
@@ -198,6 +202,7 @@ const agent = new Agent({
       busy = false;
     }
     process.stdout.write("\n(done)\n");
+    closeAllMcpConnections(); // MCP 子进程不杀则进程永不退出
     if (closing) finish(); // chat 期间 EOF：现在补退出
     else currentRl()?.close();
     return;

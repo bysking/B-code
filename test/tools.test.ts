@@ -3,7 +3,19 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeTool, toolDefinitions } from "../src/tools.js";
+import { registerBuiltinTools } from "../src/tools.js";
+import { Registry, type RuntimeContext } from "../src/registry.js";
+
+/** 经注册表执行内置工具（P5：测试走真实解析路径，而非旧 switch） */
+const registry = new Registry();
+const ctx = {} as RuntimeContext;
+registerBuiltinTools(registry);
+const run = (name: string, input: unknown): Promise<string> => {
+  const mp = registry.resolve(name);
+  if (!mp) return Promise.resolve(`Unknown tool: ${name}`);
+  return Promise.resolve(mp.handler(input as Record<string, any>, ctx) as string);
+};
+const schemas = registry.toolsSchema();
 
 let dir: string;
 
@@ -28,8 +40,8 @@ after(async () => {
 });
 
 test("工具三要素齐备：name / description / input_schema", () => {
-  assert.ok(toolDefinitions.length >= 6);
-  for (const t of toolDefinitions) {
+  assert.ok(schemas.length >= 6);
+  for (const t of schemas) {
     assert.equal(typeof t.name, "string");
     assert.equal(typeof t.description, "string");
     assert.ok(t.input_schema, `${t.name} 缺 input_schema`);
@@ -37,18 +49,18 @@ test("工具三要素齐备：name / description / input_schema", () => {
 });
 
 test("read_file 返回文件内容", async () => {
-  const out = await executeTool("read_file", { file_path: join(dir, "a.txt") });
+  const out = await run("read_file", { file_path: join(dir, "a.txt") });
   assert.ok(out.includes("value = 0"));
 });
 
 test("read_file 文件不存在 → 报错前缀", async () => {
-  const out = await executeTool("read_file", { file_path: join(dir, "nope.txt") });
+  const out = await run("read_file", { file_path: join(dir, "nope.txt") });
   assert.ok(out.startsWith("Error"));
 });
 
 test("write_file 创建文件", async () => {
   const p = join(dir, "created.txt");
-  const out = await executeTool("write_file", { file_path: p, content: "fresh" });
+  const out = await run("write_file", { file_path: p, content: "fresh" });
   assert.ok(out.startsWith("Successfully"));
   assert.equal(await readFile(p, "utf-8"), "fresh");
 });
@@ -57,7 +69,7 @@ test("write_file 创建文件", async () => {
 
 test("edit_file old_string 不存在 → 拒绝", async () => {
   const p = join(dir, "a.txt");
-  const out = await executeTool("edit_file", {
+  const out = await run("edit_file", {
     file_path: p,
     old_string: "不存在的内容",
     new_string: "x",
@@ -69,7 +81,7 @@ test("edit_file old_string 不存在 → 拒绝", async () => {
 test("edit_file old_string 出现多次 → 拒绝（必须唯一）", async () => {
   const p = join(dir, "dup.txt");
   await writeFile(p, "value = 0\nvalue = 0\n");
-  const out = await executeTool("edit_file", {
+  const out = await run("edit_file", {
     file_path: p,
     old_string: "value = 0",
     new_string: "value = 1",
@@ -83,7 +95,7 @@ test("edit_file old_string 出现多次 → 拒绝（必须唯一）", async () 
 test("edit_file 唯一匹配 → 替换成功且只改一处", async () => {
   const p = join(dir, "uniq.txt");
   await writeFile(p, "a.txt\nsub/b.ts\n");
-  const out = await executeTool("edit_file", {
+  const out = await run("edit_file", {
     file_path: p,
     old_string: "sub/b.ts",
     new_string: "sub/c.ts",
@@ -97,7 +109,7 @@ test("edit_file 用 split/join：new_string 含 $ 特殊模式时按字面量处
   // split/join 不会——这是源码文档强调的实现细节，必须钉死。
   const p = join(dir, "dollar.txt");
   await writeFile(p, "x");
-  await executeTool("edit_file", { file_path: p, old_string: "x", new_string: "$$" });
+  await run("edit_file", { file_path: p, old_string: "x", new_string: "$$" });
   assert.equal(await readFile(p, "utf-8"), "$$");
 });
 
@@ -105,7 +117,7 @@ test("edit_file old_string 当精确字符串而非正则", async () => {
   // "a.b" 里 . 是正则元字符，但 edit_file 应做精确匹配
   const p = join(dir, "regex.txt");
   await writeFile(p, "a.b\naxb\n");
-  await executeTool("edit_file", { file_path: p, old_string: "a.b", new_string: "OK" });
+  await run("edit_file", { file_path: p, old_string: "a.b", new_string: "OK" });
   assert.equal(await readFile(p, "utf-8"), "OK\naxb\n");
 });
 
@@ -115,7 +127,7 @@ test("edit_file 在 CRLF 文件上把 new_string 统一转 CRLF，不产生混�
   const p = join(dir, "crlf.txt");
   await writeFile(p, "a\r\nb\r\nc\r\n");
   // 模型给的是 LF 风格的新文本
-  await executeTool("edit_file", {
+  await run("edit_file", {
     file_path: p,
     old_string: "b",
     new_string: "B1\nB2",
@@ -129,14 +141,14 @@ test("edit_file 在 CRLF 文件上把 new_string 统一转 CRLF，不产生混�
 test("edit_file 在 LF 文件上保持 LF 不误转", async () => {
   const p = join(dir, "lf.txt");
   await writeFile(p, "a\nb\nc\n");
-  await executeTool("edit_file", { file_path: p, old_string: "b", new_string: "B" });
+  await run("edit_file", { file_path: p, old_string: "b", new_string: "B" });
   assert.equal(await readFile(p, "utf-8"), "a\nB\nc\n");
 });
 
 // ── list_files / grep_search ──────────────────────────────────
 
 test("list_files 跳过 node_modules 与 .git", async () => {
-  const out = await executeTool("list_files", { pattern: "**/*.ts", path: dir });
+  const out = await run("list_files", { pattern: "**/*.ts", path: dir });
   const files = out.split("\n");
   assert.deepEqual(files.sort(), ["listing/sub/b.ts", "sub/b.ts"]);
   assert.ok(files.every((f) => !f.includes("node_modules") && !f.includes(".git")));
@@ -144,29 +156,29 @@ test("list_files 跳过 node_modules 与 .git", async () => {
 
 test("list_files 单段 * 不跨目录，双段 ** 跨目录", async () => {
   const list = join(dir, "listing");
-  const single = await executeTool("list_files", { pattern: "*.txt", path: list });
+  const single = await run("list_files", { pattern: "*.txt", path: list });
   assert.deepEqual(single.split("\n").sort(), ["a.txt"]);
-  const all = await executeTool("list_files", { pattern: "**/*", path: list });
+  const all = await run("list_files", { pattern: "**/*", path: list });
   assert.ok(all.split("\n").includes("sub/b.ts"));
 });
 
 test("grep_search 返回 path:行号:内容 且命中正确行", async () => {
-  const out = await executeTool("grep_search", { pattern: "value = 0", path: dir });
+  const out = await run("grep_search", { pattern: "value = 0", path: dir });
   assert.ok(out.startsWith("a.txt:2:"), `实际输出：${out}`);
   assert.ok(!out.includes("junk.ts"), "node_modules 不应被搜到");
 });
 
 test("grep_search 非法正则 → 报错而非崩溃", async () => {
-  const out = await executeTool("grep_search", { pattern: "([", path: dir });
+  const out = await run("grep_search", { pattern: "([", path: dir });
   assert.ok(out.startsWith("Error"));
 });
 
 test("run_shell 执行并捕获输出", async () => {
-  const out = await executeTool("run_shell", { command: "echo hi" });
+  const out = await run("run_shell", { command: "echo hi" });
   assert.ok(out.includes("hi"));
 });
 
 test("未知工具 → 明确的 Unknown tool", async () => {
-  const out = await executeTool("does_not_exist", {});
+  const out = await run("does_not_exist", {});
   assert.ok(out.includes("Unknown tool"));
 });

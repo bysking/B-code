@@ -45,6 +45,8 @@ export const dirs = {
   skillsDir: () => join(basePath(), "skills"),
   /** 用户级 MCP 服务器配置（P5 使用） */
   mcpConfigFile: () => join(basePath(), "mcp.json"),
+  /** Plan 文件目录（P5 使用） */
+  plansDir: () => join(basePath(), "plans"),
 };
 
 /**

@@ -1,13 +1,18 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
 import { callModel, defaultModel, type ModelInput, type ModelOutput } from "./backend.js";
-import { executeTool, toolDefinitions } from "./tools.js";
+import { registerBuiltinTools } from "./tools.js";
+import { registerPlanTools } from "./plan.js";
+import { runSubAgent } from "./subagent.js";
+import { loadMcpServers } from "./mcp.js";
+import { Registry, type RuntimeContext } from "./registry.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateResult, maybeCompact } from "./context.js";
 import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
 import { recallMemories } from "./memory.js";
 import { buildSkillDescriptions } from "./skills.js";
 import { Spinner, type SpinnerLike } from "./ui.js";
+import { dirs } from "./utils/paths.js";
 import { log } from "./utils/log.js";
 
 /**
@@ -47,6 +52,10 @@ export class Agent {
   private readonly askUser: (question: string) => Promise<boolean>;
   /** 会话级白名单：确认过一次的 shell:<command> / 工具名不再问 */
   private readonly allowlist = new Set<string>();
+  /** 统一注册表（P5 核心）：内置/子Agent/Plan/MCP 全挂这里，循环只认 resolve */
+  public readonly registry = new Registry();
+  private readonly ctx: RuntimeContext;
+  private mcpLoaded = false;
 
   constructor(opts: AgentOptions = {}) {
     this.call = opts.callModel ?? callModel;
@@ -54,6 +63,35 @@ export class Agent {
     this.spinner = opts.spinner ?? new Spinner();
     this.askUser = opts.askUser ?? (async () => false);
     this.mode = opts.mode ?? "default";
+
+    // 能力挂载：内置工具 → Plan 工具 → agent(子 Agent) 工具
+    this.ctx = {
+      callModel: this.call,
+      model: this.model,
+      setMode: (m) => this.setMode(m),
+    };
+    registerBuiltinTools(this.registry);
+    registerPlanTools(this.registry, { plansDir: dirs.plansDir() });
+    this.registry.register({
+      name: "agent",
+      description:
+        "Fork a sub-agent to investigate a task read-only and return a concise summary. Use for parallelizable exploration.",
+      inputSchema: {
+        type: "object",
+        properties: { task: { type: "string", description: "The sub-task to investigate" } },
+        required: ["task"],
+      },
+      mode: "read",
+      kind: "subagent",
+      handler: (input) => runSubAgent(String(input.task ?? ""), this.ctx, this.registry),
+    });
+  }
+
+  /** 启动时/首次使用前拉起 MCP 服务器（幂等；失败仅记日志） */
+  async initMcp(cwd = process.cwd()): Promise<void> {
+    if (this.mcpLoaded) return;
+    this.mcpLoaded = true;
+    await loadMcpServers(this.registry, cwd);
   }
 
   setMode(mode: Mode): void {
@@ -94,7 +132,8 @@ export class Agent {
       const reply = await this.call({
         model: this.model,
         system,
-        tools: toolDefinitions,
+        // P5：tools 由注册表生成（plan 模式放开 deferred 的 plan 工具）
+        tools: this.registry.toolsSchema(this.mode === "plan"),
         messages: this.messages,
         // 流式文本直接进 UI；首个 delta 到达意味着模型已出字，停 spinner
         onText: (delta) => {
@@ -119,29 +158,36 @@ export class Agent {
         this.print(`  → ${tu.name}(${JSON.stringify(tu.input)})\n`);
         const input = (tu.input ?? {}) as Record<string, any>;
 
-        // ⑥ 权限检查：deny → 拦截；confirm → 问用户（bypass 跳过）
-        const permission = checkPermission(tu.name, input, this.mode);
+        // P5：循环唯一入口 = registry.resolve；未注册工具 fail-closed 拒绝
+        const mp = this.registry.resolve(tu.name);
         let output: string;
 
-        if (permission === "deny") {
-          output = `Denied: ${tu.name} was blocked by the permission system.`;
-        } else if (permission === "confirm" && this.mode !== "bypass") {
-          const key = allowlistKey(tu.name, input);
-          if (this.allowlist.has(key)) {
-            output = await this.execTool(tu.name, input);
-          } else {
-            this.spinner.stop(); // 确认前停表，别转着问
-            const label = tu.name === "run_shell" ? String(input.command ?? "") : tu.name;
-            const ok = await this.askUser(`Allow ${label}? (y/n)`);
-            if (ok) {
-              this.allowlist.add(key);
-              output = await this.execTool(tu.name, input);
-            } else {
-              output = `Denied: user rejected ${tu.name}.`;
-            }
-          }
+        if (!mp) {
+          output = `Unknown tool: ${tu.name}`;
         } else {
-          output = await this.execTool(tu.name, input);
+          // ⑥ 权限检查：deny → 拦截；confirm → 问用户（bypass 跳过）
+          const permission = checkPermission(mp, input, this.mode);
+
+          if (permission === "deny") {
+            output = `Denied: ${tu.name} was blocked by the permission system.`;
+          } else if (permission === "confirm" && this.mode !== "bypass") {
+            const key = allowlistKey(mp, input);
+            if (this.allowlist.has(key)) {
+              output = await this.execTool(mp, input);
+            } else {
+              this.spinner.stop(); // 确认前停表，别转着问
+              const label = mp.mode === "shell" ? String(input.command ?? "") : mp.name;
+              const ok = await this.askUser(`Allow ${label}? (y/n)`);
+              if (ok) {
+                this.allowlist.add(key);
+                output = await this.execTool(mp, input);
+              } else {
+                output = `Denied: user rejected ${mp.name}.`;
+              }
+            }
+          } else {
+            output = await this.execTool(mp, input);
+          }
         }
 
         // tool_result 必须关联到对应的 tool_use_id
@@ -153,12 +199,21 @@ export class Agent {
     }
   }
 
-  /** 执行工具（spinner + 结果截断 Tier 0） */
-  private async execTool(name: string, input: Record<string, any>): Promise<string> {
-    this.spinner.start(`running ${name}…`);
+  /** 执行工具（spinner + 结果截断 Tier 0 + 异常兜底） */
+  private async execTool(
+    mp: import("./registry.js").MountPoint,
+    input: Record<string, any>,
+  ): Promise<string> {
+    this.spinner.start(`running ${mp.name}…`);
     try {
-      const raw = await executeTool(name, input);
-      return truncateResult(raw);
+      const raw = await mp.handler(input, this.ctx);
+      // 空输出统一标记：模型看到 "(empty output)" 知道工具执行完毕、只是没产出，
+      // 不会误判为"没执行/还在跑"而重复调用
+      const text = raw == null || String(raw).trim() === "" ? "(empty output)" : String(raw);
+      return truncateResult(text);
+    } catch (err) {
+      // handler 抛错（如 MCP server 掉线）不炸循环：转为结果喂回模型
+      return `Error: ${mp.name} failed: ${(err as Error).message}`;
     } finally {
       this.spinner.stop();
     }

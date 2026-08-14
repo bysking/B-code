@@ -1,0 +1,67 @@
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Registry, type RuntimeContext } from "../src/registry.js";
+import { registerBuiltinTools } from "../src/tools.js";
+import { runSubAgent } from "../src/subagent.js";
+import type { ModelInput, ModelOutput } from "../src/backend.js";
+
+let dir: string;
+let filePath: string;
+
+before(async () => {
+  dir = await mkdtemp(join(tmpdir(), "b-code-sub-"));
+  filePath = join(dir, "target.txt");
+  await writeFile(filePath, "subagent sees this");
+});
+
+after(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("子 Agent：只读工具循环 → 返回纯文本摘要；非只读工具被拒", async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+
+  const calls: ModelInput[] = [];
+  let step = 0;
+  const callModel = async (input: ModelInput): Promise<ModelOutput> => {
+    calls.push(input);
+    step++;
+    if (step === 1) {
+      return {
+        content: [
+          { type: "tool_use", id: "s-1", name: "read_file", input: { file_path: filePath } },
+          // 子 agent 若试图写文件 → 应被拒（不给写工具，仍被拒兜底）
+          { type: "tool_use", id: "s-2", name: "write_file", input: { file_path: filePath, content: "x" } },
+        ],
+      };
+    }
+    return { content: [{ type: "text", text: "found everything" }] };
+  };
+
+  const ctx: RuntimeContext = { callModel, model: "m", setMode: () => {} };
+  const result = await runSubAgent("explore", ctx, registry);
+
+  assert.equal(result, "found everything");
+
+  // 第一轮 tools 参数只含只读工具
+  const first = calls[0]!;
+  const toolNames = first.tools.map((t) => t.name);
+  assert.ok(
+    toolNames.every((n) => registry.resolve(n)?.mode === "read"),
+    `子 agent 只能拿只读工具，实际: ${toolNames}`,
+  );
+  assert.ok(!toolNames.includes("write_file"));
+  assert.ok(!toolNames.includes("run_shell"));
+
+  // 喂回结果：read_file 得到内容；write_file 被拒
+  const second = calls[1]!;
+  const results = second.messages[2] as unknown as { content: { tool_use_id: string; content: string }[] };
+  const readResult = results.content.find((r) => r.tool_use_id === "s-1");
+  const writeResult = results.content.find((r) => r.tool_use_id === "s-2");
+  assert.ok(String(readResult?.content).includes("subagent sees this"));
+  assert.ok(String(writeResult?.content).includes("read-only"));
+});

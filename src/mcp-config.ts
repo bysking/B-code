@@ -17,6 +17,8 @@ export interface McpServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** 声明 "read" 则该 server 所有工具按只读放行（免确认）；缺省 fail-closed → confirm */
+  mode?: "read";
 }
 
 export type McpConfig = Record<string, McpServerConfig>;
