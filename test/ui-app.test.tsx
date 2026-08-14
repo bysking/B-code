@@ -128,3 +128,65 @@ test("渲染：权限确认（ask）显示选项", async () => {
   assert.equal(await p, "no");
   frame.cleanup();
 });
+
+test("回归：向导打开时 Esc 不触发 onInterrupt（提交后模型才能继续）", async () => {
+  const ctrl = new AppController();
+  let interrupted = 0;
+  const frame = render(
+    React.createElement(App, {
+      ctrl,
+      onSubmit: () => {},
+      onInterrupt: () => interrupted++,
+      onExit: () => {},
+      initialOutput: undefined,
+    }),
+  );
+  // 模拟执行中（execTool 设 busy）：向导打开期间 busy 非空
+  ctrl.setBusy("running ask_user…");
+  const p = ctrl.askWizard("选方案?", [
+    { title: "方案", question: "用哪个?", options: [{ label: "React", value: "react" }] },
+  ]);
+  await wait(30);
+  // 向导未处于输入态时按 Esc：由 Wizard 自行取消，不应再软中断 agent
+  frame.stdin.write("\x1b");
+  await wait(30);
+  assert.equal(interrupted, 0, "向导打开时 Esc 不应触发 agent 软中断");
+  assert.equal(await p, "__cancel__", "Esc 由 Wizard 交付取消");
+  assert.equal(ctrl.askWizardState, null);
+  frame.cleanup();
+});
+
+test("回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可取消向导", async () => {
+  const ctrl = new AppController();
+  let interrupted = 0;
+  const frame = render(
+    React.createElement(App, {
+      ctrl,
+      onSubmit: () => {},
+      onInterrupt: () => interrupted++,
+      onExit: () => {},
+      initialOutput: undefined,
+    }),
+  );
+  ctrl.setBusy("running ask_user…");
+  const p = ctrl.askWizard("选方案?", [
+    { title: "方案", question: "用哪个?", options: [{ label: "React", value: "react" }] },
+  ]);
+  await wait(30);
+  // 移到自定义项进入输入态，Esc"返回选项"
+  frame.stdin.write("\x1b[B");
+  await wait(15);
+  frame.stdin.write("\r");
+  await wait(30);
+  assert.ok((frame.lastFrame() ?? "").includes("输入你的答案"), "进入输入态");
+  frame.stdin.write("\x1b");
+  await wait(30);
+  assert.equal(interrupted, 0, "输入态按 Esc 返回选项不应触发软中断");
+  assert.ok(ctrl.askWizardState, "向导保持打开");
+  // Ctrl+C 取消向导
+  frame.stdin.write("\x03");
+  await wait(30);
+  assert.equal(ctrl.askWizardState, null, "Ctrl+C 应取消向导");
+  assert.equal(await p, "__cancel__");
+  frame.cleanup();
+});

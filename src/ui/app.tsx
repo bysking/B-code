@@ -44,10 +44,14 @@ export function App({
   const [quitArmed, setQuitArmed] = useState(false);
 
   useInput((_input, key) => {
-    // Ctrl+C：有选择框 → 取消；有文本输入 → 取消；执行中 → 双击才真正退出
+    // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
     if (key.ctrl && _input === "c") {
       if (ctrl.askState) {
         ctrl.resolveAsk(ctrl.askState.options[0]?.value ?? "");
+        return;
+      }
+      if (ctrl.askWizardState) {
+        ctrl.resolveAskWizard("__cancel__");
         return;
       }
       if (ctrl.askTextState) {
@@ -68,7 +72,7 @@ export function App({
       ctrl.toggleOutputPanel();
       return;
     }
-    // Esc：先关输出面板 / 取消文本输入；执行中再是软中断
+    // Esc：先关输出面板 / 取消文本输入；有向导/确认/文本输入时 Esc 由对应组件自处理
     if (key.escape && ctrl.outputPanel) {
       ctrl.toggleOutputPanel(false);
       return;
@@ -77,7 +81,7 @@ export function App({
       ctrl.resolveAskText("", true);
       return;
     }
-    if (key.escape && !ctrl.askState && ctrl.busy !== null) {
+    if (key.escape && !ctrl.askState && !ctrl.askWizardState && ctrl.busy !== null) {
       onInterrupt();
     }
   });
