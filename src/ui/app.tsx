@@ -7,8 +7,8 @@ function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
   return ctrl.turns.flatMap((t) => t.tools);
 }
 import { MessageList } from "./message-list.js";
-import { Select } from "./select.js";
-import { TabsSelect } from "./tabs-select.js";
+import { Confirm } from "./confirm.js";
+import { Wizard } from "./wizard.js";
 import { SlashMenu } from "./slash-menu.js";
 import { InputBox } from "./input-box.js";
 import { OutputPanel } from "./output-panel.js";
@@ -120,10 +120,10 @@ export function App({
         <MessageList turns={ctrl.turns} busy={ctrl.busy} />
       </Box>
 
-      {ctrl.askGroup ? (
-        <TabsSelect ask={ctrl.askGroup} onResolve={(v) => ctrl.resolveAskGroup(v)} />
+      {ctrl.askWizardState ? (
+        <Wizard ask={ctrl.askWizardState} onResolve={(v) => ctrl.resolveAskWizard(v)} />
       ) : ctrl.askState ? (
-        <Select ask={ctrl.askState} onResolve={(v) => ctrl.resolveAsk(v)} />
+        <Confirm ask={ctrl.askState} onResolve={(v) => ctrl.resolveAsk(v)} />
       ) : null}
 
       {ctrl.askTextState ? (
@@ -150,7 +150,7 @@ export function App({
         value={input}
         onChange={handleChange}
         onSubmit={handleSubmit}
-        disabled={!!ctrl.askState || !!ctrl.askTextState}
+        disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
       />
     </Box>
   );

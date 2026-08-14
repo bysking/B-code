@@ -28,9 +28,31 @@ export function registerAskUserTool(registry: Registry): void {
         question: { type: "string", description: "The question to ask the user" },
         kind: {
           type: "string",
-          enum: ["choice", "text", "tabs"],
+          enum: ["choice", "text", "tabs", "wizard"],
           description:
-            "choice = user picks one option (select); text = user types a value; tabs = group options into tabbed categories (left/right switch tab, up/down pick within tab) (default: choice)",
+            "choice = pick one option; text = type a value; tabs = tabbed categories; wizard = multi-step form with a progress bar, per-step options/custom answer, and a submit review (default: choice)",
+        },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "Step title shown on the progress bar" },
+              question: { type: "string", description: "Step question" },
+              options: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string" },
+                    value: { type: "string" },
+                    description: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          description: "Required when kind=wizard: ordered steps, each with title/question/options",
         },
         groups: {
           type: "array",
@@ -72,6 +94,32 @@ export function registerAskUserTool(registry: Registry): void {
     handler: async (input, ctx: RuntimeContext) => {
       const q = String(input.question ?? "请确认");
 
+      // wizard：多步向导（进度条 + 每步选择 + Review 提交）
+      if (input.kind === "wizard") {
+        const steps = Array.isArray(input.steps)
+          ? input.steps.map((s: any) => ({
+              title: String(s?.title ?? "步骤"),
+              question: String(s?.question ?? s?.title ?? ""),
+              options: (Array.isArray(s?.options) ? s.options : []).map((o: any) => ({
+                label: String(o?.label ?? o?.value ?? ""),
+                value: String(o?.value ?? o?.label ?? ""),
+                description: o?.description ? String(o.description) : undefined,
+              })),
+            }))
+          : [];
+        if (steps.length === 0) {
+          return "（ask_user: kind=wizard 缺少 steps）请提供 steps，或改用 kind=choice。";
+        }
+        const result = (await ctx.askWizard?.(q, steps)) ?? "__cancel__";
+        if (result === "__cancel__") {
+          return "用户取消了向导（未做决定）。请说明情况或重新询问。";
+        }
+        if (result.startsWith("__chat__")) {
+          return `用户没有填写向导，而是补充说明：${result.slice("__chat__".length).trim()}。请据此继续（必要时可再次 ask_user）。`;
+        }
+        return `用户在向导中的回答：\n${result}`;
+      }
+
       // tabs：分组两级选择（←→ 切 tab，↑↓ 选组内项）
       if (input.kind === "tabs" || input.kind === "grouped") {
         const groups = Array.isArray(input.groups)
@@ -91,6 +139,12 @@ export function registerAskUserTool(registry: Registry): void {
         }
         const picked = (await ctx.askGrouped?.(q, groups)) ??
           `${groups[0]?.title ?? ""} / ${groups[0]?.options[0]?.label ?? ""}`;
+        if (picked === "__cancel__") {
+          return "用户取消了本次选择（未做决定）。请向用户简要说明情况，或重新询问。";
+        }
+        if (picked.startsWith("__chat__")) {
+          return `用户没有直接选择，而是补充说明：${picked.slice("__chat__".length).trim()}。请据此继续（必要时可再次 ask_user）。`;
+        }
         return `用户选择: ${picked}`;
       }
 

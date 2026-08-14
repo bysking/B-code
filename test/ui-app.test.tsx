@@ -69,7 +69,7 @@ test("渲染：斜杠菜单打开显示候选", async () => {
     ...(await import("../src/ui/slash.js")).BUILTIN_SLASH_ITEMS,
     { name: "commit", description: "git commit" },
   ]);
-  ctrl.openSlash("co");
+  ctrl.openSlash(""); // 空查询：显示全量候选
   await wait(30);
   const out = frame.lastFrame() ?? "";
   assert.ok(out.includes("commit"), "斜杠菜单含技能");

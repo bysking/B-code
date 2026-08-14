@@ -29,6 +29,11 @@ export interface RuntimeContext {
   askUserText?(question: string): Promise<string | null>;
   /** 询问用户分组两选（TabsSelect 渲染：←→切tab，↑↓选组内项）；headless 返回默认 `${tab} / ${label}` */
   askGrouped?(question: string, groups: { title: string; options: UserOption[] }[]): Promise<string>;
+  /** 多步向导（Wizard 渲染）；headless 返回 "__cancel__" */
+  askWizard?(
+    question: string,
+    steps: { title: string; question: string; options: UserOption[] }[],
+  ): Promise<string>;
 }
 
 export interface MountPoint {

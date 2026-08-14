@@ -5,6 +5,7 @@ import { resolveSkill, discoverSkills } from "./skills.js";
 import { saveMemory } from "./memory.js";
 import { closeAllMcpConnections } from "./mcp.js";
 import { AppController } from "./ui/controller.js";
+import type { WizardStep } from "./ui/controller.js";
 import { mountTtyApp } from "./ui/render.js";
 import { BUILTIN_SLASH_ITEMS } from "./ui/slash.js";
 import { newSessionId, recentTurns, renderRecentTurns } from "./session.js";
@@ -91,6 +92,32 @@ const CONFIRM_OPTIONS = [
   { label: "Yes", value: "yes" },
 ];
 
+/** choice → 单步向导（模型驱动选择统一为 Wizard 的适配） */
+export function choiceAsWizard(
+  question: string,
+  options: Array<{ label: string; value: string }>,
+): WizardStep[] {
+  return [
+    {
+      title: "选择",
+      question,
+      options: options.map((o) => ({ label: o.label, value: o.value })),
+    },
+  ];
+}
+
+/** tabs/grouped → 多步向导（每组一步） */
+export function groupsAsWizard(
+  question: string,
+  groups: Array<{ title: string; options: Array<{ label: string; value: string }> }>,
+): WizardStep[] {
+  return groups.map((g) => ({
+    title: g.title,
+    question,
+    options: g.options.map((o) => ({ label: o.label, value: o.value })),
+  }));
+}
+
 /** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
 async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const ctrl = new AppController();
@@ -99,10 +126,11 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     mode: initialMode(args),
     print: (t) => ctrl.streamText(t),
     askUser: async (question) => (await ctrl.ask(question, CONFIRM_OPTIONS)) === "yes",
-    // 模型主动询问（ask_user 工具）：选择走 Select、文本走 AskInput
-    askChoice: (question, options) => ctrl.ask(question, options),
+    // 模型主动询问（ask_user 工具）：选择统一转 Wizard（模型驱动选择的唯一形态）、文本走 AskInput
+    askChoice: (question, options) => ctrl.askWizard(question, choiceAsWizard(question, options)),
     askTextInput: (question) => ctrl.askText(question),
-    askGroupedInput: (question, groups) => ctrl.askGrouped(question, groups),
+    askGroupedInput: (question, groups) => ctrl.askWizard(question, groupsAsWizard(question, groups)),
+    askWizardInput: (question, steps) => ctrl.askWizard(question, steps),
     spinner: {
       start: (m) => ctrl.setBusy(m),
       update: () => {},

@@ -56,6 +56,11 @@ export interface AgentOptions {
     question: string,
     groups: { title: string; options: UserOption[] }[],
   ) => Promise<string>;
+  /** 模型询问多步向导（Wizard 渲染）；缺省 headless：返回 "__cancel__" */
+  askWizardInput?: (
+    question: string,
+    steps: { title: string; question: string; options: UserOption[] }[],
+  ) => Promise<string>;
   /** 初始模式：default / plan（只读）/ bypass（--yolo）/ auto */
   mode?: Mode;
 }
@@ -97,6 +102,7 @@ export class Agent {
         (async (_q, options) => options[0]?.value ?? "no"),
       askUserText: opts.askTextInput ?? (async () => null),
       askGrouped: opts.askGroupedInput ?? (async (_q, groups) => `${groups[0]?.title ?? ""} / ${groups[0]?.options[0]?.label ?? ""}`),
+      askWizard: opts.askWizardInput ?? (async () => "__cancel__"),
     };
     registerBuiltinTools(this.registry);
     registerAskUserTool(this.registry);

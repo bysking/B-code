@@ -1,0 +1,139 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import React from "react";
+import { render } from "ink-testing-library";
+import { App } from "../src/ui/app.js";
+import { AppController } from "../src/ui/controller.js";
+import { buildWizardResult, wizardNavTotal, wizardProgress } from "../src/ui/wizard.js";
+import { Agent } from "../src/agent.js";
+import type { ModelInput, ModelOutput } from "../src/backend.js";
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function createApp(ctrl: AppController) {
+  return React.createElement(App, {
+    ctrl,
+    onSubmit: () => {},
+    onInterrupt: () => {},
+    onExit: () => {},
+    initialOutput: undefined,
+  });
+}
+
+// ── 纯函数 ──────────────────────────────────────────────────
+test("wizardProgress：完成☒/当前●/待做○ + Submit", () => {
+  assert.equal(wizardProgress(0, 3), "← ●1 ○2 ○3 ✔Submit→", "起始步骤为当前");
+  assert.equal(wizardProgress(1, 1), "← ☒1 ✔Submit→", "单步完成");
+});
+
+test("wizardNavTotal：导航范围含 1 个特殊项（自定义与 Chat 合一）", () => {
+  assert.equal(wizardNavTotal(2), 3, "2 选项 + 自定义");
+  assert.equal(wizardNavTotal(0), 1, "无选项时也可达特殊项");
+});
+
+test("buildWizardResult：按步汇总 + 未选标注", () => {
+  const steps = [
+    { title: "框架", question: "q1", options: [{ label: "Vue", value: "vue" }] },
+    { title: "构建", question: "q2", options: [] },
+  ];
+  const out = buildWizardResult(steps, { 0: "Vue" });
+  assert.equal(out, "框架: Vue\n构建: （未选）");
+});
+
+// ── 渲染 ────────────────────────────────────────────────────
+test("渲染：Wizard 进度条 + 当前步选项 + 自定义特殊项；Review 汇总 Submit/Cancel", async () => {
+  const ctrl = new AppController();
+  const frame = render(createApp(ctrl));
+  const p = ctrl.askWizard("搭建新项目?", [
+    { title: "框架", question: "选择前端框架?", options: [{ label: "Vue", value: "vue" }, { label: "React", value: "react" }] },
+    { title: "构建", question: "选择构建工具?", options: [{ label: "Vite", value: "vite" }, { label: "Webpack", value: "wp" }] },
+  ]);
+  await wait(30);
+  const out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("✔Submit→"), "进度条含 Submit");
+  assert.ok(out.includes("选择前端框架?"), "第一步问题");
+  assert.ok(out.includes("我想自己提供一个不在选项里面的答案"), "自定义入口");
+  // 默认聚焦第一步第一个选项时：不渲染行内输入框
+  assert.ok(!out.includes("输入你的答案"), "导航态不出现输入框");
+
+  // 直接提交（模拟用户在 Review 选 Submit answers）
+  ctrl.resolveAskWizard("框架: Vue\n构建: Webpack");
+  assert.equal(await p, "框架: Vue\n构建: Webpack");
+  assert.equal(ctrl.askWizardState, null);
+  frame.cleanup();
+});
+
+test("交互：选中自定义 → 行内输入 → 回车作为该步答案 → Review 提交", async () => {
+  const ctrl = new AppController();
+  const frame = render(createApp(ctrl));
+  const p = ctrl.askWizard("选择?", [
+    { title: "方案", question: "用哪个?", options: [{ label: "React", value: "react" }, { label: "Vue", value: "vue" }] },
+  ]);
+  await wait(30);
+  // ↓↓ 移到自定义项并 Enter 进入输入态
+  frame.stdin.write("[B");
+  await wait(10);
+  frame.stdin.write("[B");
+  await wait(10);
+  frame.stdin.write("\r");
+  await wait(20);
+  const entered = frame.lastFrame() ?? "";
+  assert.ok(entered.includes("输入你的答案"), "特殊项右侧出现内联输入框");
+  // 普通键入 + 回车提交自定义答案
+  frame.stdin.write("我自己的方案");
+  await wait(20);
+  frame.stdin.write("\r");
+  await wait(30);
+  // 单步 → 已到 Review，Enter 提交
+  frame.stdin.write("\r");
+  assert.equal(await p, "方案: 我自己的方案");
+  frame.cleanup();
+});
+
+// ── 协议回灌 ────────────────────────────────────────────────
+test("ask_user kind=wizard：回答以 '用户在向导中的回答' 回灌", async () => {
+  const agent = new Agent({
+    callModel: makeScripted([
+      {
+        tools: [
+          {
+            name: "ask_user",
+            input: {
+              question: "初始化项目",
+              kind: "wizard",
+              steps: [
+                { title: "框架", question: "前端框架?", options: [{ label: "Vue", value: "vue" }] },
+                { title: "构建", question: "构建工具?", options: [{ label: "Vite", value: "vite" }] },
+              ],
+            },
+          },
+        ],
+      },
+    ]),
+    print: () => {},
+    askWizardInput: async () => "框架: Vue\n构建: Vite",
+  });
+  await agent.chat("向导初始化");
+  const fedBack = agent.history()[2] as unknown as { content: { content: string }[] };
+  assert.ok(String(fedBack.content[0]?.content).includes("用户在向导中的回答"));
+  assert.ok(String(fedBack.content[0]?.content).includes("框架: Vue"));
+});
+
+function makeScripted(
+  script: Array<{ tools: Array<{ name: string; input: Record<string, any> }> } | { text: string }>,
+) {
+  let step = 0;
+  return async (input: ModelInput): Promise<ModelOutput> => {
+    const s = script[step] ?? { text: "done" };
+    step++;
+    if ("text" in s) return { content: [{ type: "text", text: s.text }] };
+    return {
+      content: s.tools.map((t, i) => ({
+        type: "tool_use" as const,
+        id: `tu-${step}-${i}`,
+        name: t.name,
+        input: t.input,
+      })),
+    };
+  };
+}

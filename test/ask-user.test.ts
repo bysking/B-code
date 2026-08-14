@@ -93,6 +93,32 @@ test("多阶段：连续两次 ask_user 依次弹选、第二问独立", async (
   assert.equal(rounds, 2, "两步 tool_result 各一次");
 });
 
+test("ask_user tabs：Chat 与 Cancel 的标记回灌措辞", async () => {
+  const groups = { title: "框架", options: [{ label: "React", value: "react" }] };
+
+  const agentChat = new Agent({
+    callModel: makeScripted([
+      { tools: [{ name: "ask_user", input: { question: "选啥", kind: "tabs", groups: [groups] } }] },
+    ]),
+    print: () => {},
+    askGroupedInput: async () => "__chat__ 讲下区别",
+  });
+  await agentChat.chat("问");
+  const resChat = agentChat.history()[2] as unknown as { content: { content: string }[] };
+  assert.ok(String(resChat.content[0]?.content).includes("用户没有直接选择，而是补充说明：讲下区别"));
+
+  const agentCancel = new Agent({
+    callModel: makeScripted([
+      { tools: [{ name: "ask_user", input: { question: "选啥", kind: "tabs", groups: [groups] } }] },
+    ]),
+    print: () => {},
+    askGroupedInput: async () => "__cancel__",
+  });
+  await agentCancel.chat("问");
+  const resCancel = agentCancel.history()[2] as unknown as { content: { content: string }[] };
+  assert.ok(String(resCancel.content[0]?.content).includes("用户取消了本次选择"));
+});
+
 test("STATIC_CORE 含问用户准则（模型依据它判断何时 ask_user）", () => {
   assert.ok(STATIC_CORE.includes("call ask_user"));
   assert.ok(STATIC_CORE.includes("prefer reading files, searching"), "准则强调能自己解决就别问");

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { moveIndex } from "../src/ui/select.js";
+import { moveIndex } from "../src/ui/confirm.js";
 
 test("moveIndex：上下左右/vim 键共用的循环移动逻辑", () => {
   // 正向/反向/环绕/越界

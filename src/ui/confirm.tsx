@@ -9,10 +9,11 @@ export function moveIndex(idx: number, delta: number, length: number): number {
 }
 
 /**
- * 交互选择（权限确认 / Plan 审批 / 未来任意 options 场景）。
- * 方向键 ↑↓←→ 与 vim j/k/h/l 都能轮转选中；Enter 确认，Esc = 安全默认（第一项）。
+ * 系统权限确认（No/Yes 等）专用交互。
+ * 与模型驱动的选择组件（Wizard）分离：这里只渲染 Agent 权限确认链路
+ * （ctrl.ask → confirm），交互保持最小——方向键轮转、Enter 确认、Esc = 安全默认（第一项）。
  */
-export function Select({
+export function Confirm({
   ask,
   onResolve,
 }: {
@@ -49,6 +50,7 @@ export function Select({
           {opt.label}
         </Text>
       ))}
+      <Text dimColor>↑↓ 选择 · Enter 确认 · Esc 拒绝</Text>
     </Box>
   );
 }

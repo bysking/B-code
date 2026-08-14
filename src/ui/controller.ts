@@ -34,10 +34,20 @@ export interface AskState {
   options: AskOption[];
 }
 
-/** 两级选择（tab 组 × 组内选项） */
-export interface AskGroupState {
+/** 多步向导（进度条 + 每步单选/自定义 + Review 提交）——模型驱动的选择交互唯一形态 */
+export interface WizardStepOption {
+  label: string;
+  value: string;
+  description?: string;
+}
+export interface WizardStep {
+  title: string;
   question: string;
-  groups: { title: string; options: AskOption[] }[];
+  options: WizardStepOption[];
+}
+export interface AskWizardState {
+  question: string;
+  steps: WizardStep[];
 }
 
 export interface SlashItem {
@@ -57,10 +67,10 @@ export class AppController {
   output: string[] = [];
   /** 顶部 busy/thinking 文案（null = 空闲） */
   busy: string | null = null;
-  /** 待回答的选择（权限确认等）；null = 无（字段与方法 ask() 区分命名） */
+  /** 待回答的系统权限确认（No/Yes 等）；null = 无（字段与方法 ask() 区分命名） */
   askState: AskState | null = null;
-  /** 两级选择（tab 组）：非空时 TabsSelect 渲染，替代单层 Select */
-  askGroup: AskGroupState | null = null;
+  /** 多步向导：非空时 Wizard 渲染（模型驱动的选择交互唯一形态） */
+  askWizardState: AskWizardState | null = null;
   /** / 斜杠菜单状态 */
   slashOpen = false;
   slashQuery = "";
@@ -177,7 +187,7 @@ export class AppController {
     });
   }
 
-  /** 由 Select 组件调用，交付答案并关闭 */
+  /** 由 Confirm 组件调用，交付答案并关闭 */
   resolveAsk(value: string) {
     const res = this.askResolver;
     this.askState = null;
@@ -186,22 +196,19 @@ export class AppController {
     res?.(value);
   }
 
-  /** 两级（tab 组）选择提问 */
-  askGrouped(
-    question: string,
-    groups: { title: string; options: AskOption[] }[],
-  ): Promise<string> {
+  /** 多步向导提问：resolve 值 = 各步答案文本，或 __cancel__（由 Wizard 拼） */
+  askWizard(question: string, steps: WizardStep[]): Promise<string> {
     return new Promise((resolve) => {
-      this.askGroup = { question, groups };
+      this.askWizardState = { question, steps };
       this.askResolver = resolve;
       this.bump();
     });
   }
 
-  /** 由 TabsSelect 调用交付并关闭 */
-  resolveAskGroup(value: string) {
+  /** 由 Wizard 提交/取消时关闭 */
+  resolveAskWizard(value: string) {
     const res = this.askResolver;
-    this.askGroup = null;
+    this.askWizardState = null;
     this.askResolver = null;
     this.bump();
     res?.(value);
