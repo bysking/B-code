@@ -3,6 +3,14 @@ import { mkdirSync, readdirSync, readFileSync, existsSync, writeFileSync } from 
 import { join } from "node:path";
 import { dirs, safeName } from "./utils/paths.js";
 import { formatFrontmatter, parseFrontmatter } from "./frontmatter.js";
+import type { Memory } from "./types.js";
+
+/** 文件记忆实现（P7 策略化；未来换向量库 = 实现同一接口替换） */
+export class FileMemory implements Memory {
+  save = saveMemory;
+  recall = recallMemories;
+  dir = memoryDir;
+}
 
 /**
  * 跨会话记忆（施工图 P4 §8）

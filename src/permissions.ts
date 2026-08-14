@@ -12,9 +12,15 @@
  */
 
 import type { MountPoint } from "./registry.js";
+import type { PermissionPolicy } from "./types.js";
 
 export type Permission = "allow" | "deny" | "confirm";
 export type Mode = "default" | "plan" | "bypass" | "auto";
+
+/** 规则表实现（P7 策略化）：危险命令 + plan 只读 + read 放行 + fail-closed */
+export const rulePermission: PermissionPolicy = {
+  check: checkPermission,
+};
 
 /** 危险命令正则：命中即 deny（连 --yolo 也拦不住） */
 export const DANGEROUS_PATTERNS: RegExp[] = [

@@ -66,6 +66,15 @@ export interface ModelOutput {
   content: Anthropic.ContentBlockParam[];
 }
 
+/**
+ * 模型后端策略（P7 固化）：新增一个 Provider = 实现这个接口 + createBackend 注册选择。
+ * 内核（Agent 循环）只依赖该接口，不关心实现——"策略可替换"原则的最小落地。
+ */
+export interface ModelBackend {
+  readonly kind: string;
+  call(input: ModelInput): Promise<ModelOutput>;
+}
+
 /** 惰性读取：测试可在调用间切换环境，不依赖导入顺序 */
 export function useOpenAI(): boolean {
   return Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_BASE_URL);
@@ -235,8 +244,11 @@ async function streamOpenAISSE(
   return finishOpenAIStream(ctx);
 }
 
-export async function callModel(input: ModelInput): Promise<ModelOutput> {
-  if (useOpenAI()) {
+/** OpenAI 兼容后端：SSE 流式 + 边界转换，零 SDK 依赖（fetch 直连） */
+export class OpenAIBackend implements ModelBackend {
+  readonly kind = "openai-compatible";
+
+  async call(input: ModelInput): Promise<ModelOutput> {
     const systemText = flattenSystemBlocks(input.system);
     const resp = await proxiedFetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -260,30 +272,49 @@ export async function callModel(input: ModelInput): Promise<ModelOutput> {
     if (!isSSE) {
       return fromOpenAIResponse(JSON.parse(await resp.text()));
     }
-    // 真·流式：reader 边收边回调，onText 随数据到达即时触发（打字机的地基）
+    // 真·流式：reader 边收边回调，onText 随数据到达即时触发
     return streamOpenAISSE(resp, input.onText);
   }
+}
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      "[b-code] Missing ANTHROPIC_API_KEY in .env (or set OPENAI_API_KEY + OPENAI_BASE_URL for a compatible backend)",
-    );
-  }
-  const client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
+/** Anthropic 原生后端：官方 SDK 流式 */
+export class AnthropicBackend implements ModelBackend {
+  readonly kind = "anthropic";
+  private client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY ?? "",
     // SDK 走 fetch；注入代理穿透的包装，保持双后端行为一致
     fetch: proxiedFetch as unknown as ClientOptions["fetch"],
   });
-  const stream = client.messages.stream({
-    model: input.model,
-    max_tokens: 4096,
-    system: input.system,
-    tools: input.tools,
-    messages: input.messages,
-  });
-  if (input.onText) {
-    stream.on("text", (text) => input.onText!(text));
+
+  async call(input: ModelInput): Promise<ModelOutput> {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error(
+        "[b-code] Missing ANTHROPIC_API_KEY in .env (or set OPENAI_API_KEY + OPENAI_BASE_URL for a compatible backend)",
+      );
+    }
+    const stream = this.client.messages.stream({
+      model: input.model,
+      max_tokens: 4096,
+      system: input.system,
+      tools: input.tools,
+      messages: input.messages,
+    });
+    if (input.onText) {
+      stream.on("text", (text) => input.onText!(text));
+    }
+    const reply = await stream.finalMessage();
+    return { content: reply.content as Anthropic.ContentBlock[] };
   }
-  const reply = await stream.finalMessage();
-  return { content: reply.content as Anthropic.ContentBlock[] };
 }
+
+/** 后端工厂：env 决定用哪个实现（新增 Provider 在这里加分支） */
+export function createBackend(): ModelBackend {
+  return useOpenAI() ? new OpenAIBackend() : new AnthropicBackend();
+}
+
+/**
+ * 默认后端入口（向后兼容的薄壳：策略可替换的最小体现）。
+ * Agent 默认用它；测试/高级用法可注入任意 ModelInput → ModelOutput 函数。
+ */
+export const callModel = (input: ModelInput): Promise<ModelOutput> =>
+  createBackend().call(input);

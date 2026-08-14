@@ -298,7 +298,7 @@ Phase 0 脚手架 ──► Phase 1 最小循环(MVP) ──► Phase 2 交互�
 - [ ]  `src/index.ts` 打印 `hello`，`npm run dev` 跑通
 - [ ]  加入 `.env` + `dotenv` 加载
 
-**验收命令：** `npm run dev` → 输出 `mini-claude skeleton ready`
+**验收命令：** `npm run dev` → 输出 `b-code skeleton ready`
 **学习要点：** strict TS 配置（`noUncheckedIndexedAccess` 等）、NodeNext ESM 与 CJS 差异。
 **AI 协助 prompt 模板：**
 
@@ -306,7 +306,7 @@ Phase 0 脚手架 ──► Phase 1 最小循环(MVP) ──► Phase 2 交互�
 用 TypeScript（NodeNext + strict）初始化一个 CLI 项目脚手架：
 - package.json、tsconfig.json、.env 支持、tsx 开发运行
 - 目录 src/、src/tools/、src/services/、test/
-- npm run dev 打印 "mini-claude skeleton ready"
+- npm run dev 打印 "b-code skeleton ready"
 不安装任何多余依赖，只装 @anthropic-ai/sdk、dotenv、tsx、typescript。
 ```
 
@@ -323,7 +323,7 @@ Phase 0 脚手架 ──► Phase 1 最小循环(MVP) ──► Phase 2 交互�
 - [ ]  `edit_file` 实现**唯一性校验**（重复 old_string 报错）——源码文档强调的坑
 - [ ]  实现 `Agent` 类：`messages` 数组 + `while(true)` 循环 + tool_use 提取 + 结果喂回
 - [ ]  `executeTool` switch 分发（先不做注册表）
-- [ ]  最小 `system` prompt（"You are Mini Claude Code…"）
+- [ ]  最小 `system` prompt（"You are b-code Code…"）
 - [ ]  手动测试：`"Read src/index.ts"`、`"grep 'TODO' in src"`
 
 **验收命令：**
@@ -358,7 +358,7 @@ npx tsx src/index.ts "Read src/index.ts and summarize"
 - [ ]  两段式 System Prompt：静态核心（标 `cache_control`）+ 动态上下文（环境/Git 状态）
 - [ ]  `CLAUDE.md` 向上查找加载（含 `@include` 指令、5 层嵌套限制）
 - [ ]  REPL 循环（`readline`）+ one-shot 模式 + `/clear` / `exit`
-- [ ]  会话持久化：`~/.mini-claude/session.json`，每轮自动保存，`--resume` 恢复
+- [ ]  会话持久化：`~/.b-code/session.json`，每轮自动保存，`--resume` 恢复
 - [ ]  流式输出：`client.messages.stream()`，`stream.on('text')` 逐字打印
 - [ ]  双后端：`OPENAI_API_KEY + OPENAI_BASE_URL` 存在则走 OpenAI 兼容路径（SSE 解析 + 格式转换），否则 Anthropic
 - [ ]  手动测试：`--resume` 恢复上下文；切到 OpenAI 兼容后端跑通一次
@@ -380,7 +380,7 @@ OPENAI_BASE_URL=... OPENAI_API_KEY=... npm run dev "hello"   # 双后端切换
    + 动态上下文（platform/cwd/shell、git branch 和 dirty 状态），动态块放末尾。
 2. CLAUDE.md：从 cwd 向上逐级查找合并，支持 "@path" 引用（~ / 绝对 / 相对，最多 5 层）。
 3. readline REPL：支持 /clear /exit，输入以 / 开头先尝试解析技能（先留 resolveSkill 空实现）。
-4. 会话持久化：消息数组 JSON 存 ~/.mini-claude/session.json，chat 后自动保存，--resume 恢复。
+4. 会话持久化：消息数组 JSON 存 ~/.b-code/session.json，chat 后自动保存，--resume 恢复。
 5. 流式：改用 client.messages.stream()，on('text') 打印，finalMessage() 返回完整消息。
 6. 双后端：若同时有 OPENAI_API_KEY 和 OPENAI_BASE_URL 走 OpenAI 兼容（fetch /chat/completions，
    SSE 逐块解析），否则 Anthropic。
@@ -439,7 +439,7 @@ npm run dev -- "repeat 20 times"          # 观察 (compacted N messages)
 **前置：** P3。
 
 - [ ]  frontmatter 解析器（`parseFrontmatter`，记忆/技能共用）
-- [ ]  记忆存储：`~/.mini-claude/projects/{hash}/memory/`，YAML frontmatter + 正文
+- [ ]  记忆存储：`~/.b-code/projects/{hash}/memory/`，YAML frontmatter + 正文
 - [ ]  语义召回：关键词重叠打分，top 3 注入 System Prompt 末尾（纯确定性、不调模型）
 - [ ]  技能发现：`~/.claude/skills`（用户级）+ `.claude/skills`（项目级覆盖）
 - [ ]  `resolveSkill`：`/name 参数` → frontmatter + 正文 + `$ARGUMENTS` 替换
@@ -466,7 +466,7 @@ npm run dev -- --resume
 1. frontmatter.ts：parseFrontmatter(content) → {meta, body}，解析 ---key: value--- 块。
 2. memory.ts：saveMemory(name, description, type, content) 存为 md 文件；
    recallMemories(query) 用关键词重叠打分，取 top3 拼成 "# Memory" 段落返回。
-   记忆目录 ~/.mini-claude/projects/{sha256(cwd)前16位}/memory/。
+   记忆目录 ~/.b-code/projects/{sha256(cwd)前16位}/memory/。
 3. skills.ts：SKILL_DIRS=[~/.claude/skills, ./.claude/skills]，
    resolveSkill(input)："/name args" → 找 name.md，替换 $ARGUMENTS 为 args，返回正文。
    buildSkillDescriptions()：列出 user-invocable 技能注入 system prompt。
@@ -577,7 +577,7 @@ npm run dev -- --goal "file test.txt exists" "create test.txt if missing"
 **AI 协助 prompt 模板：**
 
 ```
-对我当前的 mini-claude 项目做一次"策略模式"重构（TypeScript）：
+对我当前的 b-code 项目做一次"策略模式"重构（TypeScript）：
 - 抽出六大接口到 types.ts：Tool、Skill、Backend、Permission、Context、Memory
   （每个接口 1 个方法 + 1 个注册标识即可，别过度设计）
 - backend：AnthropicBackend / OpenAIBackend 两个实现，env 决定用哪个

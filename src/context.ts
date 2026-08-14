@@ -1,3 +1,5 @@
+import type { ContextPolicy } from "./types.js";
+
 /**
  * 上下文管理（施工图 P3 §7）
  *
@@ -7,6 +9,13 @@
  *
  * 先实现这两级；Tier 1 预算截断 / Tier 2 裁剪 / Tier 3 空闲微压缩按需后置。
  */
+
+/** 截断策略实现（P7 策略化；未来可加 BudgetContext / SnipContext） */
+export class TruncateContext implements ContextPolicy {
+  truncate(result: string): string {
+    return truncateResult(result);
+  }
+}
 
 export const MAX_RESULT_CHARS = 50_000;
 

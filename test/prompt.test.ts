@@ -35,10 +35,10 @@ test("动态上下文在 git 仓库中含 Git 分支信息", () => {
 });
 
 test("loadClaudeMd：从 startDir 读取并合并 @include（相对路径）", async () => {
-  await writeFile(join(dir, "CLAUDE.md"), "rules from claude\n@included.md\n");
+  await writeFile(join(dir, "CLAUDE.md"), "rules from project\n@included.md\n");
   await writeFile(join(dir, "included.md"), "extra rules\n");
   const out = loadClaudeMd(dir);
-  assert.ok(out.includes("rules from claude"));
+  assert.ok(out.includes("rules from project"));
   assert.ok(out.includes("extra rules"));
 });
 
