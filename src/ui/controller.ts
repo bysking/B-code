@@ -101,6 +101,13 @@ export class AppController {
     this.bump();
   }
 
+  /** 恢复会话：把最近几轮灌进消息流渲染（id 重新分配，避免与后续新轮冲突） */
+  loadTurns(turns: Array<Omit<Turn, "id">>) {
+    this.turns = turns.map((t, i) => ({ ...t, id: i + 1 }));
+    this.nextUserTurnId = Math.max(this.nextUserTurnId, this.turns.length);
+    this.bump();
+  }
+
   /** 模型本轮结束（assistant 不再追加） */
   finishStream() {
     const last = this.turns[this.turns.length - 1];

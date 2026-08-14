@@ -88,6 +88,61 @@ export async function clearSessionFile(id?: string): Promise<void> {
   }
 }
 
+/** 恢复会话时展示的"轮"：user 消息为轮边界，tool_result 不回显 */
+export interface ResumeTurn {
+  role: "user" | "assistant";
+  text: string;
+  /** assistant 的 tool_use 名称清单 */
+  tools: string[];
+}
+
+/**
+ * 取最近 maxRounds 轮对话（含无 user 文本的压缩摘要轮）。
+ * 用于 --resume / --session 时回看来龙去脉。
+ */
+export function recentTurns(messages: MessageParam[], maxRounds = 5): ResumeTurn[] {
+  const userStart: number[] = [];
+  messages.forEach((m, i) => {
+    // 只有 string 型 user 内容才是"一轮的起点"（tool_result 是块数组，不算）
+    if (m.role === "user" && typeof m.content === "string") userStart.push(i);
+  });
+  const starts = userStart.slice(-maxRounds);
+  if (starts.length === 0) return [];
+
+  const begin = starts[0] ?? 0;
+  const out: ResumeTurn[] = [];
+  for (let i = begin; i < messages.length; i++) {
+    const m = messages[i]!;
+    if (m.role === "user") {
+      if (typeof m.content === "string") out.push({ role: "user", text: m.content, tools: [] });
+      // tool_result 块：不是对话轮，跳过
+    } else if (m.role === "assistant") {
+      const text: string[] = [];
+      const tools: string[] = [];
+      for (const b of Array.isArray(m.content) ? m.content : []) {
+        if (b.type === "text" && b.text) text.push(b.text);
+        else if (b.type === "tool_use") tools.push(b.name);
+      }
+      out.push({ role: "assistant", text: text.join(""), tools });
+    }
+  }
+  return out;
+}
+
+/** 恢复会话的紧凑文本展示（非 TTY）；"轮" = user 消息数 */
+export function renderRecentTurns(turns: ResumeTurn[]): string {
+  if (turns.length === 0) return "";
+  const rounds = turns.filter((t) => t.role === "user").length;
+  const lines = turns.map((t) => {
+    const prefix = t.role === "user" ? "user" : "bcode";
+    const tools = t.tools.length ? ` [tools: ${t.tools.join(", ")}]` : "";
+    const body = t.text.trim().replace(/\s*\n+/g, " ").slice(0, 160);
+    const text = body || "(no text)";
+    return `${prefix}:${tools} ${text}`;
+  });
+  return `── 最近 ${rounds} 轮对话 ──\n${lines.join("\n")}\n`;
+}
+
 async function readJson(file: string): Promise<MessageParam[] | null> {
   try {
     const raw = JSON.parse(await readFile(file, "utf-8"));

@@ -7,7 +7,7 @@ import { closeAllMcpConnections } from "./mcp.js";
 import { AppController } from "./ui/controller.js";
 import { mountTtyApp } from "./ui/render.js";
 import { BUILTIN_SLASH_ITEMS } from "./ui/slash.js";
-import { newSessionId } from "./session.js";
+import { newSessionId, recentTurns, renderRecentTurns } from "./session.js";
 import type { SpinnerLike } from "./ui.js";
 import type { Mode } from "./permissions.js";
 
@@ -136,7 +136,18 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const saved = await (args.session ? loadSession(args.session) : args.resume ? loadSession() : null);
   if (saved && saved.length > 0) {
     agent.loadHistory(saved);
-    initialOutput.push(`(resumed ${saved.length} messages)`);
+    // 最近 5 轮灌进消息流，回看上下文（tool 块只显示名字、标完成）
+    const recent = recentTurns(saved);
+    ctrl.loadTurns(
+      recent.map((r) => ({
+        role: r.role,
+        text: r.text,
+        tools: r.tools.map((name, i) => ({ id: i + 1, name, input: "", done: true })),
+        streaming: false,
+      })),
+    );
+    const rounds = recent.filter((r) => r.role === "user").length;
+    initialOutput.push(`(resumed ${saved.length} messages · 最近 ${rounds} 轮)`);
   } else if (args.resume || args.session) {
     initialOutput.push("(no session to resume)");
   }
@@ -410,6 +421,7 @@ const agent = new Agent({
   if (saved && saved.length > 0) {
     agent.loadHistory(saved);
     process.stdout.write(`(resumed ${saved.length} messages)\n`);
+    process.stdout.write(renderRecentTurns(recentTurns(saved))); // 回看最近 5 轮
   } else if (resume || session) {
     process.stdout.write("(no session to resume)\n");
   }
