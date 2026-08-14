@@ -23,25 +23,58 @@ export interface CliArgs {
   resume: boolean;
   plan: boolean;
   yolo: boolean;
+  auto: boolean;
+  /** --goal <条件>：pursueGoal 的达成条件 */
+  goal: string;
+  /** --loop <秒>：定时重投间隔（0 = 不启用） */
+  loop: number;
   instruction: string;
 }
 
+const FLAG_ONLY = new Set(["--resume", "--plan", "--yolo", "--auto"]);
+
 export function parseCliArgs(argv: string[]): CliArgs {
-  const resume = argv.includes("--resume");
-  const plan = argv.includes("--plan");
-  const yolo = argv.includes("--yolo");
-  const rest = argv.filter((a) => !["--resume", "--plan", "--yolo"].includes(a));
-  return { resume, plan, yolo, instruction: rest.join(" ").trim() };
+  let goal = "";
+  let loop = 0;
+  const rest: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? "";
+    if (FLAG_ONLY.has(a)) {
+      rest.push(a); // 留给下方 boolean 判断（也保留在原位，避免丢失语义）
+    } else if (a === "--goal") {
+      goal = argv[i + 1] ?? "";
+      i++;
+    } else if (a === "--loop") {
+      const n = Number(argv[i + 1] ?? 0);
+      loop = Number.isFinite(n) && n > 0 ? n : 0;
+      i++;
+    } else {
+      rest.push(a);
+    }
+  }
+  const instruction = rest
+    .filter((a) => !FLAG_ONLY.has(a))
+    .join(" ")
+    .trim();
+  return {
+    resume: rest.includes("--resume"),
+    plan: rest.includes("--plan"),
+    yolo: rest.includes("--yolo"),
+    auto: rest.includes("--auto"),
+    goal,
+    loop,
+    instruction,
+  };
 }
 
-function initialMode(plan: boolean, yolo: boolean): Mode {
-  // plan 的只读契约优先于 yolo：deny 阶段目标是"能拦的都拦"
-  return plan ? "plan" : yolo ? "bypass" : "default";
+function initialMode(args: Pick<CliArgs, "plan" | "yolo" | "auto">): Mode {
+  // plan 的只读契约优先于一切；auto 用分类器代替确认框；bypass 跳过确认
+  return args.plan ? "plan" : args.auto ? "auto" : args.yolo ? "bypass" : "default";
 }
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const { resume, plan, yolo, instruction } = parseCliArgs(argv);
-  const replMode = !instruction;
+  const { resume, plan, yolo, auto, goal, loop, instruction } = parseCliArgs(argv);
+  const replMode = !instruction && !goal && !(loop > 0);
 
   let rl: readline.Interface | null = null;
   let awaitingAnswer: ((ok: boolean) => void) | null = null;
@@ -152,7 +185,7 @@ let eofDenyInstalled = false;
 let stdinEnded = false;
 
 const agent = new Agent({
-    mode: initialMode(plan, yolo),
+    mode: initialMode({ plan, yolo, auto }),
     askUser: (question) =>
       new Promise<boolean>((resolve) => {
         process.stdout.write(`  ${question} `);
@@ -188,6 +221,43 @@ const agent = new Agent({
       process.stdout.write(`(resumed ${saved.length} messages)\n`);
     } else {
       process.stdout.write("(no session to resume)\n");
+    }
+  }
+
+  // ── goal 模式：无人值守追条件（评估器回灌直到达成）────────────
+  if (goal) {
+    busy = true;
+    try {
+      await agent.pursueGoal(goal, instruction || "Continue working toward the goal.");
+    } finally {
+      await saveSession(agent.history());
+      busy = false;
+    }
+    closeAllMcpConnections();
+    if (closing) finish();
+    else currentRl()?.close();
+    return;
+  }
+
+  // ── loop 模式：定时重投 ────────────────────────────────────
+  if (loop > 0 && instruction) {
+    process.stdout.write(`(loop every ${loop}s; Ctrl-C to stop)\n`);
+    const stop = () => {
+      process.stdout.write("\n(loop stopped)\n");
+      closeAllMcpConnections();
+      process.exit(130);
+    };
+    process.on("SIGINT", stop);
+    busy = true;
+    try {
+      for (;;) {
+        await agent.chat(instruction);
+        await new Promise((r) => setTimeout(r, loop * 1000));
+      }
+    } finally {
+      busy = false;
+      closeAllMcpConnections();
+      currentRl()?.close();
     }
   }
 

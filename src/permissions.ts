@@ -14,7 +14,7 @@
 import type { MountPoint } from "./registry.js";
 
 export type Permission = "allow" | "deny" | "confirm";
-export type Mode = "default" | "plan" | "bypass";
+export type Mode = "default" | "plan" | "bypass" | "auto";
 
 /** 危险命令正则：命中即 deny（连 --yolo 也拦不住） */
 export const DANGEROUS_PATTERNS: RegExp[] = [

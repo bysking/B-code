@@ -8,6 +8,7 @@ import { loadMcpServers } from "./mcp.js";
 import { Registry, type RuntimeContext } from "./registry.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateResult, maybeCompact } from "./context.js";
+import { classifyAction, evaluateGoal, renderTranscript } from "./autonomy.js";
 import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
 import { recallMemories } from "./memory.js";
 import { buildSkillDescriptions } from "./skills.js";
@@ -98,6 +99,49 @@ export class Agent {
     this.mode = mode;
   }
 
+  /** 面向 eval/classify 的脱敏对话记录（tool 细节不展开） */
+  transcriptText(): string {
+    return renderTranscript(this.messages);
+  }
+
+  /**
+   * 追逐目标（施工图 §13.3）：执行 → 评估 → 未达成则原因回灌 → 再执行，最多 5 轮。
+   * 评估器是独立模型调用（不带工具），原因回灌给主模型继续干活。
+   */
+  async pursueGoal(condition: string, prompt: string, maxRounds = 5): Promise<void> {
+    await this.chat(prompt);
+    for (let round = 0; round < maxRounds; round++) {
+      const verdict = await this.evaluateGoal(condition);
+      if (verdict.met) {
+        log.info(`✓ goal met: ${condition}`);
+        return;
+      }
+      if (verdict.impossible) {
+        log.warn(`goal impossible: ${verdict.reason}`);
+        return;
+      }
+      log.info(`(goal not met — ${verdict.reason}; continuing)`);
+      await this.chat(
+        `The goal "${condition}" is not met yet: ${verdict.reason}. Keep working toward it.`,
+      );
+    }
+    log.warn(`(gave up after ${maxRounds} iterations without meeting: ${condition})`);
+  }
+
+  private async evaluateGoal(condition: string): Promise<
+    Awaited<ReturnType<typeof evaluateGoal>>
+  > {
+    return evaluateGoal(condition, this.transcriptText(), this.model, this.call);
+  }
+
+  /** auto 模式动作分类器（写/编辑/shell 放行决策） */
+  private async classify(
+    name: string,
+    input: Record<string, any>,
+  ): Promise<Awaited<ReturnType<typeof classifyAction>>> {
+    return classifyAction(name, input, this.transcriptText(), this.model, this.call);
+  }
+
   /** 会话历史（P2 会话持久化直接序列化它） */
   history(): MessageParam[] {
     return this.messages;
@@ -170,6 +214,15 @@ export class Agent {
 
           if (permission === "deny") {
             output = `Denied: ${tu.name} was blocked by the permission system.`;
+          } else if (
+            // Auto Mode：写/编辑/shell 先过分类器（分类器代替人工确认框）
+            this.mode === "auto" &&
+            (mp.mode === "write" || mp.mode === "shell")
+          ) {
+            const verdict = await this.classify(mp.name, input);
+            output = verdict.allow
+              ? await this.execTool(mp, input)
+              : `Blocked by auto-mode monitor: ${verdict.reason}`;
           } else if (permission === "confirm" && this.mode !== "bypass") {
             const key = allowlistKey(mp, input);
             if (this.allowlist.has(key)) {
@@ -222,9 +275,7 @@ export class Agent {
   /** 上下文压缩（Tier 4 摘要）：超阈值把旧消息摘要替换，保留最近 KEEP_RECENT 条 */
   private async compactIfNeeded(): Promise<MessageParam[]> {
     return maybeCompact(this.messages, async (older) => {
-      const transcript = older
-        .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : "[tool call / result]"}`)
-        .join("\n");
+      const transcript = renderTranscript(older);
       const out = await this.call({
         model: this.model,
         system: [
