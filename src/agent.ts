@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
 import { callModel, defaultModel, type ModelInput, type ModelOutput } from "./backend.js";
 import { executeTool, toolDefinitions } from "./tools.js";
+import { buildSystemPrompt } from "./prompt.js";
 
 /**
  * Agent = 核心循环引擎（施工图 L2 内核，P1 最小版）
@@ -14,15 +15,6 @@ import { executeTool, toolDefinitions } from "./tools.js";
  *
  * 决定循环转不转的是模型，不是代码。这就是 Agent 与聊天机器人的分界线。
  */
-
-const SYSTEM_CORE = `You are B Code, a small coding assistant CLI.
-You help with software engineering tasks using the tools available to you.
-
-# Doing tasks
-- Do not propose changes to code you haven't read. Read files first.
-- Do not create files unless necessary. Prefer editing existing files.
-- Avoid over-engineering. Only make changes that were requested.
-- Keep responses short and concise. Lead with the answer.`;
 
 export interface AgentOptions {
   /** 覆盖模型调用（测试注入假后端；也服务于 P2 的 Backend 策略化） */
@@ -48,25 +40,33 @@ export class Agent {
     return this.messages;
   }
 
+  /** 恢复历史（--resume 用；调用方负责校验是可序列化的合法消息） */
+  loadHistory(messages: MessageParam[]): void {
+    this.messages = messages;
+  }
+
+  clearHistory(): void {
+    this.messages = [];
+  }
+
   /** 处理一次用户输入，可能包含多轮工具调用 */
   async chat(userText: string): Promise<void> {
     this.messages.push({ role: "user", content: userText });
+    // 动态上下文（cwd/git/CLAUDE.md）在一次 chat 内固定，避免逐轮重复 exec
+    const system = buildSystemPrompt();
 
     while (true) {
       const reply = await this.call({
         model: this.model,
-        system: SYSTEM_CORE,
+        system,
         tools: toolDefinitions,
         messages: this.messages,
+        // 流式文本直接进 UI；返回的 content 仍是完整消息（历史/工具提取不受影响）
+        onText: (delta) => this.print(delta),
       });
 
       // 记录模型完整回复（文本 + 工具调用）
       this.messages.push({ role: "assistant", content: reply.content });
-
-      // 逐块输出模型的文本（接 print 回调，P2 会升级为流式逐字输出）
-      for (const b of reply.content) {
-        if (b.type === "text" && b.text) this.print(b.text);
-      }
 
       const toolUses = reply.content.filter(
         (b): b is Anthropic.ToolUseBlockParam => b.type === "tool_use",

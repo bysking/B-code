@@ -23,21 +23,17 @@ const savedNoProxy = process.env.NO_PROXY;
 
 before(async () => {
   server = createServer((req, res) => {
-    res.setHeader("Content-Type", "application/json");
     if (req.url?.includes("/chat/completions")) {
-      res.end(
-        JSON.stringify({
-          choices: [
-            {
-              index: 0,
-              message: { role: "assistant", content: "mock says hi", tool_calls: [] },
-              finish_reason: "stop",
-            },
-          ],
-        }),
-      );
+      // OpenAI 兼容 SSE 流式响应：文本分两块到达，最后 [DONE]
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write('data: {"choices":[{"delta":{"content":"mock"}}]}\n\n');
+      res.write('data: {"choices":[{"delta":{"content":" says hi"}}]}\n\n');
+      res.write('data: {"choices":[{"delta":{}}]}\n\n');
+      res.write("data: [DONE]\n\n");
+      res.end();
       return;
     }
+    res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ ok: true }));
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -59,20 +55,67 @@ after(async () => {
   }
 });
 
-test("callModel 真实 HTTP 链路：本地 OpenAI 兼容服务 → 归一化文本块", async () => {
+test("callModel 真实 HTTP 链路：SSE 流式 → 文本增量回调 + 归一化完整消息", async () => {
   process.env.OPENAI_API_KEY = "test-key";
   process.env.OPENAI_BASE_URL = baseUrl;
   process.env.B_CODE_MODEL = "mock-model";
   process.env.NO_PROXY = "127.0.0.1"; // 代理层存在时，本机直连不被代理
   delete process.env.HTTP_PROXY;
 
+  const deltas: string[] = [];
   const out = await callModel({
     model: "mock-model",
-    system: "sys",
+    system: [{ type: "text", text: "sys" }],
     tools: [],
     messages: [{ role: "user", content: "ping" }],
+    onText: (d) => deltas.push(d),
   });
+  assert.deepEqual(deltas, ["mock", " says hi"]);
   assert.deepEqual(out.content, [{ type: "text", text: "mock says hi" }]);
+});
+
+test("callModel SSE 流式：tool_calls 分片按 index 合并为完整参数", async () => {
+  // 独立 server：一次请求返回工具调用流（name 整块 + arguments 分片）
+  const toolServer = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","function":{"name":"read_file","arguments":""}}]}}]}\n\n',
+    );
+    res.write(
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"file_path\\":\\"x\\""}}]}}]}\n\n',
+    );
+    res.write(
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}]}\n\n',
+    );
+    res.write("data: [DONE]\n\n");
+    res.end();
+  });
+  await new Promise<void>((r) => toolServer.listen(0, "127.0.0.1", r));
+  const addr = toolServer.address();
+  const toolUrl = `http://127.0.0.1:${addr && typeof addr === "object" ? addr.port : 0}/v1`;
+
+  const saved = process.env.OPENAI_BASE_URL;
+  process.env.OPENAI_BASE_URL = toolUrl;
+  try {
+    const out = await callModel({
+      model: "mock-model",
+      system: [{ type: "text", text: "sys" }],
+      tools: [],
+      messages: [{ role: "user", content: "go" }],
+    });
+    assert.deepEqual(out.content, [
+      {
+        type: "tool_use",
+        id: "call-a",
+        name: "read_file",
+        input: { file_path: "x" },
+      },
+    ]);
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = saved;
+    await new Promise((r) => toolServer.close(r));
+  }
 });
 
 const sampleTool = {
