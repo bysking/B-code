@@ -41,7 +41,9 @@ export const dirs = {
   logsDir: () => join(basePath(), "logs"),
   /** 跨项目记忆根目录（P4 使用） */
   projectsDir: () => join(basePath(), "projects"),
-  /** MCP 服务器配置（P5 使用） */
+  /** 用户级技能目录（随 B_CODE_HOME 迁移；P4 使用） */
+  skillsDir: () => join(basePath(), "skills"),
+  /** 用户级 MCP 服务器配置（P5 使用） */
   mcpConfigFile: () => join(basePath(), "mcp.json"),
 };
 

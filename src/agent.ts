@@ -5,6 +5,8 @@ import { executeTool, toolDefinitions } from "./tools.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateResult, maybeCompact } from "./context.js";
 import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
+import { recallMemories } from "./memory.js";
+import { buildSkillDescriptions } from "./skills.js";
 import { Spinner, type SpinnerLike } from "./ui.js";
 import { log } from "./utils/log.js";
 
@@ -76,11 +78,16 @@ export class Agent {
   async chat(userText: string): Promise<void> {
     this.messages.push({ role: "user", content: userText });
 
+    // P4：以当前用户输入为 query 做记忆召回 + 技能描述，注入 system 动态块末尾
+    // （近因效应让模型优先看到记忆；一次 chat 只召回一次，避免循环内重复 IO）
+    const system = buildSystemPrompt({
+      memory: recallMemories(userText),
+      skills: buildSkillDescriptions(),
+    });
+
     while (true) {
       // 上下文管理：消息超阈值先 LLM 摘要压缩（内部一次独立模型调用）
       this.messages = await this.compactIfNeeded();
-      // 动态上下文（cwd/git/CLAUDE.md）每轮重建，压缩后摘要也算"当前状态"
-      const system = buildSystemPrompt();
 
       // 模型思考期：转起来；首个文本 token 到达即停（看下面 onText）
       this.spinner.start("thinking…");

@@ -16,6 +16,12 @@ import { dirname, join, resolve } from "node:path";
 
 export type SystemBlock = Anthropic.TextBlockParam;
 
+/** 动态注入的可选段（P4：记忆召回 / 技能描述，放动态块末尾利用近因效应） */
+export interface DynamicSections {
+  memory?: string;
+  skills?: string;
+}
+
 export const STATIC_CORE = `You are B Code, a small coding assistant CLI.
 You help with software engineering tasks using the tools available to you.
 
@@ -37,18 +43,23 @@ You help with software engineering tasks using the tools available to you.
 # Tone and style
 - Reference code as file_path:line_number.`;
 
-/** 完整 System Prompt：静态核心（缓存标记）+ 动态上下文 */
-export function buildSystemPrompt(args: { cwd?: string } = {}): SystemBlock[] {
+/** 完整 System Prompt：静态核心（缓存标记）+ 动态上下文 + 记忆/技能注入段 */
+export function buildSystemPrompt(
+  args: { cwd?: string } & DynamicSections = {},
+): SystemBlock[] {
   const blocks: SystemBlock[] = [
     { type: "text", text: STATIC_CORE, cache_control: { type: "ephemeral" } },
   ];
-  const dynamic = buildDynamicContext(args.cwd ?? process.cwd());
+  const dynamic = buildDynamicContext(args.cwd ?? process.cwd(), {
+    memory: args.memory,
+    skills: args.skills,
+  });
   if (dynamic) blocks.push({ type: "text", text: dynamic });
   return blocks;
 }
 
-/** 动态上下文：环境 / Git / CLAUDE.md / 记忆·技能占位（P4 注入） */
-function buildDynamicContext(cwd: string): string {
+/** 动态上下文：环境 / Git / CLAUDE.md / + 注入段（放末尾利用近因效应） */
+function buildDynamicContext(cwd: string, sections: DynamicSections = {}): string {
   const parts: string[] = [`# Environment\n- Platform: ${process.platform}`, `- Working directory: ${cwd}`];
 
   // Git 状态（非 git 目录静默跳过）
@@ -66,7 +77,11 @@ function buildDynamicContext(cwd: string): string {
   const claudeMd = loadClaudeMd(cwd);
   if (claudeMd) parts.push(`\n# Project Instructions\n${claudeMd}`);
 
-  // TODO(P4): 记忆召回 + 技能描述注入到这里，保持动态块尾部的近因效应
+  // 插入段：记忆召回 / 技能描述（由调用方算好传入）
+  for (const section of [sections.skills, sections.memory]) {
+    if (section) parts.push(section);
+  }
+
   return parts.join("\n");
 }
 

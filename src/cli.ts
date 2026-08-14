@@ -1,6 +1,8 @@
 import * as readline from "node:readline";
 import { Agent } from "./agent.js";
 import { clearSessionFile, loadSession, saveSession } from "./session.js";
+import { resolveSkill, discoverSkills } from "./skills.js";
+import { saveMemory } from "./memory.js";
 import type { Mode } from "./permissions.js";
 
 /**
@@ -91,7 +93,38 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         created.prompt();
         return;
       }
-      // TODO(P4): 以 / 开头的输入先尝试解析技能（resolveSkill），未命中再走普通对话
+      if (input === "/skills") {
+        const skills = discoverSkills()
+          .filter((s) => s.userInvocable)
+          .map((s) => `/${s.name}: ${s.description}`)
+          .join("\n");
+        process.stdout.write(skills ? `Available skills:\n${skills}\n` : "(no skills)\n");
+        created.prompt();
+        return;
+      }
+      if (input.startsWith("/remember ")) {
+        const fact = input.slice("/remember ".length).trim();
+        const name =
+          fact.split(/\W+/).filter(Boolean).slice(0, 4).join("_").toLowerCase() || "fact";
+        saveMemory(name, fact, "reference", fact);
+        process.stdout.write(`(saved to memory: ${name})\n`);
+        created.prompt();
+        return;
+      }
+      // 技能调用优先："/commit 参数" → 技能正文（含替换后的 $ARGUMENTS）
+      const skillPrompt = resolveSkill(input);
+      if (skillPrompt) {
+        busy = true;
+        try {
+          await agent.chat(skillPrompt);
+          await saveSession(agent.history());
+        } finally {
+          busy = false;
+          if (closing) finish();
+          else created.prompt();
+        }
+        return;
+      }
       busy = true;
       try {
         await agent.chat(input);
@@ -111,12 +144,35 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     return created;
   };
 
-  const agent = new Agent({
+  // 非交互下 EOF 兜底：管道押完输入就断（或 stdin 为空），confirm 的答案可能永远等不来。
+// 持久监听 stdin end：记录 stdinEnded（可能早于 confirm 发生）+ 顺手解决当场 pending 的回答。
+// 交互终端（TTY）不监听——退出是用户主动 quit，不该被主动 deny（fail-closed 也不适用于 TTY）。
+let eofDenyInstalled = false;
+let stdinEnded = false;
+
+const agent = new Agent({
     mode: initialMode(plan, yolo),
     askUser: (question) =>
       new Promise<boolean>((resolve) => {
-        getRl(); // 首次确认时才挂 stdin
         process.stdout.write(`  ${question} `);
+        if (!process.stdin.isTTY && !eofDenyInstalled) {
+          eofDenyInstalled = true;
+          process.stdin.on("end", () => {
+            stdinEnded = true;
+            if (awaitingAnswer) {
+              const deny = awaitingAnswer;
+              awaitingAnswer = null;
+              deny(false);
+            }
+          });
+        }
+        // stdin 已 EOF → 没有还会来的答案，fail-closed 拒绝（覆盖"end 先于 confirm"的时序）
+        if (stdinEnded) {
+          process.stdout.write("(no input — denied)\n");
+          resolve(false);
+          return;
+        }
+        getRl(); // 首次确认时才挂 stdin
         awaitingAnswer = resolve;
       }),
   });
@@ -134,8 +190,9 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   // ── one-shot ────────────────────────────────────────────────
   if (instruction) {
     busy = true; // 中途 stdin 可能 EOF（管道押完 y 就断），close 只标记不退出
+    const effective = resolveSkill(instruction) ?? instruction; // 支持 one-shot 技能调用
     try {
-      await agent.chat(instruction);
+      await agent.chat(effective);
     } finally {
       await saveSession(agent.history());
       busy = false;
