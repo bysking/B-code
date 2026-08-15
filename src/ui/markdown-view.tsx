@@ -1,102 +1,31 @@
 import React from "react";
-import { Box, Text } from "ink";
-import {
-  parseInline,
-  parseMarkdown,
-  type MdBlock,
-  type MdInline,
-} from "./markdown.js";
+import { Text } from "ink";
+import { marked } from "marked";
+import TerminalRenderer from "marked-terminal";
 
-/** 行内片段渲染 */
-function Inline({ parts }: { parts: MdInline[] }) {
-  return (
-    <Text>
-      {parts.map((p, i) => {
-        switch (p.t) {
-          case "code":
-            return (
-              <Text key={i} color="yellow">
-                {p.text}
-              </Text>
-            );
-          case "bold":
-            return (
-              <Text key={i} bold>
-                {p.text}
-              </Text>
-            );
-          case "link":
-            return (
-              <Text key={i} underline color="blue">
-                {p.text}
-              </Text>
-            );
-          default:
-            return <Text key={i}>{p.text}</Text>;
-        }
-      })}
-    </Text>
-  );
-}
+/**
+ * markdown 渲染：marked + marked-terminal。
+ *
+ * 替换原先手写的子集解析器（markdown.ts），获得完整 GFM 支持，
+ * 重点是表格——marked-terminal 用 cli-table3 渲染对齐的表格框。
+ *
+ * 工作原理：
+ * - marked-terminal 的 Renderer 不继承 marked.Renderer，运行时靠
+ *   duck-typing 把每个块/行内 token 渲染成 ANSI 字符串
+ *   （类型补丁见同目录 markdown-terminal.d.ts）。
+ * - 整段文本 parse 成一条 ANSI 字符串，包进单个 <Text> 交给 Ink。
+ *
+ * 流式容错（模型逐 token 输出，每帧对累计全文重新 parse）：
+ * - 未闭合代码块     → marked 按缩进代码块渲染到结尾
+ * - 未闭合粗体/斜体   → 按原文文本显示
+ * - 半截表格（还没到分隔行）→ 按普通段落文本降级；分隔行一到即"拼"成表格
+ * 不会闪断、不吞字。
+ */
 
-/** 块级渲染 */
-function BlockView({ block }: { block: MdBlock }) {
-  switch (block.kind) {
-    case "code":
-      return (
-        <Box borderStyle="round" borderColor="gray" paddingX={1} marginY={1}>
-          <Box flexDirection="column">
-            {block.lang ? <Text dimColor>{block.lang}</Text> : null}
-            {block.raw.length === 0 ? (
-              <Text dimColor>(empty)</Text>
-            ) : (
-              block.raw.map((l, i) => <Text key={i}>{l === "" ? " " : l}</Text>)
-            )}
-          </Box>
-        </Box>
-      );
-    case "heading":
-      return (
-        <Text bold color="cyan">
-          {" ".repeat(block.level - 1)}
-          <Inline parts={block.inline} />
-        </Text>
-      );
-    case "list":
-      return (
-        <Box flexDirection="column">
-          {block.items.map((item, i) => (
-            <Text key={i}>
-              {block.ordered ? `  ${i + 1}. ` : "  • "}
-              <Inline parts={item} />
-            </Text>
-          ))}
-        </Box>
-      );
-    case "quote":
-      return (
-        <Text dimColor>
-          {"┃ "}
-          <Inline parts={block.inline} />
-        </Text>
-      );
-    default:
-      return (
-        <Text>
-          <Inline parts={block.inline} />
-        </Text>
-      );
-  }
-}
+const renderer = new TerminalRenderer({});
 
-/** markdown 全文渲染（流式文本直接喂入，未闭合标记按原文显示） */
+/** markdown 全文渲染（流式文本直接喂入，未闭合标记由 marked 兜底降级） */
 export function Markdown({ text }: { text: string }) {
-  const blocks = parseMarkdown(text);
-  return (
-    <Box flexDirection="column">
-      {blocks.map((b, i) => (
-        <BlockView key={i} block={b} />
-      ))}
-    </Box>
-  );
+  const out = marked.parse(text, { renderer }).trim();
+  return <Text>{out}</Text>;
 }

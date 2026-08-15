@@ -24,6 +24,8 @@
     "dotenv": "^17.4.2",
     "ink": "^7.1.1",
     "ink-text-input": "^6.0.0",
+    "marked": "^9.1.6",
+    "marked-terminal": "^6.2.0",
     "react": "^19.2.8",
     "tsx": "^4.23.12",
     "undici": "^6.28.0"
