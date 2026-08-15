@@ -36,7 +36,9 @@ export function Confirm({
     } else if (key.return) {
       onResolve(ask.options[clamp(idx, ask.options.length)]?.value ?? "");
     } else if (key.escape) {
-      onResolve(ask.options[0]?.value ?? "");
+      // Esc 恒为拒绝：优先"no"选项（Yes 已上移，不能再用第一个选项当安全默认）
+      const deny = ask.options.find((o) => o.value === "no");
+      onResolve(deny?.value ?? ask.options[0]?.value ?? "");
     }
   });
 

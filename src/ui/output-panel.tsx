@@ -7,7 +7,7 @@ const MAX_OUTPUT = 2000;
 
 /** Ctrl+O 工具输出面板：展示本轮会话全部工具/子 agent 的真实输出 */
 export function OutputPanel({ tools }: { tools: ToolCallDisplay[] }) {
-  const withOutput = tools.filter((t) => t.done);
+  const withOutput = tools.filter((t) => t.status === "done");
   return (
     <Box
       flexDirection="column"
@@ -24,7 +24,7 @@ export function OutputPanel({ tools }: { tools: ToolCallDisplay[] }) {
       ) : (
         withOutput.map((t) => (
           <Box key={t.id} flexDirection="column">
-            <Text bold color={t.done ? "green" : "yellow"}>
+            <Text bold color="green">
               ✓ {t.name}
               {t.input ? <Text dimColor> {t.input}</Text> : null}
             </Text>

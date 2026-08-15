@@ -42,12 +42,41 @@ test("渲染：工具调用块出现且标记完成", async () => {
   const ctrl = new AppController();
   const frame = renderApp(ctrl);
   ctrl.streamText("");
-  ctrl.toolStart("read_file", { file_path: "x.ts" });
+  ctrl.planTools([{ id: "t1", name: "read_file", input: { file_path: "x.ts" } }]);
+  ctrl.toolStart("t1", "read_file", { file_path: "x.ts" }); // 首个工具开始 → 整批落地展示
   await wait(30);
   assert.ok((frame.lastFrame() ?? "").includes("read_file"));
-  ctrl.toolEnd("read_file");
+  ctrl.toolEnd("t1");
   await wait(30);
   assert.ok((frame.lastFrame() ?? "").includes("read_file"));
+  frame.cleanup();
+});
+
+test("渲染：底部固定任务面板展示标题、三态与 loading，随事件推进", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.planTools([
+    { id: "a", name: "read_file", input: { file_path: "src/a.ts" } },
+    { id: "b", name: "read_file", input: { file_path: "src/b.ts" } },
+  ]);
+  await wait(30);
+  let out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("正在读取 2 个文件"), "loading 态标题");
+  assert.ok(out.includes("待读取"), "queued → 待读取");
+  assert.ok(out.includes("src/a.ts"), "子项标签（文件路径）");
+
+  ctrl.toolStart("a", "read_file", { file_path: "src/a.ts" });
+  await wait(30);
+  out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("读取中"), "running → 读取中");
+
+  ctrl.toolEnd("a");
+  ctrl.toolStart("b", "read_file", { file_path: "src/b.ts" });
+  ctrl.toolEnd("b");
+  await wait(30);
+  out = frame.lastFrame() ?? "";
+  assert.ok(!out.includes("正在读取 2 个文件"), "全部完成 → 面板消失");
+  assert.ok(!out.includes("读取中"), "面板消失不再展示状态");
   frame.cleanup();
 });
 
@@ -94,8 +123,9 @@ test("渲染：Ctrl+O 面板打开展示工具真实输出，关闭后消失", a
   const ctrl = new AppController();
   const frame = renderApp(ctrl);
   ctrl.streamText("");
-  ctrl.toolStart("read_file", { file_path: "x.ts" });
-  ctrl.toolEnd("read_file", "export const x = 1;\nline2\nline3\n");
+  ctrl.planTools([{ id: "t1", name: "read_file", input: { file_path: "x.ts" } }]);
+  ctrl.toolStart("t1", "read_file", { file_path: "x.ts" });
+  ctrl.toolEnd("t1", "export const x = 1;\nline2\nline3\n");
   await wait(30);
   // 未打开面板时不显示输出
   assert.ok(!(frame.lastFrame() ?? "").includes("line2"));

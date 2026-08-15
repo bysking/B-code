@@ -59,6 +59,8 @@ export interface ModelInput {
   messages: MessageParam[];
   /** 流式文本增量回调（UI 层逐字打印）；非流式调用方可不传 */
   onText?: (delta: string) => void;
+  /** 思考块增量回调（extended thinking）；供应商不回 thinking 时不触发 */
+  onThinking?: (delta: string) => void;
 }
 
 export interface ModelOutput {
@@ -296,15 +298,25 @@ export class AnthropicBackend implements ModelBackend {
         "[b-code] Missing ANTHROPIC_API_KEY in .env (or set OPENAI_API_KEY + OPENAI_BASE_URL for a compatible backend)",
       );
     }
+    // B_CODE_THINKING 设为正整数时开启 extended thinking（预算 token 数）。
+    // 默认不启用，避免 token 成本/行为突变；供应商本身回 thinking 时纯管道也能显示。
+    const thinkingBudget = Number(process.env.B_CODE_THINKING ?? "");
     const stream = this.client.messages.stream({
       model: input.model,
       max_tokens: 4096,
       system: input.system,
       tools: input.tools,
       messages: input.messages,
+      ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
+        ? { thinking: { type: "enabled" as const, budget_tokens: thinkingBudget } }
+        : {}),
     });
     if (input.onText) {
       stream.on("text", (text) => input.onText!(text));
+    }
+    if (input.onThinking) {
+      // SDK MessageStream 对 thinking_delta 事件 emit 这个签名：(delta, snapshot)
+      stream.on("thinking", (delta) => input.onThinking!(delta));
     }
     const reply = await stream.finalMessage();
     return { content: reply.content as Anthropic.ContentBlock[] };

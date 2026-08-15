@@ -70,3 +70,47 @@ test("摘要为空字符串 → 保持原样（宁可爆窗不丢上下文）", 
   const out = await maybeCompact(list, async () => "   ");
   assert.equal(out, list);
 });
+
+// 压缩不能拆散 tool_use/tool_result 配对：切点落在 tool_result 上时窗口前移一条
+function toolPair(i: number): { role: string; content: unknown }[] {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: `call_${i}`, name: "t", input: {} }],
+    },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: `call_${i}`, content: `out-${i}` }],
+    },
+  ];
+}
+
+test("切点落在 tool_result 上时，压缩前移窗口保住配对", async () => {
+  // 1 条 user(text) + 8 轮工具 = 17 条（奇数，裸切长度-5 会切在 user(tool_result) 上）
+  const list: { role: string; content: unknown }[] = [{ role: "user", content: "hello" }];
+  for (let i = 0; i < 8; i++) list.push(...toolPair(i));
+  assert.equal(list.length, 17);
+
+  const out = await maybeCompact(list, async () => "summary");
+
+  assert.equal(out.length, KEEP_RECENT + 1 + 1, "摘要 + 6 条（窗口前移带上 assistant）");
+  const recent = out.slice(1);
+  assert.equal(recent[0]?.role, "assistant", "保留窗口不能以 tool_result 开头");
+
+  // 窗口内每个 tool_result 的 tool_use 必须在前一条消息里
+  for (let i = 1; i < recent.length; i++) {
+    const m = recent[i]!;
+    if (m.role !== "user" || !Array.isArray(m.content)) continue;
+    for (const b of m.content as { type: string; tool_use_id: string }[]) {
+      if (b.type !== "tool_result") continue;
+      const prev = recent[i - 1]!;
+      const ids = (Array.isArray(prev.content) ? prev.content : [])
+        .filter(
+          (x): x is { type: string; id: string } =>
+            typeof x === "object" && x !== null && (x as { type?: string }).type === "tool_use",
+        )
+        .map((x) => x.id);
+      assert.ok(ids.includes(b.tool_use_id), `tool_result ${b.tool_use_id} 的 tool_use 必须在前一条消息`);
+    }
+  }
+});

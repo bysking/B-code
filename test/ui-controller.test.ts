@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AppController } from "../src/ui/controller.js";
+import { AppController, deriveTaskPanel } from "../src/ui/controller.js";
 
 test("streamText：首个 delta 开 assistant turn，后续追加，finishStream 停流", () => {
   const c = new AppController();
@@ -16,16 +16,118 @@ test("streamText：首个 delta 开 assistant turn，后续追加，finishStream
   assert.equal(c.turns[1]?.streaming, false);
 });
 
-test("toolStart/toolEnd：挂到当前 assistant turn，输入截断显示", () => {
+test("planTools→toolStart→toolEnd：首个工具开始整批落地，逐个 running→done，整批完成关流", () => {
   const c = new AppController();
-  c.toolStart("read_file", { file_path: "a".repeat(200) });
+  c.planTools([
+    { id: "a", name: "read_file", input: { file_path: "x.ts" } },
+    { id: "b", name: "grep_search", input: { pattern: "foo" } },
+  ]);
+  assert.equal(c.turns.length, 0, "planTools 只记 pending，等首个工具开始才落地（避免空 turn 干扰流式）");
+
+  c.toolStart("a", "read_file", { file_path: "a".repeat(200) });
   const t = c.turns.at(-1)!;
-  assert.equal(t.role, "assistant");
-  assert.equal(t.tools[0]?.name, "read_file");
-  assert.equal(t.tools[0]?.done, false);
+  assert.equal(t.tools.length, 2, "整批一次列出");
+  assert.deepEqual(t.tools.map((x) => x.status), ["running", "queued"]);
   assert.ok((t.tools[0]?.input?.length ?? 0) <= 80, "长输入被截断");
-  c.toolEnd("read_file");
-  assert.equal(t.tools[0]?.done, true);
+
+  c.toolEnd("a", "file content");
+  assert.equal(t.tools[0]?.status, "done");
+  assert.equal(t.tools[0]?.output, "file content");
+  assert.equal(t.streaming, false, "还有工具排队时不关流");
+
+  c.toolStart("b", "grep_search", { pattern: "foo" });
+  c.toolEnd("b");
+  assert.equal(t.tools[1]?.status, "done");
+  assert.equal(t.streaming, false, "整批完成 turn 关闭，下一轮回复新建 turn");
+});
+
+test("toolStart 兜底：无 planTools 时直接挂 running（旧会话兼容）", () => {
+  const c = new AppController();
+  c.toolStart("t1", "read_file", { file_path: "x" });
+  const t = c.turns.at(-1)!;
+  assert.equal(t.tools[0]?.id, "t1");
+  assert.equal(t.tools[0]?.status, "running");
+});
+
+test("streamThinking：无 assistant turn 时新建，有则累计到当前 turn", () => {
+  const c = new AppController();
+  c.streamThinking("第一步");
+  c.streamThinking("，第二步");
+  assert.equal(c.turns.length, 1);
+  assert.equal(c.turns[0]?.thinking, "第一步，第二步");
+  assert.equal(c.turns[0]?.text, "", "thinking 与输出文本分离");
+
+  // 模型接着输出文本 → 追加到同一个 turn
+  c.streamText("结果");
+  assert.equal(c.turns.length, 1);
+  assert.equal(c.turns[0]?.text, "结果");
+});
+
+test("deriveTaskPanel：整批同名读文件 → 动词/单位推导标题与子项标签", () => {
+  const p = deriveTaskPanel([
+    { id: "a", name: "read_file", input: { file_path: "src/a.ts" } },
+    { id: "b", name: "read_file", input: { file_path: "src/b.ts" } },
+  ]);
+  assert.equal(p?.title, "读取 2 个文件");
+  assert.equal(p?.verb, "读取");
+  assert.deepEqual(p?.items.map((i) => i.label), ["src/a.ts", "src/b.ts"]);
+  assert.ok(p?.items.every((i) => i.status === "queued"), "宣布即全部 queued（待…）");
+});
+
+test("deriveTaskPanel：混合/未知工具回退 执行 N 个任务；run_shell 取 command", () => {
+  const mixed = deriveTaskPanel([
+    { id: "a", name: "read_file", input: { file_path: "x.ts" } },
+    { id: "b", name: "run_shell", input: { command: "npm test" } },
+  ]);
+  assert.equal(mixed?.title, "执行 2 个任务");
+  assert.equal(mixed?.verb, "执行");
+  assert.equal(mixed?.items[1]?.label, "npm test");
+
+  const unknown = deriveTaskPanel([{ id: "a", name: "mcp_custom", input: { foo: 1 } }]);
+  assert.equal(unknown?.title, "执行 1 个任务");
+  assert.equal(unknown?.items[0]?.label, "mcp_custom", "无 file_path/pattern/command 退回工具名");
+
+  assert.equal(deriveTaskPanel([]), null, "空批不建面板");
+});
+
+test("planTools→toolStart→toolEnd：任务面板随事件推进，全 done 关 loading", () => {
+  const c = new AppController();
+  c.planTools([
+    { id: "a", name: "read_file", input: { file_path: "a.ts" } },
+    { id: "b", name: "read_file", input: { file_path: "b.ts" } },
+  ]);
+  assert.ok(c.task, "planTools 立即建面板");
+  assert.equal(c.task?.title, "读取 2 个文件");
+
+  c.toolStart("a", "read_file", { file_path: "a.ts" });
+  assert.equal(c.task?.items[0]?.status, "running", "首个子项 → 读取中");
+  assert.equal(c.task?.items[1]?.status, "queued");
+
+  c.toolEnd("a");
+  assert.equal(c.task?.items[0]?.status, "done");
+  assert.ok(c.task, "还有子项未完成 → 面板保持");
+
+  c.toolStart("b", "read_file", { file_path: "b.ts" });
+  c.toolEnd("b");
+  assert.equal(c.task, null, "全部完成 → 面板移除");
+});
+
+test("任务面板：pushUser / clearAll 清空", () => {
+  const c = new AppController();
+  c.planTools([{ id: "a", name: "read_file", input: { file_path: "a.ts" } }]);
+  c.toolStart("a", "read_file", { file_path: "a.ts" });
+  c.toolEnd("a");
+  assert.equal(c.task, null, "全部完成面板已移除");
+
+  c.planTools([{ id: "b", name: "grep_search", input: { pattern: "foo" } }]);
+  assert.ok(c.task);
+  c.pushUser("再来一轮");
+  assert.equal(c.task, null, "新一轮输入清空面板");
+
+  c.planTools([{ id: "c", name: "grep_search", input: { pattern: "foo" } }]);
+  assert.ok(c.task);
+  c.clearAll();
+  assert.equal(c.task, null, "/clear 清空面板");
 });
 
 test("ask/resolveAsk：promise 交付答案并清空状态", async () => {

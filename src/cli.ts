@@ -88,8 +88,9 @@ function initialMode(args: Pick<CliArgs, "plan" | "yolo" | "auto">): Mode {
 }
 
 const CONFIRM_OPTIONS = [
-  { label: "No", value: "no" },
   { label: "Yes", value: "yes" },
+  { label: "本轮会话自动审批通过", value: "allow_all" },
+  { label: "No", value: "no" },
 ];
 
 /** choice → 单步向导（模型驱动选择统一为 Wizard 的适配） */
@@ -121,11 +122,18 @@ export function groupsAsWizard(
 /** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
 async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const ctrl = new AppController();
+  // 审批"本轮会话自动审批通过"：选中后后续确认直接放行（/clear 重置）
+  let autoApprove = false;
 
   const agent = new Agent({
     mode: initialMode(args),
     print: (t) => ctrl.streamText(t),
-    askUser: async (question) => (await ctrl.ask(question, CONFIRM_OPTIONS)) === "yes",
+    askUser: async (question) => {
+      if (autoApprove) return true;
+      const choice = await ctrl.ask(question, CONFIRM_OPTIONS);
+      if (choice === "allow_all") autoApprove = true;
+      return choice === "yes" || choice === "allow_all";
+    },
     // 模型主动询问（ask_user 工具）：选择统一转 Wizard（模型驱动选择的唯一形态）、文本走 AskInput
     askChoice: (question, options) => ctrl.askWizard(question, choiceAsWizard(question, options)),
     askTextInput: (question) => ctrl.askText(question),
@@ -138,17 +146,20 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     } satisfies SpinnerLike,
     events: (ev) => {
       switch (ev.type) {
+        case "tools_planned":
+          ctrl.planTools(ev.tools);
+          break;
         case "tool_start":
-          ctrl.toolStart(ev.name, ev.input);
+          ctrl.toolStart(ev.id, ev.name, ev.input);
           break;
         case "tool_end":
-          ctrl.toolEnd(ev.name, ev.output);
+          ctrl.toolEnd(ev.id, ev.output);
           break;
         case "stream_end":
           ctrl.finishStream();
           break;
         case "thinking":
-          ctrl.setBusy(ev.text);
+          if (ev.text) ctrl.streamThinking(ev.text);
           break;
       }
     },
@@ -174,7 +185,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       recent.map((r) => ({
         role: r.role,
         text: r.text,
-        tools: r.tools.map((name, i) => ({ id: i + 1, name, input: "", done: true })),
+        tools: r.tools.map((name, i) => ({ id: `r-${i}`, name, input: "", status: "done" })),
         streaming: false,
       })),
     );
@@ -221,6 +232,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       }
       if (trimmed === "/clear") {
         agent.clearHistory();
+        autoApprove = false; // 新一轮会话重新询问审批
         await clearSessionFile();
         ctrl.clearAll();
         ctrl.pushOutput("(history cleared)");

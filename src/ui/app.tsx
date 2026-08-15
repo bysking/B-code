@@ -12,6 +12,7 @@ import { Wizard } from "./wizard.js";
 import { SlashMenu } from "./slash-menu.js";
 import { InputBox } from "./input-box.js";
 import { OutputPanel } from "./output-panel.js";
+import { TaskPanel } from "./task-panel.js";
 import { AskInput } from "./ask-input.js";
 import { buildSlash } from "./slash.js";
 
@@ -47,7 +48,9 @@ export function App({
     // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
     if (key.ctrl && _input === "c") {
       if (ctrl.askState) {
-        ctrl.resolveAsk(ctrl.askState.options[0]?.value ?? "");
+        // Ctrl+C 取消审批 = 拒绝（Yes 已在第一项，不能用 options[0]）
+        const deny = ctrl.askState.options.find((o) => o.value === "no");
+        ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? "");
         return;
       }
       if (ctrl.askWizardState) {
@@ -148,6 +151,8 @@ export function App({
       ) : null}
 
       {ctrl.outputPanel ? <OutputPanel tools={allToolOutputs(ctrl)} /> : null}
+
+      {ctrl.task ? <TaskPanel task={ctrl.task} /> : null}
 
       <InputBox
         key={inputNonce}

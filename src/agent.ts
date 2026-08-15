@@ -31,8 +31,9 @@ import { log } from "./utils/log.js";
 
 /** 结构化 UI 事件（TTY 渲染；非 TTY 不注入即不产生） */
 export type AgentEvent =
-  | { type: "tool_start"; name: string; input: unknown }
-  | { type: "tool_end"; name: string; output?: string }
+  | { type: "tools_planned"; tools: { id: string; name: string; input: unknown }[] }
+  | { type: "tool_start"; id: string; name: string; input: unknown }
+  | { type: "tool_end"; id: string; name: string; output?: string }
   | { type: "thinking"; text: string | null }
   | { type: "stream_end" };
 
@@ -242,6 +243,8 @@ export class Agent {
           this.spinner.stop();
           this.print(delta);
         },
+        // 思考块增量 → thinking 事件（UI 以灰色斜体展示）；spinner 不动
+        onThinking: (delta) => this.events?.({ type: "thinking", text: delta }),
       });
       // 模型纯工具调用（无文本）时 onText 不触发，这里兜底停表
       this.spinner.stop();
@@ -262,6 +265,12 @@ export class Agent {
         }
         break;
       }
+
+      // 一次性宣布本批工具调用（UI 先全量列表展示，再逐个跑）
+      this.events?.({
+        type: "tools_planned",
+        tools: toolUses.map((tu) => ({ id: tu.id, name: tu.name, input: tu.input })),
+      });
 
       const results: Anthropic.ToolResultBlockParam[] = [];
       for (const tu of toolUses) {
@@ -288,25 +297,25 @@ export class Agent {
           ) {
             const verdict = await this.classify(mp.name, input);
             output = verdict.allow
-              ? await this.execTool(mp, input)
+              ? await this.execTool(tu.id, mp, input)
               : `Blocked by auto-mode monitor: ${verdict.reason}`;
           } else if (permission === "confirm" && this.mode !== "bypass") {
             const key = allowlistKey(mp, input);
             if (this.allowlist.has(key)) {
-              output = await this.execTool(mp, input);
+              output = await this.execTool(tu.id, mp, input);
             } else {
               this.spinner.stop(); // 确认前停表，别转着问
               const label = mp.mode === "shell" ? String(input.command ?? "") : mp.name;
               const ok = await this.askUser(`Allow ${label}? (y/n)`);
               if (ok) {
                 this.allowlist.add(key);
-                output = await this.execTool(mp, input);
+                output = await this.execTool(tu.id, mp, input);
               } else {
                 output = `Denied: user rejected ${mp.name}.`;
               }
             }
           } else {
-            output = await this.execTool(mp, input);
+            output = await this.execTool(tu.id, mp, input);
           }
         }
 
@@ -321,11 +330,12 @@ export class Agent {
 
   /** 执行工具（spinner + 结果截断 Tier 0 + 异常兜底） */
   private async execTool(
+    id: string,
     mp: import("./registry.js").MountPoint,
     input: Record<string, any>,
   ): Promise<string> {
     this.spinner.start(`running ${mp.name}…`);
-    this.events?.({ type: "tool_start", name: mp.name, input });
+    this.events?.({ type: "tool_start", id, name: mp.name, input });
     let output: string | undefined;
     try {
       const raw = await mp.handler(input, this.ctx);
@@ -339,7 +349,7 @@ export class Agent {
       return output;
     } finally {
       // output 随事件透传给 UI（Ctrl+O 面板可回看）
-      this.events?.({ type: "tool_end", name: mp.name, output });
+      this.events?.({ type: "tool_end", id, name: mp.name, output });
       this.spinner.stop();
     }
   }

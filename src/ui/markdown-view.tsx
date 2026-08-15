@@ -1,6 +1,11 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { parseInline, parseMarkdown, type MdBlock, type MdInline } from "./markdown.js";
+import {
+  parseInline,
+  parseMarkdown,
+  type MdBlock,
+  type MdInline,
+} from "./markdown.js";
 
 /** 行内片段渲染 */
 function Inline({ parts }: { parts: MdInline[] }) {
@@ -10,7 +15,7 @@ function Inline({ parts }: { parts: MdInline[] }) {
         switch (p.t) {
           case "code":
             return (
-              <Text key={i} inverse color="cyan">
+              <Text key={i} color="yellow">
                 {p.text}
               </Text>
             );
@@ -41,19 +46,11 @@ function BlockView({ block }: { block: MdBlock }) {
       return (
         <Box borderStyle="round" borderColor="gray" paddingX={1} marginY={1}>
           <Box flexDirection="column">
-            {block.lang ? (
-              <Text dimColor>
-                {block.lang}
-              </Text>
-            ) : null}
+            {block.lang ? <Text dimColor>{block.lang}</Text> : null}
             {block.raw.length === 0 ? (
               <Text dimColor>(empty)</Text>
             ) : (
-              block.raw.map((l, i) => (
-                <Text key={i}>
-                  {l === "" ? " " : l}
-                </Text>
-              ))
+              block.raw.map((l, i) => <Text key={i}>{l === "" ? " " : l}</Text>)
             )}
           </Box>
         </Box>
