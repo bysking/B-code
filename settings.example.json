@@ -1,10 +1,12 @@
 {
   "//": "bcode 全局配置。复制为 {B_CODE_HOME}/settings.json 后按需填写；真实环境变量优先于此处（此处是缺省值）。B_CODE_CONFIG 可指向自定义路径。",
-  "provider": "openai",
+  "provider//": "openai ｜ anthropic",
   "apiKey": "your-key-here",
-  "baseUrl": "http://localhost:4321/v1",
+  "baseUrl//优先级最高": "http://localhost:4321/v1",
   "model": "gpt-4o-mini",
   "env": {
-    "NO_PROXY": "127.0.0.1,localhost"
+    "NO_PROXY": "127.0.0.1,localhost",
+    "B_CODE_LOG_LEVEL//": "info | debug | warn | error 日志级别",
+    "B_CODE_LOG_FILE//": "true 是否输出日志到文件"
   }
 }

@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { basePath } from "./utils/paths.js";
-import { log } from "./utils/log.js";
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { basePath } from './utils/paths.js';
+import { log } from './utils/log.js';
 
 /**
  * 全局配置（对齐 Claude Code 的 ~/.claude/settings.json）：
@@ -17,10 +17,10 @@ import { log } from "./utils/log.js";
  *   合并原则：真实环境变量优先，配置只是"缺省值"—— 已 export 的键不会被覆盖。
  */
 
-export const SETTINGS_FILE_ENV = "B_CODE_CONFIG";
+export const SETTINGS_FILE_ENV = 'B_CODE_CONFIG';
 
 export interface Settings {
-  provider?: "anthropic" | "openai";
+  provider?: 'anthropic' | 'openai';
   apiKey?: string;
   baseUrl?: string;
   model?: string;
@@ -28,15 +28,15 @@ export interface Settings {
 }
 
 export function settingsPath(): string {
-  return process.env[SETTINGS_FILE_ENV] ?? join(basePath(), "settings.json");
+  return process.env[SETTINGS_FILE_ENV] ?? join(basePath(), 'settings.json');
 }
 
 /** 读取配置；文件缺失/损坏 → {}（warn 不阻断启动） */
 export function loadSettings(file: string = settingsPath()): Settings {
   if (!existsSync(file)) return {};
   try {
-    const raw: unknown = JSON.parse(readFileSync(file, "utf-8"));
-    return raw && typeof raw === "object" ? (raw as Settings) : {};
+    const raw: unknown = JSON.parse(readFileSync(file, 'utf-8'));
+    return raw && typeof raw === 'object' ? (raw as Settings) : {};
   } catch (err) {
     log.warn(`settings parse failed: ${file}`, (err as Error).message);
     return {};
@@ -45,7 +45,10 @@ export function loadSettings(file: string = settingsPath()): Settings {
 
 /** 把配置应用进环境（真实 env 优先，缺省才回填） */
 export function applySettings(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env: Record<string, string | undefined> = process.env as Record<
+    string,
+    string | undefined
+  >,
   settings: Settings = loadSettings(),
 ): void {
   if (settings.env) {
@@ -53,14 +56,20 @@ export function applySettings(
       if (env[k] === undefined) env[k] = v;
     }
   }
-  if (settings.model && env.B_CODE_MODEL === undefined) env.B_CODE_MODEL = settings.model;
+  if (settings.model && env.B_CODE_MODEL === undefined)
+    env.B_CODE_MODEL = settings.model;
 
   if (settings.apiKey) {
-    if (settings.provider === "anthropic") {
-      if (env.ANTHROPIC_API_KEY === undefined) env.ANTHROPIC_API_KEY = settings.apiKey;
-    } else if (settings.provider === "openai") {
-      if (env.OPENAI_API_KEY === undefined) env.OPENAI_API_KEY = settings.apiKey;
-    } else if (env.OPENAI_API_KEY === undefined && env.ANTHROPIC_API_KEY === undefined) {
+    if (settings.provider === 'anthropic') {
+      if (env.ANTHROPIC_API_KEY === undefined)
+        env.ANTHROPIC_API_KEY = settings.apiKey;
+    } else if (settings.provider === 'openai') {
+      if (env.OPENAI_API_KEY === undefined)
+        env.OPENAI_API_KEY = settings.apiKey;
+    } else if (
+      env.OPENAI_API_KEY === undefined &&
+      env.ANTHROPIC_API_KEY === undefined
+    ) {
       // 未声明 provider：有 baseUrl 视为 OpenAI 兼容端点，否则 Anthropic
       if (settings.baseUrl) env.OPENAI_API_KEY = settings.apiKey;
       else env.ANTHROPIC_API_KEY = settings.apiKey;
@@ -68,8 +77,9 @@ export function applySettings(
   }
 
   if (settings.baseUrl) {
-    if (settings.provider === "anthropic") {
-      if (env.ANTHROPIC_BASE_URL === undefined) env.ANTHROPIC_BASE_URL = settings.baseUrl;
+    if (settings.provider === 'anthropic') {
+      if (env.ANTHROPIC_BASE_URL === undefined)
+        env.ANTHROPIC_BASE_URL = settings.baseUrl;
     } else if (env.OPENAI_BASE_URL === undefined) {
       env.OPENAI_BASE_URL = settings.baseUrl;
     }
@@ -78,7 +88,7 @@ export function applySettings(
 
 /** 启动创建默认数据目录树（对齐 Claude Code：首跑即有完整约定目录） */
 export function ensureDataDirs(base: string = basePath()): void {
-  for (const sub of ["sessions", "logs", "projects", "skills", "plans"]) {
+  for (const sub of ['sessions', 'logs', 'projects', 'skills', 'plans']) {
     try {
       mkdirSync(join(base, sub), { recursive: true });
     } catch {
