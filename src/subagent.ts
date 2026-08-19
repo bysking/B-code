@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
 import type { Registry, RuntimeContext } from "./registry.js";
+import { FileStore } from "./file-store.js";
 
 /**
  * 子 Agent（施工图 §11）：一个独立的、只读的 Agent 循环。
@@ -23,13 +24,17 @@ export async function runSubAgent(
   ctx: RuntimeContext,
   registry: Registry,
 ): Promise<string> {
+  // 子 agent 用独立 fileStore：它读的文件不污染主模型的新鲜度判断
+  // （否则主模型 file_content status_only 会误答 "unchanged"——它根本没读过）。
+  // 其余 ctx 字段浅拷贝共享（callModel/askWizard 等只读）。
+  const subCtx: RuntimeContext = { ...ctx, fileStore: new FileStore() };
   const messages: MessageParam[] = [{ role: "user", content: task }];
   // 只给只读工具（模式门控，sub-agent 无权限层）
   const tools = registry.toolsSchema().filter((t) => registry.resolve(t.name)?.mode === "read");
 
   while (true) {
-    const reply = await ctx.callModel({
-      model: ctx.model,
+    const reply = await subCtx.callModel({
+      model: subCtx.model,
       system: [{ type: "text", text: SUBAGENT_SYSTEM }],
       tools,
       messages,
@@ -51,7 +56,7 @@ export async function runSubAgent(
       const mp = registry.resolve(tu.name);
       const output =
         mp?.mode === "read"
-          ? await mp.handler((tu.input ?? {}) as Record<string, any>, ctx)
+          ? await mp.handler((tu.input ?? {}) as Record<string, any>, subCtx)
           : `Denied: the sub-agent is read-only.`;
       results.push({ type: "tool_result", tool_use_id: tu.id, content: output });
     }

@@ -2,9 +2,10 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { registerBuiltinTools } from "../src/tools.js";
 import { Registry, type RuntimeContext } from "../src/registry.js";
+import { FileStore } from "../src/file-store.js";
 
 /** 经注册表执行内置工具（P5：测试走真实解析路径，而非旧 switch） */
 const registry = new Registry();
@@ -181,4 +182,99 @@ test("run_shell 执行并捕获输出", async () => {
 test("未知工具 → 明确的 Unknown tool", async () => {
   const out = await run("does_not_exist", {});
   assert.ok(out.includes("Unknown tool"));
+});
+
+// ── 文件快照缓存（read_file / write / edit / file_content）─────────────────
+const handler = (name: string) => {
+  const mp = registry.resolve(name);
+  if (!mp) throw new Error(`missing tool ${name}`);
+  return (input: unknown, rctx: RuntimeContext) => mp.handler(input as Record<string, any>, rctx);
+};
+const fileCtx = () => ({ ...ctx, fileStore: new FileStore() }) as RuntimeContext;
+
+test("read_file 首次读：返回全文 + 指针行 + store 快照", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "a.txt");
+  const out = await handler("read_file")({ file_path: path }, rctx);
+  assert.ok(out.includes("value = 0"), "首次仍返回全文");
+  assert.ok(out.includes("📄"), "结果含指针行");
+  assert.ok(out.includes("hash "), "指针含 hash");
+  assert.ok(rctx.fileStore!.get(resolve(path)), "store 有快照");
+});
+
+test("read_file 非首次且未变：返回指针而非全文（防膨胀）", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "a.txt");
+  const first = await handler("read_file")({ file_path: path }, rctx);
+  assert.ok(first.includes("value = 0"), "首次全文");
+  const second = await handler("read_file")({ file_path: path }, rctx);
+  assert.ok(second.includes("already read, unchanged"), "非首次返回指针");
+  assert.ok(!second.includes("value = 0"), "不再返回全文");
+});
+
+test("read_file 非首次但磁盘已变：返回新全文（旧快照标 dirty）", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "a.txt");
+  await handler("read_file")({ file_path: path }, rctx);
+  await writeFile(path, "changed externally\n", "utf-8");
+  const out = await handler("read_file")({ file_path: path }, rctx);
+  assert.ok(out.includes("changed externally"), "返回新内容");
+  assert.equal(rctx.fileStore!.get(resolve(path))?.dirty, false, "重建后标 fresh");
+});
+
+test("write_file 后 store 更新为已知新内容；file_content 取回", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "w.txt");
+  await writeFile(path, "old line\n", "utf-8");
+  await handler("read_file")({ file_path: path }, rctx);
+  await handler("write_file")({ file_path: path, content: "new v1\nnew v2" }, rctx);
+  assert.equal(rctx.fileStore!.get(resolve(path))?.content, "new v1\nnew v2", "store 更新为已知新内容");
+  const out = await handler("file_content")({ file_path: path }, rctx);
+  assert.ok(out.includes("new v2"), "file_content 返回新内容");
+  assert.ok(out.includes("unchanged since read"), "stat 相等标记未变");
+});
+
+test("edit_file 后 store 更新为编辑结果", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "e.txt");
+  await writeFile(path, "alpha = 1\n", "utf-8");
+  await handler("read_file")({ file_path: path }, rctx);
+  await handler("edit_file")({ file_path: path, old_string: "alpha = 1", new_string: "alpha = 2" }, rctx);
+  assert.ok(rctx.fileStore!.get(resolve(path))?.content.includes("alpha = 2"), "store 为编辑后内容");
+});
+
+test("file_content status_only 三态：未读 / 未变 / 已变", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "c.txt");
+  await writeFile(path, "c line\n", "utf-8");
+  const notRead = await handler("file_content")({ file_path: path, status_only: true }, rctx);
+  assert.ok(notRead.includes("not read this session"), "未读态");
+  await handler("read_file")({ file_path: path }, rctx);
+  const unchanged = await handler("file_content")({ file_path: path, status_only: true }, rctx);
+  assert.ok(unchanged.includes("unchanged"), "未变态");
+  await writeFile(path, "externally changed\n", "utf-8"); // 外部改，不经工具
+  const changed = await handler("file_content")({ file_path: path, status_only: true }, rctx);
+  assert.ok(changed.includes("changed since read"), "已变态");
+  assert.equal(rctx.fileStore!.get(resolve(path))?.dirty, true, "检测到变化标 dirty");
+});
+
+test("file_content 未命中回落磁盘重建快照 + offset/limit 切片", async () => {
+  const rctx = fileCtx();
+  const path = join(dir, "fc.txt");
+  await writeFile(path, "line one\nline two\nline three\n", "utf-8");
+  // 未命中（未 read_file）→ 回落磁盘
+  const out = await handler("file_content")({ file_path: path }, rctx);
+  assert.ok(out.includes("line two"), "回落磁盘返回内容");
+  assert.ok(out.includes("refreshed"), "回落重建标 refreshed");
+  assert.ok(rctx.fileStore!.get(resolve(path)), "回落重建快照");
+  // 切片：offset=0 limit=1 只回第一行
+  const sliced = await handler("file_content")({ file_path: path, offset: 0, limit: 1 }, rctx);
+  assert.ok(sliced.includes("line one"), "切片含第一行");
+  assert.ok(!sliced.includes("line two"), "切片不含第二行");
+});
+
+test("file_content 不存在文件 → Error 前缀", async () => {
+  const rctx = fileCtx();
+  const out = await handler("file_content")({ file_path: join(dir, "nope.txt") }, rctx);
+  assert.ok(out.startsWith("Error"));
 });

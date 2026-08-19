@@ -67,6 +67,7 @@ const TASK_VERB: Record<string, string> = {
   edit_file: "编辑",
   list_files: "列出",
   grep_search: "搜索",
+  file_content: "读取",
   run_shell: "执行",
 };
 const TASK_UNIT: Record<string, string> = {
@@ -75,6 +76,7 @@ const TASK_UNIT: Record<string, string> = {
   edit_file: "文件",
   list_files: "文件",
   grep_search: "文件",
+  file_content: "文件",
   run_shell: "命令",
 };
 

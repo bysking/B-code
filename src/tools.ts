@@ -1,8 +1,9 @@
-import { readFile, writeFile, readdir } from "node:fs/promises";
+import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { exec } from "node:child_process";
 import { statSync } from "node:fs";
-import type { Registry } from "./registry.js";
+import type { Registry, RuntimeContext } from "./registry.js";
+import { cacheable, contentHash, filePointer, type FileStore } from "./file-store.js";
 
 /**
  * 内置工具加载器（builtin-loader）：把 6 个核心工具注册进统一注册表。
@@ -24,17 +25,62 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`);
 }
 
-async function readFileTool(input: { file_path: string }): Promise<string> {
+/**
+ * 文件快照写 store（read 首次 / write·edit 成功共用）：
+ * path 用 resolve() 规范化作 key；hash 对原始 buffer 算。
+ */
+function putSnapshot(
+  store: FileStore | undefined,
+  path: string,
+  content: string,
+  mtimeMs: number,
+  size: number,
+  hash: string,
+): void {
+  if (!store || !cacheable(size)) return;
+  store.updateContent(path, content, mtimeMs, size, hash);
+}
+
+async function readFileTool(
+  input: { file_path: string },
+  ctx: RuntimeContext,
+): Promise<string> {
+  const path = resolve(input.file_path);
   try {
-    return await readFile(resolve(input.file_path), "utf-8");
+    const buf = await readFile(path);
+    const st = await stat(path);
+    const hash = contentHash(buf);
+    const content = buf.toString("utf-8");
+    const store = ctx.fileStore;
+    const snap = store?.get(path);
+
+    if (snap && snap.mtimeMs === st.mtimeMs && snap.size === st.size) {
+      // 非首次且磁盘未变：返回指针而非全文（结构性防膨胀，不靠模型自觉）
+      return `${filePointer(input.file_path, snap)}\n→ already read, unchanged (hash ${hash}); use file_content to view the content`;
+    }
+    if (store) {
+      if (snap && (snap.mtimeMs !== st.mtimeMs || snap.size !== st.size)) {
+        store.markDirty(path); // 磁盘变了：旧快照过期
+      }
+      putSnapshot(store, path, content, st.mtimeMs, st.size, hash);
+    }
+    // 首次 / 内容已变：返回全文 + 指针行（store 存完整内容供 file_content 取回）
+    return content + filePointer(input.file_path, { mtimeMs: st.mtimeMs, size: st.size, hash, content, dirty: false });
   } catch (err) {
     return `Error reading ${input.file_path}: ${(err as Error).message}`;
   }
 }
 
-async function writeFileTool(input: { file_path: string; content: string }): Promise<string> {
+async function writeFileTool(
+  input: { file_path: string; content: string },
+  ctx: RuntimeContext,
+): Promise<string> {
+  const path = resolve(input.file_path);
   try {
-    await writeFile(resolve(input.file_path), input.content, "utf-8");
+    await writeFile(path, input.content, "utf-8");
+    // 工具已知新内容 → 直接更新 store（标 fresh），编辑后模型仍可廉价取回
+    const st = await stat(path);
+    putSnapshot(ctx.fileStore, path, input.content, st.mtimeMs, st.size, contentHash(Buffer.from(input.content)));
     return `Successfully wrote ${input.file_path}`;
   } catch (err) {
     return `Error writing ${input.file_path}: ${(err as Error).message}`;
@@ -56,13 +102,17 @@ function detectEol(content: string): string {
  * edit_file 陷阱：old_string 必须在文件中唯一出现，否则改错位置。
  * 利用 split/join 而非 String.replace —— replace 会处理 $1、$& 等特殊模式。
  */
-async function editFileTool(input: {
-  file_path: string;
-  old_string: string;
-  new_string: string;
-}): Promise<string> {
+async function editFileTool(
+  input: {
+    file_path: string;
+    old_string: string;
+    new_string: string;
+  },
+  ctx: RuntimeContext,
+): Promise<string> {
+  const path = resolve(input.file_path);
   try {
-    const content = await readFile(resolve(input.file_path), "utf-8");
+    const content = await readFile(path, "utf-8");
     if (!content.includes(input.old_string)) {
       return `Error: old_string not found in ${input.file_path}`;
     }
@@ -76,7 +126,10 @@ async function editFileTool(input: {
       ? input.new_string.replace(/(?<!\r)\n/g, "\r\n")
       : input.new_string;
     const updated = content.split(input.old_string).join(newString);
-    await writeFile(resolve(input.file_path), updated, "utf-8");
+    await writeFile(path, updated, "utf-8");
+    // 工具已知最终内容 → 直接更新 store（标 fresh）
+    const st = await stat(path);
+    putSnapshot(ctx.fileStore, path, updated, st.mtimeMs, st.size, contentHash(Buffer.from(updated)));
     return `Successfully edited ${input.file_path}`;
   } catch (err) {
     return `Error editing ${input.file_path}: ${(err as Error).message}`;
@@ -154,6 +207,65 @@ async function grepSearchTool(input: { pattern: string; path?: string }): Promis
   return hits.length === 0 ? "(no matches)" : hits.join("\n");
 }
 
+/**
+ * 已读文件按需取回 / 状态探针（根治重读循环的关键）：
+ *   status_only → 仅状态行，零内容；默认 → 头行 + 全文（或 offset/limit 行窗口）。
+ *   store 命中且磁盘未变（stat 相等）→ 返回缓存，零磁盘 IO；
+ *   未命中 / 已变（resume 后 store 空等）→ 回落磁盘重读重建快照。
+ */
+async function fileContentTool(
+  input: {
+    file_path: string;
+    status_only?: boolean;
+    offset?: number;
+    limit?: number;
+  },
+  ctx: RuntimeContext,
+): Promise<string> {
+  const path = resolve(input.file_path);
+  const store = ctx.fileStore;
+  try {
+    const st = await stat(path);
+    const snap = store?.get(path);
+    const unchanged = Boolean(snap && snap.mtimeMs === st.mtimeMs && snap.size === st.size);
+    const statusOnly = Boolean(input.status_only);
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const limit = Math.max(0, Math.floor(input.limit ?? 0));
+
+    if (statusOnly) {
+      if (unchanged) return `unchanged (hash ${snap!.hash})`;
+      if (snap) {
+        store?.markDirty(path);
+        return `changed since read (old hash ${snap.hash}, new size ${st.size}); use file_content without status_only to get the new content`;
+      }
+      return `not read this session; use read_file or file_content to load it`;
+    }
+
+    let content: string;
+    let hash: string;
+    if (unchanged) {
+      content = snap!.content;
+      hash = snap!.hash;
+    } else {
+      if (snap) store?.markDirty(path);
+      const buf = await readFile(path);
+      hash = contentHash(buf);
+      content = buf.toString("utf-8");
+      putSnapshot(store, path, content, st.mtimeMs, st.size, hash);
+    }
+
+    let body = content;
+    const totalLines = content.split("\n").length;
+    if (limit > 0) {
+      body = content.split("\n").slice(offset, offset + limit).join("\n");
+    }
+    const state = unchanged ? "unchanged since read" : "refreshed";
+    return `📄 ${input.file_path} (${totalLines} 行, hash ${hash}, ${state})\n${body}`;
+  } catch (err) {
+    return `Error reading ${input.file_path}: ${(err as Error).message}`;
+  }
+}
+
 function runShellTool(input: { command: string }): Promise<string> {
   return new Promise((resolvePromise) => {
     exec(input.command, { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -179,7 +291,7 @@ export function registerBuiltinTools(registry: Registry): void {
     },
     mode: "read",
     kind: "builtin",
-    handler: (input) => readFileTool(input as { file_path: string }),
+    handler: (input, ctx) => readFileTool(input as { file_path: string }, ctx),
   });
 
   registry.register({
@@ -195,7 +307,7 @@ export function registerBuiltinTools(registry: Registry): void {
     },
     mode: "write",
     kind: "builtin",
-    handler: (input) => writeFileTool(input as { file_path: string; content: string }),
+    handler: (input, ctx) => writeFileTool(input as { file_path: string; content: string }, ctx),
   });
 
   registry.register({
@@ -212,8 +324,8 @@ export function registerBuiltinTools(registry: Registry): void {
     },
     mode: "write",
     kind: "builtin",
-    handler: (input) =>
-      editFileTool(input as { file_path: string; old_string: string; new_string: string }),
+    handler: (input, ctx) =>
+      editFileTool(input as { file_path: string; old_string: string; new_string: string }, ctx),
   });
 
   registry.register({
@@ -246,6 +358,32 @@ export function registerBuiltinTools(registry: Registry): void {
     mode: "read",
     kind: "builtin",
     handler: (input) => grepSearchTool(input as { pattern: string; path?: string }),
+  });
+
+  registry.register({
+    name: "file_content",
+    description:
+      "Retrieve the content of an already-read file (from session cache, or re-read from disk if changed/missing from cache). " +
+      "status_only=true just reports whether the file changed since last read — use it as a cheap freshness probe. " +
+      "offset/limit read a 0-based line window (limit 0 = whole file) — use after read_file truncated a large file. " +
+      "Prefer file_content over read_file to re-view a file you already read.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: { type: "string", description: "Path to the file" },
+        status_only: { type: "boolean", description: "Only report change status, skip content" },
+        offset: { type: "number", description: "0-based start line for a window read" },
+        limit: { type: "number", description: "Number of lines to read (0 = whole file)" },
+      },
+      required: ["file_path"],
+    },
+    mode: "read",
+    kind: "builtin",
+    handler: (input, ctx) =>
+      fileContentTool(
+        input as { file_path: string; status_only?: boolean; offset?: number; limit?: number },
+        ctx,
+      ),
   });
 
   registry.register({

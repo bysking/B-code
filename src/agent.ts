@@ -10,10 +10,11 @@ import {
 import { registerBuiltinTools } from "./tools.js";
 import { registerPlanTools } from "./plan.js";
 import { runSubAgent } from "./subagent.js";
+import { FileStore } from "./file-store.js";
 import { loadMcpServers } from "./mcp.js";
 import { Registry, type RuntimeContext, type UserOption } from "./registry.js";
 import { buildSystemPrompt, type SystemBlock } from "./prompt.js";
-import { truncateResult, maybeCompact } from "./context.js";
+import { truncateResult, maybeCompact, renderCompaction, buildFileIndex, contextTokenBudget } from "./context.js";
 import { classifyAction, evaluateGoal, renderTranscript } from "./autonomy.js";
 import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
 import { recallMemories, registerMemoryTool } from "./memory.js";
@@ -135,6 +136,8 @@ export class Agent {
       askUserText: opts.askTextInput ?? (async () => null),
       askGrouped: opts.askGroupedInput ?? (async (_q, groups) => `${groups[0]?.title ?? ""} / ${groups[0]?.options[0]?.label ?? ""}`),
       askWizard: opts.askWizardInput ?? (async () => "__cancel__"),
+      // 会话级文件快照缓存：子 agent 用独立 store（subagent.ts 克隆 ctx 时覆盖）
+      fileStore: new FileStore(),
     };
     registerBuiltinTools(this.registry);
     registerAskUserTool(this.registry);
@@ -258,16 +261,23 @@ export class Agent {
         break;
       }
 
-      // 上下文管理：消息超阈值先 LLM 摘要压缩（内部一次独立模型调用）
-      this.messages = await this.compactIfNeeded();
+      // 调用前估算 input token（实时值），结束后由真实 usage 覆盖
+      const tools = this.registry.toolsSchema(this.mode === "plan");
+      let inputTokens = estimateInputTokens(system, tools, this.messages);
+
+      // 上下文管理：估算输入（system+tools+messages）超 token 预算才 LLM 摘要压缩。
+      // 以 token 而非条数为触发——1M 窗口下条数无意义（一次大 read 就几十万 token）。
+      // 条数触发保留在 maybeCompact 内部作 force=false 兜底。
+      if (inputTokens > contextTokenBudget()) {
+        this.messages = await this.compactIfNeeded();
+        inputTokens = estimateInputTokens(system, tools, this.messages); // 压缩后重估
+      }
 
       // 模型思考期：转起来并贯穿整个调用（含流式输出阶段），调用结束才停——
       // 状态行借此实时展示耗时与 token（参考 Claude Code 的 ✽ Channelling…）
       this.spinner.start("thinking…");
       this.events?.({ type: "busy_think" });
-      // 调用前估算 input token（实时值），结束后由真实 usage 覆盖
-      const tools = this.registry.toolsSchema(this.mode === "plan");
-      this.events?.({ type: "busy_tokens", input_tokens: estimateInputTokens(system, tools, this.messages) });
+      this.events?.({ type: "busy_tokens", input_tokens: inputTokens });
       const reply = await this.call({
         model: this.model,
         system,
@@ -392,10 +402,15 @@ export class Agent {
     }
   }
 
-  /** 上下文压缩（Tier 4 摘要）：超阈值把旧消息摘要替换，保留最近 KEEP_RECENT 条 */
+  /** 上下文压缩（Tier 4 摘要）：超阈值把旧消息摘要替换，保留最近 KEEP_RECENT 条。
+   * 由调用方按 token 预算决定是否压缩，这里 force=true 跳过条数兜底。 */
   private async compactIfNeeded(): Promise<MessageParam[]> {
-    return maybeCompact(this.messages, async (older) => {
-      const transcript = renderTranscript(older);
+    return maybeCompact(
+      this.messages,
+      async (older) => {
+      // 压缩专用渲染：read_file 全文裁剪为指针行（文件字节不进摘要输入，
+      // 不靠 renderTranscript 的占位符丢弃），再喂 LLM 摘要
+      const transcript = renderCompaction(older, this.ctx.fileStore);
       const out = await this.call({
         model: this.model,
         system: [
@@ -411,8 +426,12 @@ export class Agent {
         .filter((b): b is Anthropic.TextBlockParam => b.type === "text")
         .map((b) => b.text)
         .join("");
+      // 确定性追加已读文件索引：摘要模型自觉之外的双保险，模型据此知道可用的已读资源
+      const index = this.ctx.fileStore ? buildFileIndex(this.ctx.fileStore) : "";
       log.info(`(compacted ${older.length} messages into a summary)`);
-      return summary;
-    });
+      return summary + index;
+      },
+      true, // force：调用方已按 token 预算决定，跳过条数兜底
+    );
   }
 }

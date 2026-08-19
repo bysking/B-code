@@ -229,7 +229,7 @@ function makeScripted(
   script: Array<{ tools: Array<{ name: string; input: Record<string, any> }> } | { text: string }>,
 ) {
   let step = 0;
-  return async (input: ModelInput): Promise<ModelOutput> => {
+  return async (_input: ModelInput): Promise<ModelOutput> => {
     const s = script[step] ?? { text: "done" };
     step++;
     if ("text" in s) return { content: [{ type: "text", text: s.text }] };

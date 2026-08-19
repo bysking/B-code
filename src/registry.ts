@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { ModelInput, ModelOutput } from "./backend.js";
 import type { Mode } from "./permissions.js";
+import type { FileStore } from "./file-store.js";
 
 /**
  * 统一注册表（施工图 §2.4.3 —— 架构可扩展性的核心）
@@ -36,6 +37,8 @@ export interface RuntimeContext {
     steps: { title: string; question: string; options: UserOption[] }[],
     multi?: boolean,
   ): Promise<string>;
+  /** 会话级文件快照缓存（read_file/file_content/write/edit 读写）；测试可缺省 */
+  fileStore?: FileStore;
 }
 
 export interface MountPoint {

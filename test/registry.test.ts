@@ -17,13 +17,14 @@ test("register/resolve/list 基本行为", () => {
   assert.equal(r.list().length, 2);
 });
 
-test("内置工具经注册表可见齐备（6 个）", () => {
+test("内置工具经注册表可见齐备（7 个）", () => {
   const r = new Registry();
   registerBuiltinTools(r);
-  assert.equal(r.list().length, 6);
+  assert.equal(r.list().length, 7);
   assert.equal(r.resolve("read_file")?.mode, "read");
   assert.equal(r.resolve("run_shell")?.mode, "shell");
   assert.equal(r.resolve("write_file")?.mode, "write");
+  assert.equal(r.resolve("file_content")?.mode, "read");
 });
 
 test("toolsSchema：deferred 默认排除，includeDeferred 放开", () => {
