@@ -53,3 +53,26 @@ export function resolveMcpConfigs(cwd: string = process.cwd()): McpConfig {
   }
   return merged;
 }
+
+/**
+ * /mcp 展示文本：已配置 server + 连接状态 + 工具数。
+ * 连接判定由调用方注入：toolCount 返回该 server 在 registry 中已挂载的工具数（未连接返回 null）。
+ * 纯函数（不依赖 registry），供 cli 的 TTY / 非 TTY 两条路径共用。
+ */
+export function formatMcpList(
+  configs: McpConfig,
+  toolCount: (serverName: string) => number | null,
+): string {
+  const names = Object.keys(configs);
+  if (names.length === 0) return "(no MCP servers configured)";
+  return names
+    .map((name) => {
+      const cfg = configs[name]!;
+      const cmd = [cfg.command, ...(cfg.args ?? [])].join(" ");
+      const count = toolCount(name);
+      if (count === null) return `✗ ${name} — ${cmd} — 未连接`;
+      const mode = cfg.mode === "read" ? " (read)" : "";
+      return `✓ ${name} — ${cmd} — ${count} 工具${mode}`;
+    })
+    .join("\n");
+}

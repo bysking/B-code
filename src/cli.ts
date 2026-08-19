@@ -1,9 +1,11 @@
 import * as readline from "node:readline";
 import { Agent } from "./agent.js";
+import type { Registry } from "./registry.js";
 import { clearSessionFile, loadSession, saveSession } from "./session.js";
 import { resolveSkill, discoverSkills } from "./skills.js";
 import { saveMemory } from "./memory.js";
 import { closeAllMcpConnections } from "./mcp.js";
+import { formatMcpList, resolveMcpConfigs } from "./mcp-config.js";
 import { AppController } from "./ui/controller.js";
 import type { WizardStep } from "./ui/controller.js";
 import { mountTtyApp } from "./ui/render.js";
@@ -117,6 +119,14 @@ export function groupsAsWizard(
     question,
     options: g.options.map((o) => ({ label: o.label, value: o.value })),
   }));
+}
+
+/** /mcp：某 MCP server 在 registry 中已挂载的工具数（0 = 启动时连接失败，fail-open） */
+function countMcpTools(registry: Registry, serverName: string): number | null {
+  const n = registry
+    .list()
+    .filter((mp) => mp.name.startsWith(`mcp__${serverName}__`)).length;
+  return n > 0 ? n : null;
 }
 
 /** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
@@ -251,6 +261,12 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         ctrl.pushOutput(skills ? `Available skills:\n${skills}` : "(no skills)");
         return;
       }
+      if (trimmed === "/mcp") {
+        ctrl.pushOutput(
+          formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)),
+        );
+        return;
+      }
       if (trimmed.startsWith("/remember ")) {
         const fact = trimmed.slice("/remember ".length).trim();
         const name =
@@ -380,6 +396,13 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
           .map((s) => `/${s.name}: ${s.description}`)
           .join("\n");
         process.stdout.write(skills ? `Available skills:\n${skills}\n` : "(no skills)\n");
+        created.prompt();
+        return;
+      }
+      if (input === "/mcp") {
+        process.stdout.write(
+          `${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`,
+        );
         created.prompt();
         return;
       }

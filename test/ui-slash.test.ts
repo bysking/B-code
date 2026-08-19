@@ -37,6 +37,10 @@ test("clampIndex / defaultPick：边界安全", () => {
   assert.equal(defaultPick([]), null);
 });
 
+test("BUILTIN_SLASH_ITEMS 含 /mcp（与 cli 分发一致）", () => {
+  assert.ok(BUILTIN_SLASH_ITEMS.some((i) => i.name === "mcp"));
+});
+
 test("buildSlash：Tab 补全写回输入框文本（恒带 / 前缀、尾空格续参、幂等）", () => {
   assert.equal(buildSlash("/co", "commit"), "/commit ");
   assert.equal(buildSlash("co", "commit"), "/commit ");

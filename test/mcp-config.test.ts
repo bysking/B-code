@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BASE_PATH_ENV } from "../src/utils/paths.js";
-import { MCP_CONFIG_ENV, mcpConfigPaths, resolveMcpConfigs } from "../src/mcp-config.js";
+import {
+  MCP_CONFIG_ENV,
+  formatMcpList,
+  mcpConfigPaths,
+  resolveMcpConfigs,
+} from "../src/mcp-config.js";
+import type { McpConfig } from "../src/mcp-config.js";
 
 let home: string;
 let proj: string;
@@ -72,4 +78,22 @@ test("坏配置文件跳过，返回已有合并结果", async () => {
   await writeFile(join(dataHome, "mcp.json"), "{ this is not json");
   const merged = resolveMcpConfigs(proj);
   assert.ok(merged, "不抛异常");
+});
+
+// ── /mcp 展示格式化 ──────────────────────────────────────────
+test("formatMcpList：连接/未连接 + 命令与工具数", () => {
+  const configs: McpConfig = {
+    fs: { command: "node", args: ["server.js"] },
+    docs: { command: "npx" },
+  };
+  const count = (name: string) => (name === "fs" ? 3 : null);
+  const out = formatMcpList(configs, count);
+  assert.match(out, /✓ fs — node server\.js — 3 工具/);
+  assert.match(out, /✗ docs — npx — 未连接/);
+});
+
+test("formatMcpList：read 模式标注；空配置给提示", () => {
+  const configs: McpConfig = { docs: { command: "npx", args: ["-y", "@x/y"], mode: "read" } };
+  assert.match(formatMcpList(configs, () => 5), /✓ docs — npx -y @x\/y — 5 工具 \(read\)/);
+  assert.equal(formatMcpList({}, () => null), "(no MCP servers configured)");
 });

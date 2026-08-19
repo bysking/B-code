@@ -11,6 +11,7 @@ export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
   { name: "yolo", description: "切换 bypass 模式" },
   { name: "default", description: "切换回默认模式" },
   { name: "skills", description: "列出可用技能" },
+  { name: "mcp", description: "列出已配置的 MCP server" },
   { name: "exit", description: "退出 b-code" },
 ];
 
