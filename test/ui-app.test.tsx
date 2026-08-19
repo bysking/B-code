@@ -109,8 +109,9 @@ test("渲染：模型调用完成后显示真实用量元信息行", async () =>
   const frame = renderApp(ctrl);
   ctrl.pushUser("hi");
   ctrl.streamText("done");
-  ctrl.finishStream();
+  // 生产顺序：usage 事件先于 stream_end（agent.ts），用量行须在 finishStream 前回填
   ctrl.setTurnUsage({ input_tokens: 1000, output_tokens: 200 }, 3400);
+  ctrl.finishStream();
   await wait(30);
   const out = frame.lastFrame() ?? "";
   assert.ok(out.includes("(⏱ 3s · ↓ 1k · ↑ 200 tokens)"), "真实用量行（耗时 3s，整千去 .0）");

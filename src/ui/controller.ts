@@ -259,7 +259,14 @@ export class AppController {
   }
 
   toolStart(id: string, name: string, input: unknown) {
-    const turn = this.activeAssistant() ?? this.annotationTurn();
+    // 已关闭的 turn（不流式且工具全 done）不再承接新工具批：后续模型调用（纯工具批）会
+    // 挂到上一轮已提交的 turn 上，污染已进 <Static> 的历史（Static 对已渲染项不可变）。
+    // 此处改走 annotationTurn() 新建，保证每条 turn 只承载一轮模型调用的输出。
+    const active = this.activeAssistant();
+    const turn =
+      active && !active.streaming && active.tools.every((t) => t.status === "done")
+        ? this.annotationTurn()
+        : (active ?? this.annotationTurn());
     // 首个工具开始：把整批 queued 一次性挂上（列表全量展示，再逐个转 running/done）
     if (this.pendingTools && this.pendingTools.length > 0) {
       for (const it of this.pendingTools) {

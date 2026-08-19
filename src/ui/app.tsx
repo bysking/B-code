@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Static, Text, useInput } from "ink";
 import type { AppController, SlashItem, ToolCallDisplay } from "./controller.js";
 
 /** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
@@ -114,16 +114,17 @@ export function App({
   return (
     <Box flexDirection="column">
       <Box flexDirection="column" flexGrow={1}>
-        {initialOutput?.map((l, i) => (
-          <Text key={i} dimColor>
-            {l}
-          </Text>
-        ))}
-        {ctrl.output.map((l, i) => (
-          <Text key={`o${i}`} dimColor>
-            {l}
-          </Text>
-        ))}
+        {/* 固定输出行走 <Static>：只追加不重渲染，避免 (resumed…)/(done) 及 /skills、/mcp
+            等大段输出撑大 live 区触发 Ink 的 overflow 整屏清屏（连 scrollback 一起清）。 */}
+        <Static
+          items={[...(initialOutput ?? []).map((l, i) => ({ k: `i${i}`, text: l })), ...ctrl.output.map((l, i) => ({ k: `o${i}`, text: l }))]}
+        >
+          {({ k, text }) => (
+            <Text key={k} dimColor>
+              {text}
+            </Text>
+          )}
+        </Static>
         <MessageList
           turns={ctrl.turns}
           busy={ctrl.busy}

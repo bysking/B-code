@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text } from "ink";
+import { Box, Static, Text } from "ink";
 import type { ToolCallDisplay, Turn } from "./controller.js";
 import { TOOL_SYMBOL, TOOL_COLOR } from "./controller.js";
 import { Markdown } from "./markdown-view.js";
@@ -97,7 +97,29 @@ function TurnView({ turn }: { turn: Turn }) {
   );
 }
 
-/** 消息流列表 + 底部状态行（耗时/token/相位实时跳动） */
+/**
+ * 一个 turn 是否已"落定"（不会再变化），可安全提交进 <Static>：
+ * - user turn 从 push 起就是定稿；
+ * - assistant turn 需不再流式、工具全部完成；且若它仍是最后一条，还要等 busy 结束或
+ *   usage 已回填——因为 usage 事件在 stream_end 之前到达，最后一条 turn 可能晚一步拿到用量。
+ * 已提交的 turn 会被 Ink 永久打印、不再重渲染——提交条件保守，宁可晚提交。
+ */
+function isCommittable(turn: Turn, isLast: boolean, busy: string | null): boolean {
+  if (turn.role === "user") return true;
+  if (turn.streaming) return false;
+  if (turn.tools.some((t) => t.status !== "done")) return false;
+  // 最后一条已完成的 assistant turn 在模型调用进行中仍可能回填 usage → 暂留 live
+  if (isLast && turn.usage === undefined && busy !== null) return false;
+  return true;
+}
+
+/**
+ * 消息流列表 + 底部状态行（耗时/token/相位实时跳动）。
+ *
+ * 滚动稳定性：已落定的历史 turn 走 <Static>（只打印一次、只追加新行），live 区只保留
+ * 当前流式 turn + busy 行。这样 live 输出高度不会随会话增长超过终端行数，Ink 的
+ * overflow 整屏清屏（ESC[3J 连 scrollback 一起清）不会触发——向上滚动不再被清空跳顶。
+ */
 export function MessageList({
   turns,
   busy,
@@ -111,21 +133,32 @@ export function MessageList({
   busyThinking: boolean;
   busyInputTokens: number;
 }) {
+  // 从第一个不可提交的 turn 处切开：之前全部进 Static（只追加），之后（流式/未完成）留在 live。
+  // 用 findIndex 而非 filter，保证 committed/live 合起来仍严格保持 turns 的顺序。
+  const splitAt = turns.findIndex((t, i) => !isCommittable(t, i === turns.length - 1, busy));
+  const committed = splitAt === -1 ? turns : turns.slice(0, splitAt);
+  const live = splitAt === -1 ? [] : turns.slice(splitAt);
+
   return (
     <Box flexDirection="column" flexGrow={1}>
-      {turns.map((t) => (
-        <TurnView key={t.id} turn={t} />
-      ))}
-      {busy && busySince !== null ? (
-        <Box marginTop={1}>
-          <BusyLine
-            text={busy}
-            since={busySince}
-            thinking={busyThinking}
-            inputTokens={busyInputTokens}
-          />
-        </Box>
-      ) : null}
+      <Static items={committed}>
+        {(turn) => <TurnView key={turn.id} turn={turn} />}
+      </Static>
+      <Box flexDirection="column">
+        {live.map((t) => (
+          <TurnView key={t.id} turn={t} />
+        ))}
+        {busy && busySince !== null ? (
+          <Box marginTop={1}>
+            <BusyLine
+              text={busy}
+              since={busySince}
+              thinking={busyThinking}
+              inputTokens={busyInputTokens}
+            />
+          </Box>
+        ) : null}
+      </Box>
     </Box>
   );
 }
