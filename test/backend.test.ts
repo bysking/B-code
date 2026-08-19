@@ -9,6 +9,8 @@ import {
   callModel,
   estimateTokens,
   usageFromOpenAI,
+  withToolCacheBreakpoint,
+  withMessageCacheBreakpoint,
 } from "../src/backend.js";
 
 // 集成冒烟：本地起一个 OpenAI 兼容 mock 服务，env 指向它后 callModel 的真实 HTTP 链路。
@@ -286,6 +288,49 @@ test("estimateTokens：CJK 计 1、ASCII 约 len/4、空串为 0", () => {
   assert.equal(estimateTokens("汉字测试"), 4);
   assert.equal(estimateTokens("hello world"), Math.ceil(11 / 4));
   assert.ok(estimateTokens("mixed 中文 here") > 0);
+});
+
+// ── 前缀缓存断点（0.1× 计费的关键，纯函数）────────────────────
+test("withToolCacheBreakpoint：最后一个工具打 cache_control 断点", () => {
+  const out = withToolCacheBreakpoint([sampleTool as never, { ...sampleTool, name: "grep_search" } as never]);
+  assert.equal(out.length, 2);
+  assert.equal((out[0] as { cache_control?: unknown }).cache_control, undefined, "前序工具不打");
+  assert.deepEqual((out[1] as { cache_control: unknown }).cache_control, { type: "ephemeral" });
+});
+
+test("withToolCacheBreakpoint：空数组 / 已带断点 → 原样返回", () => {
+  assert.deepEqual(withToolCacheBreakpoint([]), []);
+  const already = [{ ...sampleTool, cache_control: { type: "ephemeral" } } as never];
+  assert.equal(withToolCacheBreakpoint(already), already, "不重复打断点（引用不变）");
+});
+
+test("withMessageCacheBreakpoint：最后一条纯文本 user 消息转 text block 带断点", () => {
+  const msgs: import("@anthropic-ai/sdk/resources/messages/messages.js").MessageParam[] = [
+    { role: "user", content: "hi" },
+    { role: "user", content: "latest" },
+  ];
+  const out = withMessageCacheBreakpoint(msgs);
+  assert.equal(out.length, 2);
+  assert.equal(out[0]!.content, "hi", "前序消息不动");
+  const last = out[1]!.content as unknown as Array<Record<string, unknown>>;
+  assert.equal(last.length, 1);
+  assert.equal(last[0]!.type, "text");
+  assert.equal(last[0]!.text, "latest");
+  assert.deepEqual(last[0]!.cache_control, { type: "ephemeral" });
+});
+
+test("withMessageCacheBreakpoint：tool_result 消息（块数组）不动", () => {
+  const msgs: import("@anthropic-ai/sdk/resources/messages/messages.js").MessageParam[] = [
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t", content: "x" }],
+    },
+  ];
+  assert.equal(withMessageCacheBreakpoint(msgs), msgs, "引用不变（不触碰块数组）");
+});
+
+test("withMessageCacheBreakpoint：空消息数组原样", () => {
+  assert.deepEqual(withMessageCacheBreakpoint([]), []);
 });
 
 test("fromOpenAIResponse：usage(prompt/completion) 归一化", () => {

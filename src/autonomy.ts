@@ -70,11 +70,23 @@ export async function classifyAction(
   return { allow: false, reason: text.replace(/^BLOCK:?\s*/i, "") };
 }
 
-/** 渲染消息数组为纯文本（tool 块不展开细节——脱敏，评估器/分类器只看"谁说了什么"） */
-export function renderTranscript(messages: { role: string; content: unknown }[]): string {
-  return messages
-    .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : "[tool call / result]"}`)
-    .join("\n");
+/** 渲染消息数组为纯文本（tool 块不展开细节——脱敏，评估器/分类器只看"谁说了什么"）。
+ * 窗口化：保留头部 3 条 + 最近 maxItems 条，中间省略——长会话下避免 transcript
+ * 随会话线性膨胀（每次 classify 都序列化全部历史会烧 token）。 */
+export function renderTranscript(
+  messages: { role: string; content: unknown }[],
+  maxItems = 40,
+): string {
+  const render = (m: { role: string; content: unknown }): string =>
+    `${m.role}: ${typeof m.content === "string" ? m.content : "[tool call / result]"}`;
+
+  if (messages.length <= maxItems) {
+    return messages.map(render).join("\n");
+  }
+  const head = messages.slice(0, 3).map(render);
+  const tail = messages.slice(-maxItems).map(render);
+  const omitted = messages.length - 3 - maxItems;
+  return [...head, `… (${omitted} earlier messages omitted)`, ...tail].join("\n");
 }
 
 function extractText(out: ModelOutput): string {

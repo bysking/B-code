@@ -87,6 +87,20 @@ test("renderTranscript：tool 块不展开细节（脱敏）", () => {
   assert.ok(!text.includes("root:x:0:0"), "结果内容不泄漏");
 });
 
+test("renderTranscript：长会话窗口化（头部 + 省略标记 + 最近尾部）", () => {
+  const msgs = Array.from({ length: 60 }, (_, i) => ({ role: "user" as const, content: `msg${i}` }));
+  const text = renderTranscript(msgs, 10);
+  assert.ok(text.includes("msg0"), "保留头部");
+  assert.ok(text.includes("omitted"), "有省略标记");
+  assert.ok(text.includes("msg59"), "保留最近尾部");
+  assert.ok(!text.includes("msg30"), "中段省略（不随会话线性膨胀）");
+
+  // 短会话（≤ 窗口）原样全量，不引入省略标记
+  const short = renderTranscript(msgs.slice(0, 5), 10);
+  assert.ok(short.includes("msg4"));
+  assert.ok(!short.includes("omitted"));
+});
+
 // ── pursueGoal：评估→回灌→再执行，MET 收尾 ───────────────────
 
 test("pursueGoal：未达成原因回灌，达成即停", async () => {

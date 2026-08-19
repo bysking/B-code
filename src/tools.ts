@@ -1,6 +1,6 @@
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import type { Registry, RuntimeContext } from "./registry.js";
 import { cacheable, contentHash, filePointer, type FileStore } from "./file-store.js";
@@ -130,7 +130,9 @@ async function editFileTool(
     // 工具已知最终内容 → 直接更新 store（标 fresh）
     const st = await stat(path);
     putSnapshot(ctx.fileStore, path, updated, st.mtimeMs, st.size, contentHash(Buffer.from(updated)));
-    return `Successfully edited ${input.file_path}`;
+    // 编辑前后 diff：让模型与用户（Ctrl+O 回看）直观看到改了什么
+    const diff = snippetDiff(content, input.old_string, newString);
+    return `Successfully edited ${input.file_path}\n\nDiff:\n${diff}`;
   } catch (err) {
     return `Error editing ${input.file_path}: ${(err as Error).message}`;
   }
@@ -266,17 +268,84 @@ async function fileContentTool(
   }
 }
 
-function runShellTool(input: { command: string }): Promise<string> {
+/** run_shell 超时（ms）：env 可配（B_CODE_SHELL_TIMEOUT），默认 30s；无效值回退默认 */
+const SHELL_TIMEOUT_MS = (() => {
+  const n = Number(process.env.B_CODE_SHELL_TIMEOUT ?? "30000");
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+})();
+const MAX_SHELL_OUTPUT = 10 * 1024 * 1024; // 与旧 exec maxBuffer 一致
+
+/**
+ * 执行 shell 命令。spawn（而非 exec）换取两件事：
+ *   1. 实时日志——stdout/stderr 逐块经 ctx.onToolOutput 转发（UI 持续打印，不再干等 30s）；
+ *   2. 可控超时——到点 SIGTERM → 1s 后 SIGKILL 兜底，结果带上"已超时"标记。
+ * 输出仍累积截断（MAX_SHELL_OUTPUT）后整体返回，模型看到的语义与旧 exec 一致。
+ */
+function runShellTool(
+  input: { command: string },
+  ctx?: RuntimeContext,
+): Promise<string> {
   return new Promise((resolvePromise) => {
-    exec(input.command, { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const out = stdout + (stderr ? `\n[stderr]\n${stderr}` : "");
-      if (err) {
-        resolvePromise(out ? out : `Error: ${err.message}`);
-      } else {
-        resolvePromise(out || "(no output)");
-      }
+    const child = spawn(input.command, { shell: true, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let settled = false;
+
+    const finish = (msg: string) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(msg);
+    };
+
+    const onData = (chunk: Buffer) => {
+      if (out.length < MAX_SHELL_OUTPUT) out += chunk.toString();
+      // 实时转发：逐块（近似逐行）打印，让用户看到长命令的进展
+      ctx?.onToolOutput?.(chunk.toString());
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      // 给进程收尾时间，仍不退则强杀；timer 不拖住进程退出
+      setTimeout(() => child.kill("SIGKILL"), 1000).unref();
+      finish(`(timed out after ${SHELL_TIMEOUT_MS / 1000}s; process killed)\n${out.trim()}`);
+    }, SHELL_TIMEOUT_MS);
+    timer.unref();
+
+    child.on("error", (err) => finish(`Error: ${err.message}`));
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const body = out.trim();
+      finish(code === 0 ? body || "(no output)" : body || `(exit ${code})`);
     });
   });
+}
+
+/**
+ * 编辑点行级 diff：定位 old_string 在旧文件中的起始行，输出
+ *   上下文行（前 1 行） → - 删除行 → + 新增行 → 上下文行（后 1 行）
+ * 比全文 LCS 更适合 edit_file 场景：O(n) 定位、输出聚焦在变化处、超大文件不爆内存。
+ */
+export function snippetDiff(
+  oldText: string,
+  oldString: string,
+  newString: string,
+  contextLines = 1,
+): string {
+  const idx = oldText.indexOf(oldString);
+  if (idx === -1) return "";
+  const lines = oldText.split("\n");
+  const startLine = oldText.slice(0, idx).split("\n").length - 1; // old_string 首行（0-based）
+  const oldLines = oldString.split("\n");
+  const newLines = newString.split("\n");
+
+  const out: string[] = [];
+  for (let k = Math.max(0, startLine - contextLines); k < startLine; k++) out.push(`  ${lines[k]}`);
+  for (const l of oldLines) out.push(`- ${l}`);
+  for (const l of newLines) out.push(`+ ${l}`);
+  const endLine = startLine + oldLines.length;
+  for (let k = endLine; k < Math.min(lines.length, endLine + contextLines); k++) out.push(`  ${lines[k]}`);
+  return out.join("\n");
 }
 
 /** 注册全部内置工具（handler 包一层实现函数，mode 供权限层判定） */
@@ -396,6 +465,6 @@ export function registerBuiltinTools(registry: Registry): void {
     },
     mode: "shell",
     kind: "builtin",
-    handler: (input) => runShellTool(input as { command: string }),
+    handler: (input, ctx) => runShellTool(input as { command: string }, ctx),
   });
 }

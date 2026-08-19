@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { registerBuiltinTools } from "../src/tools.js";
+import { registerBuiltinTools, snippetDiff } from "../src/tools.js";
 import { Registry, type RuntimeContext } from "../src/registry.js";
 import { FileStore } from "../src/file-store.js";
 
@@ -177,6 +177,43 @@ test("grep_search 非法正则 → 报错而非崩溃", async () => {
 test("run_shell 执行并捕获输出", async () => {
   const out = await run("run_shell", { command: "echo hi" });
   assert.ok(out.includes("hi"));
+});
+
+test("run_shell 实时日志：逐块经 ctx.onToolOutput 转发", async () => {
+  const chunks: string[] = [];
+  const rctx = { ...ctx, onToolOutput: (line: string) => chunks.push(line) } as RuntimeContext;
+  const mp = registry.resolve("run_shell")!;
+  const out = await Promise.resolve(mp.handler({ command: "echo realtime" }, rctx) as string);
+  assert.ok(out.includes("realtime"), "整体输出仍返回");
+  assert.ok(chunks.join("").includes("realtime"), "onToolOutput 收到增量");
+});
+
+// ── 编辑点 diff ───────────────────────────────────────────────
+
+test("snippetDiff：定位替换点，输出上下文 + 删除/新增行", () => {
+  assert.equal(snippetDiff("a\nb\nc\nd\n", "c", "C\nC2"), "  b\n- c\n+ C\n+ C2\n  d");
+});
+
+test("snippetDiff：old_string 不存在 → 空串", () => {
+  assert.equal(snippetDiff("a\nb\n", "zzz", "x"), "");
+});
+
+test("snippetDiff：单行替换（文件首行，无前上下文）", () => {
+  assert.equal(snippetDiff("first\nsecond\n", "first", "one"), "- first\n+ one\n  second");
+});
+
+test("edit_file 结果包含编辑点 diff（- 旧 / + 新）", async () => {
+  const p = join(dir, "diff.txt");
+  await writeFile(p, "keep1\nold line\nkeep2\n");
+  const out = await run("edit_file", {
+    file_path: p,
+    old_string: "old line",
+    new_string: "new line",
+  });
+  assert.ok(out.includes("- old line"), `diff 含旧行: ${out}`);
+  assert.ok(out.includes("+ new line"), `diff 含新行: ${out}`);
+  assert.ok(out.includes("keep1"), "diff 带上下文行");
+  assert.equal(await readFile(p, "utf-8"), "keep1\nnew line\nkeep2\n");
 });
 
 test("未知工具 → 明确的 Unknown tool", async () => {

@@ -16,7 +16,7 @@ import { Registry, type RuntimeContext, type UserOption } from "./registry.js";
 import { buildSystemPrompt, type SystemBlock } from "./prompt.js";
 import { truncateResult, maybeCompact, renderCompaction, buildFileIndex, contextTokenBudget } from "./context.js";
 import { classifyAction, evaluateGoal, renderTranscript } from "./autonomy.js";
-import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
+import { allowlistKey, decideExecution, type Mode } from "./permissions.js";
 import { recallMemories, registerMemoryTool } from "./memory.js";
 import { registerAskUserTool } from "./ask-user.js";
 import { buildSkillDescriptions } from "./skills.js";
@@ -324,61 +324,67 @@ export class Agent {
         tools: toolUses.map((tu) => ({ id: tu.id, name: tu.name, input: tu.input })),
       });
 
-      const results: Anthropic.ToolResultBlockParam[] = [];
+      // 执行：read 类（无副作用、无确认门槛）并行；write/shell/external 串行
+      // （避免并发副作用 + 多个确认框竞争；MCP 长任务也走串行，日志有序）。
+      // 结果仍按原 toolUses 顺序收集，tool_result 与 tool_use 一一对应。
+      const reads: { tu: Anthropic.ToolUseBlockParam; mp?: import("./registry.js").MountPoint; input: Record<string, any> }[] = [];
+      const others: typeof reads = [];
       for (const tu of toolUses) {
+        const mp = this.registry.resolve(tu.name);
+        const input = (tu.input ?? {}) as Record<string, any>;
+        (mp?.mode === "read" ? reads : others).push({ tu, mp, input });
+      }
+
+      const outputById = new Map<string, string>();
+      const runOne = async (
+        tu: Anthropic.ToolUseBlockParam,
+        mp: import("./registry.js").MountPoint | undefined,
+        input: Record<string, any>,
+      ): Promise<void> => {
         // 工具调用的进度提示走 print 缝（与模型文本同一条 UI 通道）
         this.print(`  → ${tu.name}(${JSON.stringify(tu.input)})\n`);
-        const input = (tu.input ?? {}) as Record<string, any>;
-
-        // P5：循环唯一入口 = registry.resolve；未注册工具 fail-closed 拒绝
-        const mp = this.registry.resolve(tu.name);
-        let output: string;
-
         if (!mp) {
-          output = `Unknown tool: ${tu.name}`;
-        } else {
-          // ⑥ 权限检查：deny → 拦截；confirm → 问用户（bypass 跳过）
-          const permission = checkPermission(mp, input, this.mode);
-
-          if (permission === "deny") {
-            output = `Denied: ${tu.name} was blocked by the permission system.`;
-          } else if (
-            // Auto Mode：写/编辑/shell 先过分类器（分类器代替人工确认框）
-            this.mode === "auto" &&
-            (mp.mode === "write" || mp.mode === "shell")
-          ) {
-            const verdict = await this.classify(mp.name, input);
-            output = verdict.allow
-              ? await this.execTool(tu.id, mp, input)
-              : `Blocked by auto-mode monitor: ${verdict.reason}`;
-          } else if (permission === "confirm" && this.mode !== "bypass") {
-            const key = allowlistKey(mp, input);
-            if (this.allowlist.has(key)) {
-              output = await this.execTool(tu.id, mp, input);
-            } else {
-              this.spinner.stop(); // 确认前停表，别转着问
-              const label = mp.mode === "shell" ? String(input.command ?? "") : mp.name;
-              const ok = await this.askUser(`Allow ${label}? (y/n)`);
-              if (ok) {
-                this.allowlist.add(key);
-                output = await this.execTool(tu.id, mp, input);
-              } else {
-                output = `Denied: user rejected ${mp.name}.`;
-              }
-            }
-          } else {
-            output = await this.execTool(tu.id, mp, input);
-          }
+          // P5：循环唯一入口 = registry.resolve；未注册工具 fail-closed 拒绝
+          outputById.set(tu.id, `Unknown tool: ${tu.name}`);
+          return;
         }
+        const decision = await decideExecution(mp, input, {
+          mode: this.mode,
+          allowlist: this.allowlist,
+          classify: (n, i) => this.classify(n, i),
+          askUser: (q) => {
+            this.spinner.stop(); // 确认前停表，别转着问
+            return this.askUser(q);
+          },
+        });
+        if (!decision.allow) {
+          outputById.set(tu.id, decision.reason ?? "Denied");
+          return;
+        }
+        // 确认通过 → 记入会话白名单，同操作不再问
+        if (decision.remember) this.allowlist.add(allowlistKey(mp, input));
+        outputById.set(tu.id, await this.execTool(tu.id, mp, input));
+      };
 
-        // tool_result 必须关联到对应的 tool_use_id
-        results.push({ type: "tool_result", tool_use_id: tu.id, content: output });
-      }
+      // 并行批：read 工具互不干扰，整体耗时 ≈ 最慢者
+      await Promise.all(reads.map((r) => runOne(r.tu, r.mp, r.input)));
+      // 串行批：逐个执行
+      for (const r of others) await runOne(r.tu, r.mp, r.input);
+
+      // 按原顺序组装 tool_result（必须关联到对应的 tool_use_id）
+      const results: Anthropic.ToolResultBlockParam[] = toolUses.map((tu) => ({
+        type: "tool_result",
+        tool_use_id: tu.id,
+        content: outputById.get(tu.id) ?? "(missing output)",
+      }));
 
       // 工具执行结果作为 user 消息喂回 → 回到循环开头再调模型
       this.messages.push({ role: "user", content: results });
     }
   }
+
+  /** 并发执行的活跃工具数：并行 read 时只有首个 start、最后一个 stop，busy 行不乱跳 */
+  private activeTools = 0;
 
   /** 执行工具（spinner + 结果截断 Tier 0 + 异常兜底） */
   private async execTool(
@@ -386,8 +392,12 @@ export class Agent {
     mp: import("./registry.js").MountPoint,
     input: Record<string, any>,
   ): Promise<string> {
-    this.spinner.start(`running ${mp.name}…`);
+    this.activeTools++;
+    if (this.activeTools === 1) this.spinner.start(`running ${mp.name}…`);
     this.events?.({ type: "tool_start", id, name: mp.name, input });
+    // 实时日志接线：长任务（run_shell 等）逐行转发到 print（"⤷" 前缀，与工具提示同通道）
+    const prevOnToolOutput = this.ctx.onToolOutput;
+    this.ctx.onToolOutput = (line: string) => this.print(`  ⤷ ${line}`);
     let output: string | undefined;
     try {
       const raw = await mp.handler(input, this.ctx);
@@ -400,9 +410,11 @@ export class Agent {
       output = `Error: ${mp.name} failed: ${(err as Error).message}`;
       return output;
     } finally {
+      this.ctx.onToolOutput = prevOnToolOutput;
+      this.activeTools--;
+      if (this.activeTools === 0) this.spinner.stop();
       // output 随事件透传给 UI（Ctrl+O 面板可回看）
       this.events?.({ type: "tool_end", id, name: mp.name, output });
-      this.spinner.stop();
     }
   }
 

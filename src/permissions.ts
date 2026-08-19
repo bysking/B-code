@@ -68,3 +68,63 @@ export function checkPermission(
 export function allowlistKey(mp: MountPoint, input: Record<string, any>): string {
   return mp.mode === "shell" ? `shell:${String(input.command ?? "")}` : mp.name;
 }
+
+// ── 放行决策（P7 策略化的落地：agent.chat 里的权限分支收拢到此）────────
+
+import type { ActionVerdict } from "./autonomy.js";
+
+/** 工具执行放行决策结果 */
+export interface ExecDecision {
+  allow: boolean;
+  /** 拦截原因（喂回模型）；allow=true 时为空 */
+  reason?: string;
+  /** 确认通过后需要记入会话白名单（下同不再问） */
+  remember?: boolean;
+}
+
+/** 决策所需的运行时依赖（由 agent 注入，保持 permissions 层可单测） */
+export interface ExecutionContext {
+  mode: Mode;
+  allowlist: Set<string>;
+  /** Auto Mode 分类器（write/shell 放行决策） */
+  classify(name: string, input: Record<string, any>): Promise<ActionVerdict>;
+  /** 权限确认框（confirm 路径） */
+  askUser(question: string): Promise<boolean>;
+}
+
+/**
+ * 工具执行前的完整裁决链（顺序与 7 层检查一致）：
+ *   deny 优先（任何模式绕不过）→ auto 分类器 → 白名单/确认框（bypass 跳过）→ 放行。
+ * 判定依据 MountPoint.mode + 调用方注入的运行时（分类器/确认框），
+ * 使 agent.chat 的工具循环只依赖这一个入口。
+ */
+export async function decideExecution(
+  mp: MountPoint,
+  input: Record<string, any>,
+  ctx: ExecutionContext,
+): Promise<ExecDecision> {
+  const permission = checkPermission(mp, input, ctx.mode);
+
+  // ① deny 优先：危险命令任何模式都拦得住（含 --yolo）
+  if (permission === "deny") {
+    return { allow: false, reason: `Denied: ${mp.name} was blocked by the permission system.` };
+  }
+  // ② Auto Mode：写/编辑/shell 先过分类器（分类器代替人工确认框）
+  if (ctx.mode === "auto" && (mp.mode === "write" || mp.mode === "shell")) {
+    const verdict = await ctx.classify(mp.name, input);
+    return verdict.allow
+      ? { allow: true }
+      : { allow: false, reason: `Blocked by auto-mode monitor: ${verdict.reason}` };
+  }
+  // ③ confirm：白名单命中直接放行，否则问用户（bypass 跳过）
+  if (permission === "confirm" && ctx.mode !== "bypass") {
+    const key = allowlistKey(mp, input);
+    if (ctx.allowlist.has(key)) return { allow: true };
+    const label = mp.mode === "shell" ? String(input.command ?? "") : mp.name;
+    const ok = await ctx.askUser(`Allow ${label}? (y/n)`);
+    if (ok) return { allow: true, remember: true };
+    return { allow: false, reason: `Denied: user rejected ${mp.name}.` };
+  }
+  // ④ 其余（read / bypass / selfGranted）→ 放行
+  return { allow: true };
+}

@@ -184,7 +184,71 @@ export function usageFromOpenAI(data: any): { input_tokens: number; output_token
   return { input_tokens, output_tokens };
 }
 
+// ── 前缀缓存断点（Anthropic 0.1× 计费的关键）──────────────────────
+
+/**
+ * 给 tools 数组最后一个元素打 cache_control 断点：Anthropic 将整个工具定义
+ * 前缀加入缓存，多轮对话里每轮 tools 都相同 → 第二轮起按 0.1× 计费。
+ * 已带断点（如测试注入）则原样返回，不重复打。
+ */
+export function withToolCacheBreakpoint(tools: Anthropic.Tool[]): Anthropic.Tool[] {
+  if (tools.length === 0) return tools;
+  const last = tools[tools.length - 1]!;
+  if ((last as { cache_control?: unknown }).cache_control) return tools;
+  return [...tools.slice(0, -1), { ...last, cache_control: { type: "ephemeral" } }];
+}
+
+/**
+ * 给最后一条消息打缓存断点：缓存覆盖到最新消息之前的全部历史（每轮多打一次）。
+ * 仅当最后一条是纯文本 user 消息——tool_result 消息不动（其 text 块加断点会
+ * 改变块数组结构，且 tool_result 不参与工具前缀缓存语义）。
+ */
+export function withMessageCacheBreakpoint(messages: MessageParam[]): MessageParam[] {
+  if (messages.length === 0) return messages;
+  const last = messages[messages.length - 1]!;
+  if (typeof last.content !== "string") return messages;
+  return [
+    ...messages.slice(0, -1),
+    {
+      ...last,
+      content: [{ type: "text", text: last.content, cache_control: { type: "ephemeral" } }],
+    },
+  ];
+}
+
 // ── 统一调用入口 ──────────────────────────────────────────────────
+
+/** OpenAI 兼容后端请求参数：重试次数 / 退避基数 / 流式空闲超时 */
+export const OPENAI_MAX_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 800;
+
+/** 流式空闲超时（ms）：超过该时长没有新 chunk 就 abort——防 API 半挂时会话永久挂死 */
+export const IDLE_TIMEOUT_MS = (() => {
+  const n = Number(process.env.B_CODE_HTTP_TIMEOUT ?? "120000");
+  return Number.isFinite(n) && n > 0 ? n : 120_000;
+})();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 幂等重试：5xx/429 与网络错误指数退避重试，4xx 客户端错误直接原样返回 */
+async function fetchWithRetry(
+  url: string,
+  init: Record<string, unknown>,
+): Promise<Awaited<ReturnType<typeof proxiedFetch>>> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const resp = await proxiedFetch(url, init);
+      const retryable = resp.status >= 500 || resp.status === 429;
+      if (resp.ok || !retryable || attempt >= OPENAI_MAX_RETRIES) return resp;
+      await resp.body?.cancel(); // 释放连接以便重试
+    } catch (err) {
+      if (attempt >= OPENAI_MAX_RETRIES) throw err;
+    }
+    await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt); // 800ms → 1600ms 指数退避
+  }
+}
 
 /**
  * OpenAI SSE 流的增量解析状态
@@ -258,6 +322,7 @@ function feedSSELine(ctx: OpenAIStreamCtx, line: string): void {
 /**
  * 真正流式读取：resp.body reader 边收边解析，onText 随数据到达即时触发
  * （不再等整包响应体落地）。这是打次字号效果的地基。
+ * 空闲超时：> IDLE_TIMEOUT_MS 无新 chunk → abort（防 API 半挂时永久挂死）。
  */
 async function streamOpenAISSE(
   resp: Awaited<ReturnType<typeof undiciFetch>>,
@@ -267,18 +332,35 @@ async function streamOpenAISSE(
   const reader = resp.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let idleTimer: NodeJS.Timeout | null = null;
+  let timedOut = false;
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? ""; // 残尾留待下段
-      for (const line of lines) feedSSELine(ctx, line);
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      reader.cancel().catch(() => {}); // 触发 read() 返回，下方抛错
+    }, IDLE_TIMEOUT_MS);
+  };
+
+  try {
+    armIdle();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (timedOut) throw new Error(`stream idle timeout after ${IDLE_TIMEOUT_MS}ms`);
+      if (done) break;
+      armIdle(); // 有数据到达 → 重置空闲计时
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? ""; // 残尾留待下段
+        for (const line of lines) feedSSELine(ctx, line);
+      }
     }
+    if (buffer.trim()) feedSSELine(ctx, buffer); // 流结束的最后一截
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
   }
-  if (buffer.trim()) feedSSELine(ctx, buffer); // 流结束的最后一截
 
   // 非流式降级服务可能发出普通 JSON 行而非 SSE：data: 前缀缺失 → 空输出。
   // 降级由调用方（content-type 判断）分流，这里不重复处理。
@@ -291,7 +373,7 @@ export class OpenAIBackend implements ModelBackend {
 
   async call(input: ModelInput): Promise<ModelOutput> {
     const systemText = flattenSystemBlocks(input.system);
-    const resp = await proxiedFetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+    const resp = await fetchWithRetry(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -342,12 +424,15 @@ export class AnthropicBackend implements ModelBackend {
     // B_CODE_THINKING 设为正整数时开启 extended thinking（预算 token 数）。
     // 默认不启用，避免 token 成本/行为突变；供应商本身回 thinking 时纯管道也能显示。
     const thinkingBudget = Number(process.env.B_CODE_THINKING ?? "");
+    // B_CODE_MAX_TOKENS：输出上限可配（默认 4096；无效值回退默认）
+    const maxTokens = Number(process.env.B_CODE_MAX_TOKENS ?? "4096");
     const stream = this.client.messages.stream({
       model: input.model,
-      max_tokens: 4096,
+      max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
       system: input.system,
-      tools: input.tools,
-      messages: input.messages,
+      // 前缀缓存断点：tools 尾部 + 最后一条消息（0.1× 缓存命中计费的关键）
+      tools: withToolCacheBreakpoint(input.tools),
+      messages: withMessageCacheBreakpoint(input.messages),
       ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
         ? { thinking: { type: "enabled" as const, budget_tokens: thinkingBudget } }
         : {}),

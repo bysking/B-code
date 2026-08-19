@@ -176,6 +176,10 @@ user-invocable: true
 | `B_CODE_HOME`                            | 数据根目录（必须绝对路径；缺省`~/.b-code`）   |
 | `B_CODE_CONFIG`                          | 配置文件路径覆盖                              |
 | `B_CODE_MODEL`                           | 模型名覆盖                                    |
+| `B_CODE_MAX_TOKENS`                      | 单次输出上限 token（缺省 4096）               |
+| `B_CODE_THINKING`                        | 正整数时开启 extended thinking（预算 token）  |
+| `B_CODE_HTTP_TIMEOUT`                    | OpenAI 兼容后端流式空闲超时 ms（缺省 120000） |
+| `B_CODE_SHELL_TIMEOUT`                   | `run_shell` 命令超时 ms（缺省 30000）         |
 | `B_CODE_SKILLS_DIR`                      | 技能目录覆盖                                  |
 | `B_CODE_MCP_CONFIG`                      | MCP 配置文件覆盖                              |
 | `B_CODE_LOG_LEVEL`                       | 日志级别：`debug` / `info` / `warn` / `error` |

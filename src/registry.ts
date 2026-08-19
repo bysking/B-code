@@ -39,6 +39,8 @@ export interface RuntimeContext {
   ): Promise<string>;
   /** 会话级文件快照缓存（read_file/file_content/write/edit 读写）；测试可缺省 */
   fileStore?: FileStore;
+  /** 工具执行期间的实时日志回调（run_shell/MCP 等长任务逐行转发；无则忽略） */
+  onToolOutput?(line: string): void;
 }
 
 export interface MountPoint {
