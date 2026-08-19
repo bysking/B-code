@@ -86,10 +86,12 @@ export interface AgentOptions {
     question: string,
     groups: { title: string; options: UserOption[] }[],
   ) => Promise<string>;
-  /** 模型询问多步向导（Wizard 渲染）；缺省 headless：返回 "__cancel__" */
+  /** 模型询问多步向导（Wizard 渲染）；缺省 headless：返回 "__cancel__"。
+   * multi=true 时分步多选：每步可勾选多个选项。 */
   askWizardInput?: (
     question: string,
     steps: { title: string; question: string; options: UserOption[] }[],
+    multi?: boolean,
   ) => Promise<string>;
   /** 初始模式：default / plan（只读）/ bypass（--yolo）/ auto */
   mode?: Mode;

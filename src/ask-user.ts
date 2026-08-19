@@ -28,9 +28,11 @@ export function registerAskUserTool(registry: Registry): void {
         question: { type: "string", description: "The question to ask the user" },
         kind: {
           type: "string",
-          enum: ["choice", "text", "tabs", "wizard"],
+          enum: ["choice", "text", "tabs", "wizard", "wizard_multi"],
           description:
-            "choice = pick one option; text = type a value; tabs = tabbed categories; wizard = multi-step form with a progress bar, per-step options/custom answer, and a submit review (default: choice)",
+            "choice = pick one option; text = type a value; tabs = tabbed categories; " +
+            "wizard = multi-step form, one option per step, with a progress bar and submit review; " +
+            "wizard_multi = multi-step form where EACH step allows picking MULTIPLE options (toggle with Enter/Space) (default: choice)",
         },
         steps: {
           type: "array",
@@ -94,8 +96,10 @@ export function registerAskUserTool(registry: Registry): void {
     handler: async (input, ctx: RuntimeContext) => {
       const q = String(input.question ?? "请确认");
 
-      // wizard：多步向导（进度条 + 每步选择 + Review 提交）
-      if (input.kind === "wizard") {
+      // wizard / wizard_multi：多步向导（进度条 + 每步选择 + Review 提交）
+      // wizard_multi 为分步多选：每步可勾选多个选项，结果每步逗号拼接
+      if (input.kind === "wizard" || input.kind === "wizard_multi") {
+        const multi = input.kind === "wizard_multi";
         const steps = Array.isArray(input.steps)
           ? input.steps.map((s: any) => ({
               title: String(s?.title ?? "步骤"),
@@ -108,9 +112,9 @@ export function registerAskUserTool(registry: Registry): void {
             }))
           : [];
         if (steps.length === 0) {
-          return "（ask_user: kind=wizard 缺少 steps）请提供 steps，或改用 kind=choice。";
+          return `（ask_user: kind=${input.kind} 缺少 steps）请提供 steps，或改用 kind=choice。`;
         }
-        const result = (await ctx.askWizard?.(q, steps)) ?? "__cancel__";
+        const result = (await ctx.askWizard?.(q, steps, multi)) ?? "__cancel__";
         if (result === "__cancel__") {
           return "用户取消了向导（未做决定）。请说明情况或重新询问。";
         }

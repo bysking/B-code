@@ -40,6 +40,15 @@ test("buildWizardResult：按步汇总 + 未选标注", () => {
   assert.equal(out, "框架: Vue\n构建: （未选）");
 });
 
+test("buildWizardResult：多选步数组逗号拼接", () => {
+  const steps = [
+    { title: "框架", question: "q1", options: [{ label: "Vue", value: "vue" }, { label: "React", value: "react" }] },
+    { title: "构建", question: "q2", options: [] },
+  ];
+  const out = buildWizardResult(steps, { 0: ["Vue", "React"] });
+  assert.equal(out, "框架: Vue, React\n构建: （未选）");
+});
+
 // ── 渲染 ────────────────────────────────────────────────────
 test("渲染：Wizard 进度条 + 当前步选项 + 自定义特殊项；Review 汇总 Submit/Cancel", async () => {
   const ctrl = new AppController();
@@ -90,6 +99,72 @@ test("交互：选中自定义 → 行内输入 → 回车作为该步答案 →
   frame.cleanup();
 });
 
+// ── 分步多选 ────────────────────────────────────────────────
+test("分步多选：Enter/空格勾选多个 → 完成本步 → Review 提交（逗号拼接）", async () => {
+  const ctrl = new AppController();
+  const frame = render(createApp(ctrl));
+  const p = ctrl.askWizard(
+    "搭建新项目?",
+    [
+      { title: "框架", question: "选哪些前端框架?", options: [{ label: "Vue", value: "vue" }, { label: "React", value: "react" }] },
+    ],
+    true, // multi
+  );
+  await wait(30);
+  const out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("○ 1. Vue"), "未选显示 ○");
+  assert.ok(out.includes("✔ 完成并查看汇总"), "单步时特殊项为完成汇总");
+  assert.ok(!out.includes("我想自己提供一个不在选项里面的答案"), "多选模式不出现自定义入口");
+
+  // Enter 勾选 Vue（不前进）
+  frame.stdin.write("\r");
+  await wait(20);
+  assert.ok((frame.lastFrame() ?? "").includes("✓ 1. Vue"), "Enter 后 Vue 变 ✓");
+  // ↓ 到 React，空格勾选
+  frame.stdin.write("[B");
+  await wait(10);
+  frame.stdin.write(" ");
+  await wait(20);
+  assert.ok((frame.lastFrame() ?? "").includes("✓ 2. React"), "空格后 React 变 ✓");
+  // ↓ 到特殊项（完成本步）→ Enter 进 Review → Enter 提交
+  frame.stdin.write("[B");
+  await wait(10);
+  frame.stdin.write("\r");
+  await wait(20);
+  frame.stdin.write("\r");
+  assert.equal(await p, "框架: Vue, React");
+  frame.cleanup();
+});
+
+test("分步多选：再次 Enter 取消勾选，空选走 Review 标未选", async () => {
+  const ctrl = new AppController();
+  const frame = render(createApp(ctrl));
+  const p = ctrl.askWizard(
+    "选?",
+    [
+      { title: "框架", question: "选哪些?", options: [{ label: "Vue", value: "vue" }, { label: "React", value: "react" }] },
+    ],
+    true,
+  );
+  await wait(30);
+  // 勾选 Vue → 再 Enter 取消
+  frame.stdin.write("\r");
+  await wait(20);
+  frame.stdin.write("\r");
+  await wait(20);
+  assert.ok((frame.lastFrame() ?? "").includes("○ 1. Vue"), "再次 Enter 取消勾选");
+  // 空选直接完成本步 → Review 未选 → 提交
+  frame.stdin.write("[B");
+  await wait(10);
+  frame.stdin.write("[B");
+  await wait(10);
+  frame.stdin.write("\r");
+  await wait(20);
+  frame.stdin.write("\r");
+  assert.equal(await p, "框架: （未选）");
+  frame.cleanup();
+});
+
 // ── 协议回灌 ────────────────────────────────────────────────
 test("ask_user kind=wizard：回答以 '用户在向导中的回答' 回灌", async () => {
   const agent = new Agent({
@@ -117,6 +192,37 @@ test("ask_user kind=wizard：回答以 '用户在向导中的回答' 回灌", as
   const fedBack = agent.history()[2] as unknown as { content: { content: string }[] };
   assert.ok(String(fedBack.content[0]?.content).includes("用户在向导中的回答"));
   assert.ok(String(fedBack.content[0]?.content).includes("框架: Vue"));
+});
+
+test("ask_user kind=wizard_multi：multi=true 透传，多选结果回灌", async () => {
+  const agent = new Agent({
+    callModel: makeScripted([
+      {
+        tools: [
+          {
+            name: "ask_user",
+            input: {
+              question: "初始化项目",
+              kind: "wizard_multi",
+              steps: [
+                { title: "框架", question: "选哪些框架?", options: [{ label: "Vue", value: "vue" }, { label: "React", value: "react" }] },
+                { title: "工具", question: "选哪些工具?", options: [{ label: "Vite", value: "vite" }] },
+              ],
+            },
+          },
+        ],
+      },
+    ]),
+    print: () => {},
+    askWizardInput: async (_q, _steps, multi) => {
+      assert.equal(multi, true, "wizard_multi 透传 multi=true");
+      return "框架: Vue, React\n工具: Vite";
+    },
+  });
+  await agent.chat("多选向导初始化");
+  const fedBack = agent.history()[2] as unknown as { content: { content: string }[] };
+  assert.ok(String(fedBack.content[0]?.content).includes("用户在向导中的回答"));
+  assert.ok(String(fedBack.content[0]?.content).includes("框架: Vue, React"));
 });
 
 function makeScripted(

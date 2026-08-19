@@ -130,6 +130,8 @@ export interface WizardStep {
 export interface AskWizardState {
   question: string;
   steps: WizardStep[];
+  /** true = 分步多选（每步可勾选多个选项，Enter/Space 切换） */
+  multi?: boolean;
 }
 
 export interface SlashItem {
@@ -383,10 +385,11 @@ export class AppController {
     res?.(value);
   }
 
-  /** 多步向导提问：resolve 值 = 各步答案文本，或 __cancel__（由 Wizard 拼） */
-  askWizard(question: string, steps: WizardStep[]): Promise<string> {
+  /** 多步向导提问：resolve 值 = 各步答案文本，或 __cancel__（由 Wizard 拼）。
+   * multi=true 时分步多选（每步勾选多个选项）。 */
+  askWizard(question: string, steps: WizardStep[], multi = false): Promise<string> {
     return new Promise((resolve) => {
-      this.askWizardState = { question, steps };
+      this.askWizardState = { question, steps, multi };
       this.askResolver = resolve;
       this.bump();
     });

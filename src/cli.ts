@@ -148,7 +148,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     askChoice: (question, options) => ctrl.askWizard(question, choiceAsWizard(question, options)),
     askTextInput: (question) => ctrl.askText(question),
     askGroupedInput: (question, groups) => ctrl.askWizard(question, groupsAsWizard(question, groups)),
-    askWizardInput: (question, steps) => ctrl.askWizard(question, steps),
+    askWizardInput: (question, steps, multi) => ctrl.askWizard(question, steps, multi),
     spinner: {
       start: (m) => ctrl.setBusy(m),
       update: () => {},
