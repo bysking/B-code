@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Registry, type RuntimeContext } from "../src/registry.js";
 import { registerBuiltinTools } from "../src/tools.js";
-import { runSubAgent } from "../src/subagent.js";
+import { runSubAgent, CRITIC_SYSTEM } from "../src/subagent.js";
 import type { ModelInput, ModelOutput } from "../src/backend.js";
 
 let dir: string;
@@ -64,4 +64,24 @@ test("子 Agent：只读工具循环 → 返回纯文本摘要；非只读工具
   const writeResult = results.content.find((r) => r.tool_use_id === "s-2");
   assert.ok(String(readResult?.content).includes("subagent sees this"));
   assert.ok(String(writeResult?.content).includes("read-only"));
+});
+
+test("对抗性审查角色：自定义 system（CRITIC_SYSTEM）注入首轮调用", async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+
+  const calls: ModelInput[] = [];
+  const callModel = async (input: ModelInput): Promise<ModelOutput> => {
+    calls.push(input);
+    return { content: [{ type: "text", text: "verdict: REVISE — missing retry logic" }] };
+  };
+
+  const ctx: RuntimeContext = { callModel, model: "m", setMode: () => {} };
+  const result = await runSubAgent("review this plan", ctx, registry, CRITIC_SYSTEM);
+
+  assert.equal(result, "verdict: REVISE — missing retry logic");
+  // 首轮 system 用对抗性审查提示词（而非默认 explore）
+  const systemText = calls[0]!.system.map((b) => b.text).join("");
+  assert.ok(systemText.includes("adversarial reviewer"), "应使用 Plan critic 人设");
+  assert.ok(!systemText.includes("explore sub-agent"), "不应是默认 explore 人设");
 });

@@ -135,8 +135,11 @@ export function MessageList({
 }) {
   // 从第一个不可提交的 turn 处切开：之前全部进 Static（只追加），之后（流式/未完成）留在 live。
   // 用 findIndex 而非 filter，保证 committed/live 合起来仍严格保持 turns 的顺序。
+  // 注意 committed 必须每次都是新数组：ctrl.turns 是原地 push 的可变数组，若直接
+  // 传 turns 本身，Ink <Static> 的 useMemo(items.slice(index), [items, index]) 会因
+  // 引用未变命中缓存，新 turn 永远进不了 static 输出（表现为用户消息不展示）。
   const splitAt = turns.findIndex((t, i) => !isCommittable(t, i === turns.length - 1, busy));
-  const committed = splitAt === -1 ? turns : turns.slice(0, splitAt);
+  const committed = splitAt === -1 ? turns.slice() : turns.slice(0, splitAt);
   const live = splitAt === -1 ? [] : turns.slice(splitAt);
 
   return (

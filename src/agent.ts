@@ -142,7 +142,11 @@ export class Agent {
     registerBuiltinTools(this.registry);
     registerAskUserTool(this.registry);
     registerMemoryTool(this.registry);
-    registerPlanTools(this.registry, { plansDir: dirs.plansDir() });
+    registerPlanTools(this.registry, {
+      plansDir: dirs.plansDir(),
+      // review_plan 派独立对抗性审查子 Agent：绑定本会话的 registry + ctx（handler 拿不到 registry）
+      runSubAgent: (task, system) => runSubAgent(task, this.ctx, this.registry, system),
+    });
     this.registry.register({
       name: "agent",
       description:

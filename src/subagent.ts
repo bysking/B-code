@@ -12,6 +12,10 @@ import { FileStore } from "./file-store.js";
  *   3. 返回纯文本摘要（不附带中间过程）
  *   4. 进程内同步调用，不 fork 子进程
  *
+ * 角色化：第 4 个参数 system 可覆盖默认 explore 提示词——plan 模式的
+ * 对抗性审查（CRITIC_SYSTEM，见 plan.ts review_plan）复用同一循环，
+ * 只换"人设"。
+ *
  * 主循环通过注册的 "agent" 工具调用它——对主循环而言，子 Agent 就是一个
  * "超大参数的工具"。
  */
@@ -19,10 +23,26 @@ import { FileStore } from "./file-store.js";
 const SUBAGENT_SYSTEM =
   "You are an explore sub-agent. Investigate read-only and report back a concise summary.";
 
+/** 对抗性审查角色（Plan critic）：对定稿前的计划/设计做独立攻击式审查，找漏洞而非捧场 */
+export const CRITIC_SYSTEM = `You are an adversarial reviewer sub-agent (a "Plan critic").
+Your job is to attack the given plan or technical design as an independent reviewer —
+do NOT rubber-stamp it. Validate mechanism completeness and hunt for holes:
+
+1. Missing pieces: unstated assumptions, unimplemented steps, dangling references.
+2. Edge cases & failure modes: empty/null input, races, timeouts, partial failures, retries.
+3. Security & safety: injection, privilege escalation, destructive commands, data leaks, permission bypasses.
+4. Correctness: wrong order of operations, off-by-one, invalid state transitions, deadlocks.
+5. Testability & verification: is each step verifiable? Are acceptance criteria concrete and measurable?
+6. Cost & over-engineering: unnecessary complexity, wasted work.
+
+Be specific: cite the offending step or clause, explain why it breaks, and propose a concrete fix.
+End with a verdict line: APPROVE (sound) or REVISE (list must-fix issues ordered by severity).`;
+
 export async function runSubAgent(
   task: string,
   ctx: RuntimeContext,
   registry: Registry,
+  system: string = SUBAGENT_SYSTEM,
 ): Promise<string> {
   // 子 agent 用独立 fileStore：它读的文件不污染主模型的新鲜度判断
   // （否则主模型 file_content status_only 会误答 "unchanged"——它根本没读过）。
@@ -35,7 +55,7 @@ export async function runSubAgent(
   while (true) {
     const reply = await subCtx.callModel({
       model: subCtx.model,
-      system: [{ type: "text", text: SUBAGENT_SYSTEM }],
+      system: [{ type: "text", text: system }],
       tools,
       messages,
     });

@@ -118,6 +118,42 @@ test("渲染：模型调用完成后显示真实用量元信息行", async () =>
   frame.cleanup();
 });
 
+test("回归：用户消息单独 push 后立刻展示（模型回答前不丢失）", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  // 真实时序：提交后模型尚未返回（甚至 busy thinking 中），期间只有 user turn 一次渲染
+  ctrl.setBusy("thinking…");
+  ctrl.pushUser("帮我读一下 src/index.ts");
+  await wait(30);
+  let out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("帮我读一下 src/index.ts"), "模型回答前用户消息已展示");
+
+  // 模型随后开始流式回复：历史 + 新回复都应可见
+  ctrl.streamText("好的，正在读取");
+  await wait(30);
+  out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("帮我读一下 src/index.ts"), "流式期间用户消息仍在");
+  assert.ok(out.includes("好的，正在读取"), "模型回复渲染");
+  ctrl.finishStream();
+  frame.cleanup();
+});
+
+test("回归：完整一轮结束后再输入，新一轮用户消息仍展示", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.pushUser("第一轮");
+  ctrl.streamText("回复一");
+  ctrl.setTurnUsage({ input_tokens: 10, output_tokens: 20 }, 100);
+  ctrl.finishStream();
+  await wait(30);
+  ctrl.pushUser("第二轮");
+  await wait(30);
+  const out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("第一轮"), "上一轮用户消息保留");
+  assert.ok(out.includes("第二轮"), "新一轮用户消息展示");
+  frame.cleanup();
+});
+
 test("渲染：斜杠菜单打开显示候选", async () => {
   const ctrl = new AppController();
   const submitted: string[] = [];
