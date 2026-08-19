@@ -39,6 +39,10 @@ export interface Turn {
   tools: ToolCallDisplay[];
   /** assistant 正在流式输出中 */
   streaming: boolean;
+  /** 真实 token 用量（模型调用完成回填；busy 行清空后仍可见） */
+  usage?: { input_tokens: number; output_tokens: number };
+  /** 该轮模型调用耗时（ms） */
+  elapsedMs?: number;
 }
 
 /** 底部固定任务面板：子项（一个工具调用） */
@@ -145,6 +149,12 @@ export class AppController {
   output: string[] = [];
   /** 顶部 busy/thinking 文案（null = 空闲） */
   busy: string | null = null;
+  /** busy 开始时间戳（elapsed 计算基准；null = 空闲） */
+  busySince: number | null = null;
+  /** 是否处于 thinking 相位（状态行追加 "· thinking" 标签） */
+  busyThinking = false;
+  /** busy 期间累计展示的 input token（调用前估算 → 结束后真实值覆盖） */
+  busyInputTokens = 0;
   /** 待回答的系统权限确认（No/Yes 等）；null = 无（字段与方法 ask() 区分命名） */
   askState: AskState | null = null;
   /** 多步向导：非空时 Wizard 渲染（模型驱动的选择交互唯一形态） */
@@ -189,6 +199,9 @@ export class AppController {
     this.turns = [];
     this.output = [];
     this.busy = null;
+    this.busySince = null;
+    this.busyThinking = false;
+    this.busyInputTokens = 0;
     this.task = null;
     this.bump();
   }
@@ -314,8 +327,41 @@ export class AppController {
 
   // ── busy / thinking ─────────────────────────────────────────
   setBusy(text: string | null) {
-    if (this.busy === text) return;
+    // 同文案且已启动 → 幂等跳过（避免重复 start 刷新计时基准）
+    if (this.busy === text && (text === null || this.busySince !== null)) return;
     this.busy = text;
+    if (text === null) {
+      this.busySince = null;
+      this.busyThinking = false;
+      this.busyInputTokens = 0;
+    } else {
+      this.busySince = Date.now();
+      this.busyThinking = false;
+      this.busyInputTokens = 0;
+    }
+    this.bump();
+  }
+
+  /** thinking 相位标签：模型思考期置 true，状态行追加 "· thinking" */
+  setBusyThinking(thinking: boolean) {
+    if (this.busyThinking === thinking) return;
+    this.busyThinking = thinking;
+    this.bump();
+  }
+
+  /** busy 行 input token 回填（绝对值设置：估算 → 真实值覆盖） */
+  setBusyTokens(inputTokens: number) {
+    if (this.busyInputTokens === inputTokens) return;
+    this.busyInputTokens = inputTokens;
+    this.bump();
+  }
+
+  /** 模型调用完成：真实用量落当前 assistant turn（busy 清空后仍可见） */
+  setTurnUsage(usage: NonNullable<Turn["usage"]>, elapsedMs: number) {
+    const turn = this.activeAssistant();
+    if (!turn) return;
+    turn.usage = usage;
+    turn.elapsedMs = elapsedMs;
     this.bump();
   }
 

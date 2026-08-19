@@ -23,6 +23,7 @@ export class Spinner implements SpinnerLike {
   private frame = 0;
   private msg = "";
   private active = false; // stop 幂等闸：未 start 或已 stop 时不写入
+  private startedAt = 0;
 
   constructor(
     private readonly stream: { write(s: string): unknown } = process.stderr,
@@ -35,6 +36,7 @@ export class Spinner implements SpinnerLike {
     this.stop(); // 上一轮若残留先清掉
     this.active = true;
     this.frame = 0;
+    this.startedAt = Date.now();
     this.render();
     this.timer = setInterval(() => {
       this.frame++;
@@ -58,6 +60,8 @@ export class Spinner implements SpinnerLike {
   }
 
   private render(): void {
-    this.stream.write(`${CLEAR}${FRAMES[this.frame % FRAMES.length]} ${this.msg}`);
+    const elapsed = Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000));
+    const suffix = this.startedAt && elapsed > 0 ? ` (${elapsed}s)` : "";
+    this.stream.write(`${CLEAR}${FRAMES[this.frame % FRAMES.length]} ${this.msg}${suffix}`);
   }
 }

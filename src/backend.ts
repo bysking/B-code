@@ -66,6 +66,29 @@ export interface ModelInput {
 export interface ModelOutput {
   /** 归一化后的内容块（参数侧类型）：text / tool_use，与 Anthropic 消息协议一致 */
   content: Anthropic.ContentBlockParam[];
+  /** 归一化 token 用量（input=提示词、output=生成）；后端未返回时缺省（优雅降级） */
+  usage?: { input_tokens: number; output_tokens: number };
+}
+
+/**
+ * 粗略 token 估算（执行期实时展示用，非计费精确值）：
+ * CJK 汉字/全角/假名/谚文 ≈ 1 token，其余字符 ≈ len/4。
+ */
+export function estimateTokens(text: string): number {
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    const isCjk =
+      (code >= 0x4e00 && code <= 0x9fff) || // CJK 统一表意文字
+      (code >= 0x3000 && code <= 0x303f) || // 全角标点
+      (code >= 0xff00 && code <= 0xffef) || // 全角/半角形式
+      (code >= 0x3040 && code <= 0x30ff) || // 假名
+      (code >= 0xac00 && code <= 0xd7af); // 谚文
+    if (isCjk) cjk++;
+    else other++;
+  }
+  return Math.ceil(cjk + other / 4);
 }
 
 /**
@@ -148,7 +171,17 @@ export function fromOpenAIResponse(data: any): ModelOutput {
     }
     content.push({ type: "tool_use", id: tc.id, name: tc.function.name, input });
   }
-  return { content };
+  return { content, usage: usageFromOpenAI(data) };
+}
+
+/** OpenAI usage(prompt_tokens/completion_tokens)→ 归一化 input/output;字段缺失返回 undefined */
+export function usageFromOpenAI(data: any): { input_tokens: number; output_tokens: number } | undefined {
+  const u = data?.usage;
+  if (!u) return undefined;
+  const input_tokens = u.prompt_tokens ?? u.input_tokens;
+  const output_tokens = u.completion_tokens ?? u.output_tokens;
+  if (typeof input_tokens !== "number" || typeof output_tokens !== "number") return undefined;
+  return { input_tokens, output_tokens };
 }
 
 // ── 统一调用入口 ──────────────────────────────────────────────────
@@ -162,6 +195,8 @@ interface OpenAIStreamCtx {
   content: string;
   toolMap: Map<number, { id: string; name: string; args: string }>;
   onText?: (delta: string) => void;
+  /** 流式末尾的 usage chunk(include_usage 开启时);原始 OpenAI 形状，finish 时归一化 */
+  usage?: any;
 }
 
 function applyOpenAIDelta(ctx: OpenAIStreamCtx, delta: any): void {
@@ -197,6 +232,8 @@ function finishOpenAIStream(ctx: OpenAIStreamCtx): ModelOutput {
         },
       },
     ],
+    // 流式末尾 usage chunk(stream_options.include_usage)可能独立于 choices 到达
+    usage: ctx.usage,
   });
 }
 
@@ -214,6 +251,8 @@ function feedSSELine(ctx: OpenAIStreamCtx, line: string): void {
   }
   const delta = chunk.choices?.[0]?.delta;
   if (delta) applyOpenAIDelta(ctx, delta);
+  // usage chunk：OpenAI 流式在流末尾发一个 choices 为空的块携带 usage（include_usage 开启时）
+  if (chunk.usage) ctx.usage = chunk.usage;
 }
 
 /**
@@ -263,6 +302,8 @@ export class OpenAIBackend implements ModelBackend {
         messages: [{ role: "system", content: systemText }, ...toOpenAIMessages(input.messages)],
         tools: toOpenAITools(input.tools),
         stream: true,
+        // 流式末尾回传 usage 块（不支持的兼容服务会忽略该字段，优雅降级）
+        stream_options: { include_usage: true },
       }),
     });
     if (!resp.ok) {
@@ -319,7 +360,12 @@ export class AnthropicBackend implements ModelBackend {
       stream.on("thinking", (delta) => input.onThinking!(delta));
     }
     const reply = await stream.finalMessage();
-    return { content: reply.content as Anthropic.ContentBlock[] };
+    return {
+      content: reply.content as Anthropic.ContentBlock[],
+      usage: reply.usage
+        ? { input_tokens: reply.usage.input_tokens, output_tokens: reply.usage.output_tokens }
+        : undefined,
+    };
   }
 }
 

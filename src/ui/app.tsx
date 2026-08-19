@@ -124,7 +124,13 @@ export function App({
             {l}
           </Text>
         ))}
-        <MessageList turns={ctrl.turns} busy={ctrl.busy} />
+        <MessageList
+          turns={ctrl.turns}
+          busy={ctrl.busy}
+          busySince={ctrl.busySince}
+          busyThinking={ctrl.busyThinking}
+          busyInputTokens={ctrl.busyInputTokens}
+        />
       </Box>
 
       {ctrl.askWizardState ? (

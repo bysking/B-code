@@ -90,6 +90,33 @@ test("渲染：busy 行展示 thinking 文案", async () => {
   frame.cleanup();
 });
 
+test("渲染：busy 状态行展示 ✽ 前缀、耗时、token 与 thinking 标签", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.setBusy("thinking…");
+  ctrl.setBusyThinking(true);
+  ctrl.setBusyTokens(1234);
+  await wait(30);
+  const out = frame.lastFrame() ?? "";
+  // elapsed 由挂载时刻决定（跨秒边界时为 1s），断言形态而非精确秒数
+  assert.match(out, /✽ thinking… \(\d+s · ↓ 1\.2k tokens · thinking\)/, "完整状态行");
+  ctrl.setBusy(null);
+  frame.cleanup();
+});
+
+test("渲染：模型调用完成后显示真实用量元信息行", async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.pushUser("hi");
+  ctrl.streamText("done");
+  ctrl.finishStream();
+  ctrl.setTurnUsage({ input_tokens: 1000, output_tokens: 200 }, 3400);
+  await wait(30);
+  const out = frame.lastFrame() ?? "";
+  assert.ok(out.includes("(⏱ 3s · ↓ 1k · ↑ 200 tokens)"), "真实用量行（耗时 3s，整千去 .0）");
+  frame.cleanup();
+});
+
 test("渲染：斜杠菜单打开显示候选", async () => {
   const ctrl = new AppController();
   const submitted: string[] = [];

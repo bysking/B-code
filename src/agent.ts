@@ -1,12 +1,18 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
-import { callModel, defaultModel, type ModelInput, type ModelOutput } from "./backend.js";
+import {
+  callModel,
+  defaultModel,
+  estimateTokens,
+  type ModelInput,
+  type ModelOutput,
+} from "./backend.js";
 import { registerBuiltinTools } from "./tools.js";
 import { registerPlanTools } from "./plan.js";
 import { runSubAgent } from "./subagent.js";
 import { loadMcpServers } from "./mcp.js";
 import { Registry, type RuntimeContext, type UserOption } from "./registry.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { buildSystemPrompt, type SystemBlock } from "./prompt.js";
 import { truncateResult, maybeCompact } from "./context.js";
 import { classifyAction, evaluateGoal, renderTranscript } from "./autonomy.js";
 import { allowlistKey, checkPermission, type Mode } from "./permissions.js";
@@ -35,7 +41,30 @@ export type AgentEvent =
   | { type: "tool_start"; id: string; name: string; input: unknown }
   | { type: "tool_end"; id: string; name: string; output?: string }
   | { type: "thinking"; text: string | null }
-  | { type: "stream_end" };
+  | { type: "stream_end" }
+  /** 模型调用开始：busy 行进入 thinking 相位 */
+  | { type: "busy_think" }
+  /** busy 行 input token 回填：调用前为估算值，结束后真实值覆盖 */
+  | { type: "busy_tokens"; input_tokens: number }
+  /** 模型调用完成的真实 token 用量（落 turn 元信息） */
+  | { type: "usage"; usage: { input_tokens: number; output_tokens: number } };
+
+/** 请求输入 token 估算（busy 行实时展示用，非精确）：system + tools + messages 文本估算求和 */
+function estimateInputTokens(
+  system: SystemBlock[],
+  tools: Anthropic.Tool[],
+  messages: MessageParam[],
+): number {
+  let n = 0;
+  for (const s of system) n += estimateTokens(s.text ?? "");
+  for (const t of tools) {
+    n += estimateTokens(`${t.name} ${t.description ?? ""} ${JSON.stringify(t.input_schema ?? {})}`);
+  }
+  for (const m of messages) {
+    n += estimateTokens(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+  }
+  return n;
+}
 
 export interface AgentOptions {
   /** 覆盖模型调用（测试注入假后端；也服务于 P2 的 Backend 策略化） */
@@ -230,23 +259,30 @@ export class Agent {
       // 上下文管理：消息超阈值先 LLM 摘要压缩（内部一次独立模型调用）
       this.messages = await this.compactIfNeeded();
 
-      // 模型思考期：转起来；首个文本 token 到达即停（看下面 onText）
+      // 模型思考期：转起来并贯穿整个调用（含流式输出阶段），调用结束才停——
+      // 状态行借此实时展示耗时与 token（参考 Claude Code 的 ✽ Channelling…）
       this.spinner.start("thinking…");
+      this.events?.({ type: "busy_think" });
+      // 调用前估算 input token（实时值），结束后由真实 usage 覆盖
+      const tools = this.registry.toolsSchema(this.mode === "plan");
+      this.events?.({ type: "busy_tokens", input_tokens: estimateInputTokens(system, tools, this.messages) });
       const reply = await this.call({
         model: this.model,
         system,
         // P5：tools 由注册表生成（plan 模式放开 deferred 的 plan 工具）
-        tools: this.registry.toolsSchema(this.mode === "plan"),
+        tools,
         messages: this.messages,
-        // 流式文本直接进 UI；首个 delta 到达意味着模型已出字，停 spinner
-        onText: (delta) => {
-          this.spinner.stop();
-          this.print(delta);
-        },
+        // 流式文本直接进 UI；busy 行保持（不在此 stop），调用结束统一清理
+        onText: (delta) => this.print(delta),
         // 思考块增量 → thinking 事件（UI 以灰色斜体展示）；spinner 不动
         onThinking: (delta) => this.events?.({ type: "thinking", text: delta }),
       });
-      // 模型纯工具调用（无文本）时 onText 不触发，这里兜底停表
+      // 真实 token 用量：落 turn 元信息 + 回填 busy 行（清空前瞬间显示真实值）
+      if (reply.usage) {
+        this.events?.({ type: "usage", usage: reply.usage });
+        this.events?.({ type: "busy_tokens", input_tokens: reply.usage.input_tokens });
+      }
+      // 模型纯工具调用（无文本）时 onText 不触发，这里统一停表
       this.spinner.stop();
       this.events?.({ type: "stream_end" });
 

@@ -7,6 +7,8 @@ import {
   fromOpenAIResponse,
   defaultModel,
   callModel,
+  estimateTokens,
+  usageFromOpenAI,
 } from "../src/backend.js";
 
 // 集成冒烟：本地起一个 OpenAI 兼容 mock 服务，env 指向它后 callModel 的真实 HTTP 链路。
@@ -275,4 +277,60 @@ test("defaultModel：显式 B_CODE_MODEL 优先", () => {
   process.env.B_CODE_MODEL = "my-model";
   assert.equal(defaultModel(), "my-model");
   delete process.env.B_CODE_MODEL;
+});
+
+// ── token 估算与 usage 归一化（状态行实时展示用）───────────────
+test("estimateTokens：CJK 计 1、ASCII 约 len/4、空串为 0", () => {
+  assert.equal(estimateTokens(""), 0);
+  assert.equal(estimateTokens("abcd"), 1);
+  assert.equal(estimateTokens("汉字测试"), 4);
+  assert.equal(estimateTokens("hello world"), Math.ceil(11 / 4));
+  assert.ok(estimateTokens("mixed 中文 here") > 0);
+});
+
+test("fromOpenAIResponse：usage(prompt/completion) 归一化", () => {
+  const out = fromOpenAIResponse({
+    choices: [{ message: { content: "hi" } }],
+    usage: { prompt_tokens: 5, completion_tokens: 3 },
+  });
+  assert.deepEqual(out.usage, { input_tokens: 5, output_tokens: 3 });
+});
+
+test("usageFromOpenAI：字段缺失优雅降级为 undefined", () => {
+  assert.deepEqual(usageFromOpenAI({ usage: { prompt_tokens: 1, completion_tokens: 2 } }), {
+    input_tokens: 1,
+    output_tokens: 2,
+  });
+  assert.equal(usageFromOpenAI({ usage: { prompt_tokens: 1 } }), undefined, "缺 output 降级");
+  assert.equal(usageFromOpenAI({}), undefined, "无 usage 降级");
+});
+
+test("SSE 流式：末尾 usage chunk 归一化到 ModelOutput.usage", async () => {
+  const usageServer = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n');
+    res.write('data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}\n\n');
+    res.write("data: [DONE]\n\n");
+    res.end();
+  });
+  await new Promise<void>((r) => usageServer.listen(0, "127.0.0.1", r));
+  const addr = usageServer.address();
+  const url = `http://127.0.0.1:${addr && typeof addr === "object" ? addr.port : 0}/v1`;
+
+  const saved = process.env.OPENAI_BASE_URL;
+  process.env.OPENAI_BASE_URL = url;
+  try {
+    const out = await callModel({
+      model: "mock-model",
+      system: [{ type: "text", text: "s" }],
+      tools: [],
+      messages: [{ role: "user", content: "x" }],
+    });
+    assert.deepEqual(out.content, [{ type: "text", text: "hi" }]);
+    assert.deepEqual(out.usage, { input_tokens: 11, output_tokens: 7 }, "usage chunk 归一化");
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = saved;
+    await new Promise((r) => usageServer.close(r));
+  }
 });

@@ -171,6 +171,17 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         case "thinking":
           if (ev.text) ctrl.streamThinking(ev.text);
           break;
+        case "busy_think":
+          ctrl.setBusyThinking(true);
+          break;
+        case "busy_tokens":
+          ctrl.setBusyTokens(ev.input_tokens);
+          break;
+        case "usage":
+          // 真实用量：回填 busy 行 input token + 落 turn 元信息（耗时从 busy 开始算）
+          ctrl.setBusyTokens(ev.usage.input_tokens);
+          ctrl.setTurnUsage(ev.usage, Date.now() - (ctrl.busySince ?? Date.now()));
+          break;
       }
     },
   });

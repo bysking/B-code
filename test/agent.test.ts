@@ -308,3 +308,31 @@ test("spinner 生命周期：模型期 thinking、工具期 running，start/stop
   const stops = events.filter((e) => e === "stop").length;
   assert.equal(starts, stops, "每个 start 都必须配一个 stop（spinner 不残留）");
 });
+
+test("模型调用事件序列：busy_think → busy_tokens(估算) → usage → busy_tokens(真实)", async () => {
+  const { fn } = makeScriptedBackend([-1], filePath);
+  const events: import("../src/agent.js").AgentEvent[] = [];
+  const agent = new Agent({
+    callModel: async (input) => ({
+      ...(await fn(input)),
+      usage: { input_tokens: 999, output_tokens: 42 },
+    }),
+    print: () => {},
+    spinner: { start: () => {}, stop: () => {} },
+    events: (ev) => events.push(ev),
+  });
+  await agent.chat("hi");
+
+  const types = events.map((e) => e.type);
+  assert.deepEqual(
+    types.slice(0, 5),
+    ["busy_think", "busy_tokens", "usage", "busy_tokens", "stream_end"],
+    "顺序：思考相位 → 估算 → 真实 usage → 真实值回填 → 流结束",
+  );
+  const estimate = events[1] as { input_tokens: number };
+  assert.ok(estimate.input_tokens > 0, "估算值非零");
+  const usage = events[2] as { usage: { input_tokens: number; output_tokens: number } };
+  assert.deepEqual(usage.usage, { input_tokens: 999, output_tokens: 42 }, "真实用量");
+  const realBusy = events[3] as { input_tokens: number };
+  assert.equal(realBusy.input_tokens, 999, "真实值覆盖估算回填 busy");
+});

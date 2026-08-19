@@ -161,6 +161,51 @@ test("clearAll 重置对话与输出，busy 归零", () => {
   assert.equal(c.busy, null);
 });
 
+test("busy 状态：start 启动计时与复位，thinking/tokens 字段随生命周期", () => {
+  const c = new AppController();
+  c.setBusy("thinking…");
+  assert.ok(c.busySince !== null, "start 记录计时基准");
+  assert.equal(c.busyThinking, false);
+  assert.equal(c.busyInputTokens, 0);
+
+  c.setBusyThinking(true);
+  c.setBusyTokens(1200);
+  assert.equal(c.busyThinking, true);
+  assert.equal(c.busyInputTokens, 1200, "绝对值设置（估算）");
+
+  c.setBusyTokens(1300);
+  assert.equal(c.busyInputTokens, 1300, "真实值覆盖估算");
+
+  c.setBusy(null);
+  assert.equal(c.busySince, null, "stop 复位计时");
+  assert.equal(c.busyThinking, false);
+  assert.equal(c.busyInputTokens, 0);
+});
+
+test("setBusy 同文案幂等：重复 start 不刷新计时基准", async () => {
+  const c = new AppController();
+  c.setBusy("thinking…");
+  const since = c.busySince;
+  await new Promise((r) => setTimeout(r, 20));
+  c.setBusy("thinking…");
+  assert.equal(c.busySince, since, "同文案重复 start 不重置 since");
+});
+
+test("setTurnUsage：写入当前 assistant turn，busy 清空后仍可见", () => {
+  const c = new AppController();
+  c.pushUser("hi");
+  c.streamText("hello");
+  c.setTurnUsage({ input_tokens: 100, output_tokens: 50 }, 3400);
+  const t = c.turns.at(-1)!;
+  assert.deepEqual(t.usage, { input_tokens: 100, output_tokens: 50 });
+  assert.equal(t.elapsedMs, 3400);
+
+  // 无 assistant turn 时静默不炸
+  const c2 = new AppController();
+  c2.setTurnUsage({ input_tokens: 1, output_tokens: 1 }, 10);
+  assert.equal(c2.turns.length, 0);
+});
+
 test("subscribe：每次变更触发一次，返回退订可用", () => {
   const c = new AppController();
   let count = 0;
