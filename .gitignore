@@ -1,4 +1,8 @@
 node_modules/
+dist/
 .env
+.npmrc
 *.session.json
 .DS_Store
+*.log
+.codegraph/

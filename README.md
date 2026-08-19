@@ -4,13 +4,20 @@
 
 在终端里用自然语言下达任务：读代码、改文件、跑命令、写计划，全程可见工具调用与权限审批。
 
+```
+npm i -g @bysking/b-code    # 全局安装
+# 或
+npx -y @bysking/b-code      # 免安装直接使用
+```
+
 ## 安装
 
 ```bash
-# 从本仓库全局安装（开发态等价于 pnpm dev）
-npm i -g .
-# 或链接到全局
-npm link
+# 从 npm 全局安装（推荐）
+npm i -g @bysking/b-code
+
+# 或从本仓库安装（需要先构建，见「开发」）
+npm run build && npm i -g .
 ```
 
 安装后得到 `bcode` 命令。开发模式直接运行：
@@ -205,7 +212,16 @@ user-invocable: true
 ## 开发
 
 ```bash
-npm run dev         # 运行
-npm run typecheck   # 类型检查
-npm test            # 单元测试
+npm install        # 安装依赖
+npm run dev        # 开发运行（tsx 直跑 TS 源码）
+npm run typecheck  # 类型检查
+npm test           # 单元测试
+npm run build      # esbuild 打包 → dist/cli.mjs（单文件，含全部依赖）
+node dist/cli.mjs  # 验证产物
 ```
+
+发布前 `prepublishOnly` 会自动执行 `npm run build && npm test`。
+
+## License
+
+MIT
