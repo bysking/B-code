@@ -2,6 +2,7 @@ import React from "react";
 import { Text } from "ink";
 import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
+import { latexToUnicode } from "@devhub-io/latex-to-unicode";
 
 /**
  * markdown 渲染：marked + marked-terminal。
@@ -20,12 +21,79 @@ import TerminalRenderer from "marked-terminal";
  * - 未闭合粗体/斜体   → 按原文文本显示
  * - 半截表格（还没到分隔行）→ 按普通段落文本降级；分隔行一到即"拼"成表格
  * 不会闪断、不吞字。
+ *
+ * 数学公式预处理：marked 不原生支持 LaTeX 数学公式，`\[ ... \]`、`$$ ... $$`
+ * 等显示数学以及 `\( ... \)` 、`$...$` 等行内数学会被误解析为 markdown 语法
+ * （如 `_` 被当作斜体、`[ ... ]` 被当作链接引用）。预处理把 LaTeX 数学块
+ * 包裹进代码块，同时通过 latex2unicode 将 LaTeX 命令转译为 Unicode 符号，
+ * 使其在终端中可读。
  */
 
 const renderer = new TerminalRenderer({});
 
+/** 预处理 \boxed{...}：去掉外壳，保留内容（latex2unicode 不处理 \boxed 命令） */
+function stripBoxed(text: string): string {
+  // 用平衡括号匹配，去掉 \boxed 外壳，保留内部内容
+  let result = text;
+  const re = /\\boxed\{/;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(result)) !== null) {
+    const start = m.index + m[0].length - 1; // 指向 {
+    let depth = 1;
+    let end = start;
+    while (depth > 0 && end < result.length - 1) {
+      end++;
+      if (result[end] === "{") depth++;
+      else if (result[end] === "}") depth--;
+    }
+    // 替换 \boxed{...} 为内部内容
+    result = result.slice(0, m.index) + result.slice(start + 1, end) + result.slice(end + 1);
+  }
+  return result;
+}
+
+/**
+ * 预处理数学公式：
+ * 1. 将 LaTeX 命令转译为 Unicode 符号（通过 latex2unicode）
+ * 2. 将数学块包裹进代码块，避免 marked 误解析
+ */
+function preprocessMath(text: string): string {
+  // 先剥离 \boxed 外壳
+  let result = stripBoxed(text);
+
+  // 对整个文本应用 LaTeX → Unicode 转换（包括表格中的非数学 LaTeX）
+  result = latexToUnicode(result);
+
+  // 1. $$ ... $$ 显示数学 → 围栏代码块
+  result = result.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner: string) => {
+    return `\`\`\`\n${inner.trim()}\n\`\`\``;
+  });
+
+  // 2. \[ ... \] 显示数学 → 围栏代码块
+  result = result.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner: string) => {
+    return `\`\`\`\n${inner.trim()}\n\`\`\``;
+  });
+
+  // 3. 独行 [ ... ] 显示数学（无反斜杠简写）→ 围栏代码块
+  result = result.replace(/^\[\s*$/gm, "```");
+  result = result.replace(/^\]\s*$/gm, "```");
+
+  // 4. \( ... \) 行内数学 → 反引号行内代码
+  result = result.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner: string) => {
+    return `\`${inner.trim()}\``;
+  });
+
+  // 5. $...$ 行内数学（不匹配 $$）→ 反引号行内代码
+  result = result.replace(/(?<!\$)\$(?!\$)([\s\S]*?)(?<!\$)\$(?!\$)/g, (_, inner: string) => {
+    return `\`${inner.trim()}\``;
+  });
+
+  return result;
+}
+
 /** markdown 全文渲染（流式文本直接喂入，未闭合标记由 marked 兜底降级） */
 export function Markdown({ text }: { text: string }) {
-  const out = marked.parse(text, { renderer }).trim();
+  const safe = preprocessMath(text);
+  const out = marked.parse(safe, { renderer }).trim();
   return <Text>{out}</Text>;
 }
