@@ -2,6 +2,7 @@ import React from "react";
 import { render, type Instance } from "ink";
 import { App } from "./app.js";
 import type { AppController } from "./controller.js";
+import type { Mode } from "../permissions.js";
 
 /**
  * TTY 模式挂载/卸载 ink 应用。非 TTY 不使用本模块（保持 raw 直写）。
@@ -15,7 +16,7 @@ export interface TtyMount {
 
 export function mountTtyApp(
   ctrl: AppController,
-  hooks: { onSubmit: (text: string) => void; onInterrupt: () => void; onExit: () => void },
+  hooks: { onSubmit: (text: string) => void; onInterrupt: () => void; onExit: () => void; onSetMode?: (mode: Mode) => void },
   initialOutput?: string[],
 ): TtyMount {
   const instance = render(
@@ -24,6 +25,7 @@ export function mountTtyApp(
       onSubmit: hooks.onSubmit,
       onInterrupt: hooks.onInterrupt,
       onExit: hooks.onExit,
+      onSetMode: hooks.onSetMode ?? (() => {}),
       initialOutput,
     }),
     // 关闭 ink 默认 exitOnCtrlC：否则 Ctrl+C 被 ink 吞掉，我们自己的

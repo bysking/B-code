@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, Static, Text, useInput } from "ink";
 import type { AppController, SlashItem, ToolCallDisplay } from "./controller.js";
+import type { Mode } from "../permissions.js";
 
 /** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
 function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
@@ -14,6 +15,7 @@ import { InputBox } from "./input-box.js";
 import { OutputPanel } from "./output-panel.js";
 import { TaskPanel } from "./task-panel.js";
 import { AskInput } from "./ask-input.js";
+import { ModeBar } from "./mode-bar.js";
 import { buildSlash } from "./slash.js";
 
 /**
@@ -27,12 +29,14 @@ export function App({
   onSubmit,
   onInterrupt,
   onExit,
+  onSetMode,
   initialOutput,
 }: {
   ctrl: AppController;
   onSubmit: (text: string) => void;
   onInterrupt: () => void;
   onExit: () => void;
+  onSetMode: (mode: Mode) => void;
   initialOutput?: string[];
 }) {
   const [, force] = useState(0);
@@ -51,6 +55,9 @@ export function App({
   const [inputNonce, setInputNonce] = useState(0);
   // 双 Ctrl+C：第一次提示，第二次真正退出（2s 内有效）
   const [quitArmed, setQuitArmed] = useState(false);
+  // 输入历史：提交过的提示词，用于上下键导航（最新在前）
+  const inputHistory = useRef<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1); // -1 = 当前输入，≥0 为历史索引
 
   useInput((_input, key) => {
     // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
@@ -83,6 +90,37 @@ export function App({
       ctrl.toggleOutputPanel();
       return;
     }
+    // Shift+Tab：循环切换模式（向后循环）
+    if (key.tab && key.shift) {
+      ctrl.cycleMode();
+      onSetMode(ctrl.mode);
+      return;
+    }
+    // 上箭头：导航到历史中更早的输入
+    if (key.upArrow && !key.ctrl && !key.meta) {
+      const hist = inputHistory.current;
+      if (hist.length > 0 && historyIdx < hist.length - 1) {
+        const newIdx = historyIdx + 1;
+        setHistoryIdx(newIdx);
+        setInput(hist[hist.length - 1 - newIdx] ?? "");
+        setInputNonce((n) => n + 1); // 重挂 TextInput 让光标到末尾
+      }
+      return;
+    }
+    // 下箭头：导航到历史中更新的输入（或清空到当前输入）
+    if (key.downArrow && !key.ctrl && !key.meta) {
+      if (historyIdx > 0) {
+        const newIdx = historyIdx - 1;
+        setHistoryIdx(newIdx);
+        setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? "");
+        setInputNonce((n) => n + 1);
+      } else if (historyIdx === 0) {
+        setHistoryIdx(-1);
+        setInput("");
+        setInputNonce((n) => n + 1);
+      }
+      return;
+    }
     // Esc：先关输出面板 / 取消文本输入；有向导/确认/文本输入时 Esc 由对应组件自处理
     if (key.escape && ctrl.outputPanel) {
       ctrl.toggleOutputPanel(false);
@@ -99,6 +137,8 @@ export function App({
 
   const handleChange = (value: string) => {
     setInput(value);
+    // 用户手动编辑时退出历史导航态
+    if (historyIdx !== -1) setHistoryIdx(-1);
     if (value.startsWith("/")) ctrl.openSlash(value.slice(1));
     else if (ctrl.slashOpen) ctrl.closeSlash();
   };
@@ -114,6 +154,10 @@ export function App({
   const handleSubmit = (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
+    // 记入输入历史（去重紧邻重复）
+    const hist = inputHistory.current;
+    if (hist[hist.length - 1] !== trimmed) hist.push(trimmed);
+    setHistoryIdx(-1);
     setInput("");
     ctrl.closeSlash();
     onSubmit(trimmed);
@@ -169,13 +213,16 @@ export function App({
 
       {ctrl.task ? <TaskPanel task={ctrl.task} /> : null}
 
-      <InputBox
-        key={inputNonce}
-        value={input}
-        onChange={handleChange}
-        onSubmit={handleSubmit}
-        disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
-      />
+      <Box flexDirection="column">
+        <InputBox
+          key={inputNonce}
+          value={input}
+          onChange={handleChange}
+          onSubmit={handleSubmit}
+          disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
+        />
+        <ModeBar mode={ctrl.mode} />
+      </Box>
     </Box>
   );
 }

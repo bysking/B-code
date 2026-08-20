@@ -132,6 +132,7 @@ function countMcpTools(registry: Registry, serverName: string): number | null {
 /** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
 async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const ctrl = new AppController();
+  ctrl.mode = initialMode(args);
   // 审批"本轮会话自动审批通过"：选中后后续确认直接放行（/clear 重置）
   let autoApprove = false;
 
@@ -237,6 +238,10 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       onExit: () => quit(130),
       onInterrupt: () => agent.interrupt(), // Esc：软中断当前 chat
       onSubmit: (text) => void handle(text),
+      onSetMode: (mode) => {
+        agent.setMode(mode);
+        ctrl.pushOutput(`(mode → ${mode})`);
+      },
     },
     initialOutput,
   );
@@ -259,9 +264,11 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         ctrl.pushOutput("(history cleared)");
         return;
       }
-      if (trimmed === "/plan" || trimmed === "/yolo" || trimmed === "/default") {
-        agent.setMode(trimmed.slice(1) as Mode);
-        ctrl.pushOutput(`(mode → ${trimmed.slice(1)})`);
+      if (trimmed === "/plan" || trimmed === "/yolo" || trimmed === "/default" || trimmed === "/auto") {
+        const mode = trimmed.slice(1) as Mode;
+        agent.setMode(mode);
+        ctrl.setMode(mode);
+        ctrl.pushOutput(`(mode → ${mode})`);
         return;
       }
       if (trimmed === "/skills") {
@@ -395,7 +402,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         created.prompt();
         return;
       }
-      if (input === "/plan" || input === "/yolo" || input === "/default") {
+      if (input === "/plan" || input === "/yolo" || input === "/default" || input === "/auto") {
         agent.setMode(input.slice(1) as Mode);
         process.stdout.write(`(mode → ${input.slice(1)})\n`);
         created.prompt();

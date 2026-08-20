@@ -115,6 +115,7 @@ test("渲染：分段提交的 turn 全程只出现一个 B Code 标题，首段
       onSubmit: () => {},
       onInterrupt: () => {},
       onExit: () => {},
+      onSetMode: () => {},
       initialOutput: undefined,
     }),
   );

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Box, Text } from "ink";
-import TextInput from "ink-text-input";
+import { SimpleTextInput } from "./input-box.js";
 
 /**
  * 文本输入提问（controller.askText 的渲染端）。
@@ -22,7 +22,7 @@ export function AskInput({
         <Text color="cyan" bold>
           {"> "}
         </Text>
-        <TextInput value={value} onChange={setValue} onSubmit={onSubmit} />
+        <SimpleTextInput value={value} onChange={setValue} onSubmit={onSubmit} />
       </Box>
     </Box>
   );

@@ -16,6 +16,7 @@ function createApp(ctrl: AppController) {
     onSubmit: () => {},
     onInterrupt: () => {},
     onExit: () => {},
+    onSetMode: () => {},
     initialOutput: undefined,
   });
 }

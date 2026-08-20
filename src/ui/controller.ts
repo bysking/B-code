@@ -12,6 +12,7 @@ import {
   liveLineBudget,
   terminalCols,
 } from "./scroll-budget.js";
+import type { Mode } from "../permissions.js";
 
 export type ToolStatus = "queued" | "running" | "done";
 
@@ -185,6 +186,8 @@ export class AppController {
   task: TaskPanelState | null = null;
   /** 文本输入提问（askText）：null = 无 */
   askTextState: { question: string } | null = null;
+  /** 当前模式（plan / auto / bypass / default），UI 底部展示 */
+  mode: Mode = "default";
 
   private askTextResolver: ((value: string | null) => void) | null = null;
 
@@ -539,6 +542,27 @@ export class AppController {
   /** Ctrl+O：切换工具输出面板（force 可指定开/关） */
   toggleOutputPanel(force?: boolean) {
     this.outputPanel = force ?? !this.outputPanel;
+    this.bump();
+  }
+
+  /** 所有模式（按循环顺序排列） */
+  static readonly MODE_CYCLE: Mode[] = ["default", "plan", "auto", "bypass"];
+
+  /** 切换模式：循环到下一个（Shift+Tab 向后循环） */
+  cycleMode(forward = true) {
+    const cycle = AppController.MODE_CYCLE;
+    const idx = cycle.indexOf(this.mode);
+    if (idx === -1) { this.mode = "default"; return; }
+    const next = forward
+      ? cycle[(idx + 1) % cycle.length]!
+      : cycle[(idx - 1 + cycle.length) % cycle.length]!;
+    this.mode = next;
+    this.bump();
+  }
+
+  /** 设置模式（由 CLI 外部调用同步） */
+  setMode(mode: Mode) {
+    this.mode = mode;
     this.bump();
   }
 }

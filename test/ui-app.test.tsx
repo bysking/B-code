@@ -16,6 +16,7 @@ function renderApp(
       onSubmit,
       onInterrupt: () => {},
       onExit,
+      onSetMode: () => {},
       initialOutput: undefined,
     }),
   );
@@ -232,6 +233,7 @@ test("回归：向导打开时 Esc 不触发 onInterrupt（提交后模型才能
       onSubmit: () => {},
       onInterrupt: () => interrupted++,
       onExit: () => {},
+      onSetMode: () => {},
       initialOutput: undefined,
     }),
   );
@@ -259,6 +261,7 @@ test("回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可�
       onSubmit: () => {},
       onInterrupt: () => interrupted++,
       onExit: () => {},
+      onSetMode: () => {},
       initialOutput: undefined,
     }),
   );
