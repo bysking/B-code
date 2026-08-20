@@ -6,6 +6,13 @@
  * 订阅渲染。非 TTY 路径不使用本类（保持 raw 直写）。
  */
 
+import {
+  estimateLines,
+  findStreamSplit,
+  liveLineBudget,
+  terminalCols,
+} from "./scroll-budget.js";
+
 export type ToolStatus = "queued" | "running" | "done";
 
 /** 工具/子项状态符号与配色（message-list 与 TaskPanel 共用） */
@@ -43,6 +50,11 @@ export interface Turn {
   usage?: { input_tokens: number; output_tokens: number };
   /** 该轮模型调用耗时（ms） */
   elapsedMs?: number;
+  /** 流式防溢出：text 已提交进 <Static> 的前缀片段（按时序、只增不改），live 区只保留余量。
+   * 见 enforceLiveHeight / scroll-budget.ts——live 帧超终端行数会触发 Ink 整屏清屏（连 scrollback 一起清）。 */
+  chunks: string[];
+  /** thinking 的已提交前缀片段（同 chunks；thinking 是纯文本，无 markdown 切分约束） */
+  thinkingChunks: string[];
 }
 
 /** 底部固定任务面板：子项（一个工具调用） */
@@ -212,22 +224,32 @@ export class AppController {
 
   pushUser(text: string) {
     const id = ++this.nextUserTurnId;
-    this.turns.push({ id, role: "user", text, tools: [], streaming: false });
+    this.turns.push({ id, role: "user", text, tools: [], streaming: false, chunks: [], thinkingChunks: [] });
     this.task = null; // 新一轮输入 → 面板清空（已完成状态让位于新任务）
     this.bump();
   }
 
-  /** 流式文本：首个 delta 开新 assistant turn，其后追加 */
+  /** 流式文本：首个 delta 开新 assistant turn，其后追加；超预算时提交前缀防溢出 */
   streamText(delta: string) {
     const last = this.turns[this.turns.length - 1];
     if (last && last.role === "assistant" && last.streaming) last.text += delta;
-    else this.turns.push({ id: ++this.nextUserTurnId, role: "assistant", text: delta, tools: [], streaming: true });
+    else
+      this.turns.push({
+        id: ++this.nextUserTurnId,
+        role: "assistant",
+        text: delta,
+        tools: [],
+        streaming: true,
+        chunks: [],
+        thinkingChunks: [],
+      });
+    this.enforceLiveHeight(this.turns[this.turns.length - 1]!);
     this.bump();
   }
 
   /** 恢复会话：把最近几轮灌进消息流渲染（id 重新分配，避免与后续新轮冲突） */
-  loadTurns(turns: Array<Omit<Turn, "id">>) {
-    this.turns = turns.map((t, i) => ({ ...t, id: i + 1 }));
+  loadTurns(turns: Array<Omit<Turn, "id" | "chunks" | "thinkingChunks">>) {
+    this.turns = turns.map((t, i) => ({ chunks: [], thinkingChunks: [], ...t, id: i + 1 }));
     this.nextUserTurnId = Math.max(this.nextUserTurnId, this.turns.length);
     this.bump();
   }
@@ -313,12 +335,20 @@ export class AppController {
   }
 
   private annotationTurn(): Turn {
-    const t: Turn = { id: ++this.nextUserTurnId, role: "assistant", text: "", tools: [], streaming: false };
+    const t: Turn = {
+      id: ++this.nextUserTurnId,
+      role: "assistant",
+      text: "",
+      tools: [],
+      streaming: false,
+      chunks: [],
+      thinkingChunks: [],
+    };
     this.turns.push(t);
     return t;
   }
 
-  /** 思考块增量：累计到当前 streaming assistant turn，否则新建一个 */
+  /** 思考块增量：累计到当前 streaming assistant turn，否则新建一个；超预算时提交前缀防溢出 */
   streamThinking(delta: string) {
     const last = this.turns[this.turns.length - 1];
     if (last && last.role === "assistant" && last.streaming) {
@@ -331,8 +361,60 @@ export class AppController {
         thinking: delta,
         tools: [],
         streaming: true,
+        chunks: [],
+        thinkingChunks: [],
       });
     }
+    this.enforceLiveHeight(this.turns[this.turns.length - 1]!);
+    this.bump();
+  }
+
+  /**
+   * 流式防溢出（滚动稳定性的核心）：turn 的 live 尾部（thinking 余量 + text 余量）
+   * 超过预算时，把前缀按安全边界切出提交到 chunks / thinkingChunks（<Static> 只打印一次），
+   * live 区只保留尾部。
+   *
+   * 为什么必须：Ink 的 live 帧一旦高于终端行数就整屏清屏（ESC[2J+3J+H，ESC[3J 连
+   * scrollback 一起清）——用户向上滚动查看历史时会被弹回顶部、滚动位置丢失。
+   *
+   * 预算分配：thinking 与 text 都在时文本是主体多留（7:3）；单一内容独占整个预算。
+   * 切分带滞回（保留约 60% 预算），避免逐 token 频繁提交。
+   */
+  private enforceLiveHeight(turn: Turn) {
+    const cols = terminalCols();
+    const th = estimateLines(turn.thinking ?? "", cols);
+    const tx = estimateLines(turn.text, cols);
+    const budget = liveLineBudget();
+    if (th + tx <= budget) return;
+    const keep = Math.max(Math.floor(budget * 0.6), 4);
+    const thKeep = tx === 0 ? keep : Math.min(th, Math.floor(keep * 0.3));
+    const txKeep = th === 0 ? keep : keep - thKeep;
+    if (th > thKeep && turn.thinking) {
+      const sp = findStreamSplit(turn.thinking, thKeep, { cols, markdown: false });
+      if (sp) {
+        turn.thinkingChunks.push(turn.thinking.slice(0, sp.cut));
+        turn.thinking = turn.thinking.slice(sp.cut);
+      }
+    }
+    if (tx > txKeep) {
+      const sp = findStreamSplit(turn.text, txKeep, { cols, markdown: true });
+      if (sp) {
+        let prefix = turn.text.slice(0, sp.cut);
+        let rest = turn.text.slice(sp.cut);
+        // 切在代码块内部：前缀补闭合围栏、余量重开同语种围栏，两侧各自渲染正确
+        if (sp.closeFence) prefix += sp.closeFence;
+        if (sp.openFence) rest = sp.openFence + rest;
+        turn.chunks.push(prefix);
+        turn.text = rest;
+      }
+    }
+  }
+
+  /** 终端窗口变化：重新评估防溢出（缩小终端可能让原本合规的尾部超预算）；
+   * 流式追加时也会自动重估，这里兜住"缩小后无新 delta"的空窗。 */
+  handleResize() {
+    const last = this.turns[this.turns.length - 1];
+    if (last) this.enforceLiveHeight(last);
     this.bump();
   }
 

@@ -32,6 +32,9 @@ importers:
       undici:
         specifier: ^6.28.0
         version: 6.28.0
+      wrap-ansi:
+        specifier: ^10.0.1
+        version: 10.0.1
     devDependencies:
       '@types/node':
         specifier: ^26.2.0
@@ -821,8 +824,8 @@ packages:
     resolution: {integrity: sha512-U89AsyEeAsyoF0zVJBkG9zBgekjgjK7yk9sje3F4IQpXBJ10TF6ByLlIfjMhcmHMJgHZI4KHt4rdNfktzxIAMA==}
     engines: {node: '>=20'}
 
-  wrap-ansi@10.0.0:
-    resolution: {integrity: sha512-SGcvg80f0wUy2/fXES19feHMz8E0JoXv2uNgHOu4Dgi2OrCy1lqwFYEJz1BLbDI0exjPMe/ZdzZ/YpGECBG/aQ==}
+  wrap-ansi@10.0.1:
+    resolution: {integrity: sha512-M0N4xzyzosiIok3svYlEo1sdLZts/8FPgYH/GPC3wvlmPoRvnoManGMrE54waYj3tISA8w6lsdesfVv67qSr8Q==}
     engines: {node: '>=20'}
 
   ws@8.21.3:
@@ -1254,7 +1257,7 @@ snapshots:
       terminal-size: 4.0.1
       type-fest: 5.8.0
       widest-line: 6.0.0
-      wrap-ansi: 10.0.0
+      wrap-ansi: 10.0.1
       ws: 8.21.3
       yoga-layout: 3.2.1
     optionalDependencies:
@@ -1420,11 +1423,10 @@ snapshots:
     dependencies:
       string-width: 8.2.2
 
-  wrap-ansi@10.0.0:
+  wrap-ansi@10.0.1:
     dependencies:
       ansi-styles: 6.2.3
       string-width: 8.2.2
-      strip-ansi: 7.2.0
 
   ws@8.21.3: {}
 

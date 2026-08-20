@@ -37,6 +37,14 @@ export function App({
 }) {
   const [, force] = useState(0);
   useEffect(() => ctrl.subscribe(() => force((v) => v + 1)), [ctrl]);
+  // 终端尺寸变化：重估流式防溢出预算（live 帧超终端行数会触发 Ink 整屏清屏，滚动位置被重置）
+  useEffect(() => {
+    const onResize = () => ctrl.handleResize();
+    process.stdout.on("resize", onResize);
+    return () => {
+      process.stdout.off("resize", onResize);
+    };
+  }, [ctrl]);
 
   const [input, setInput] = useState("");
   // 补全时 ++ 强制 TextInput 重挂：让光标回到新文本末尾（"补全词 + 空格"之后）

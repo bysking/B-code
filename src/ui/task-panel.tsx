@@ -16,8 +16,13 @@ function statusText(verb: string, status: TaskPanelState["items"][number]["statu
 }
 
 /** 底部固定任务面板：正在执行的一批工具调用（task + 子项 + 三态 + loading）。
- * 面板只在任务进行中存在 —— 全部完成后 controller 直接移除，这里恒为进行中。 */
+ * 面板只在任务进行中存在 —— 全部完成后 controller 直接移除，这里恒为进行中。
+ * 子项展示数封顶：面板撑超终端行数会触发 Ink 整屏清屏（滚动位置被重置）。 */
+const MAX_VISIBLE_ITEMS = 8;
+
 export function TaskPanel({ task }: { task: TaskPanelState }) {
+  const visible = task.items.slice(0, MAX_VISIBLE_ITEMS);
+  const hidden = task.items.length - visible.length;
   return (
     <Box
       flexDirection="column"
@@ -29,7 +34,7 @@ export function TaskPanel({ task }: { task: TaskPanelState }) {
       <Text bold color="yellow">
         ⠒ 正在{task.title}
       </Text>
-      {task.items.map((it) => (
+      {visible.map((it) => (
         <Box key={it.id}>
           <Text color={TOOL_COLOR[it.status]}>
             {TOOL_SYMBOL[it.status]} {statusText(task.verb, it.status)}
@@ -37,6 +42,7 @@ export function TaskPanel({ task }: { task: TaskPanelState }) {
           <Text dimColor> {it.label}</Text>
         </Box>
       ))}
+      {hidden > 0 ? <Text dimColor> … 另有 {hidden} 项</Text> : null}
     </Box>
   );
 }
