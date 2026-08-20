@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
-import { Box, Static, Text } from "ink";
-import type { ToolCallDisplay, Turn } from "./controller.js";
-import { TOOL_SYMBOL, TOOL_COLOR } from "./controller.js";
-import { Markdown } from "./markdown-view.js";
+import React, { useEffect, useState } from 'react';
+import { Box, Static, Text } from 'ink';
+import type { ToolCallDisplay, Turn } from './controller.js';
+import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
+import { Markdown } from './markdown-view.js';
 
 /** token 数值格式化：<1k 原样；<10k 一位小数 k（整千去 .0）；更大整数 k */
 function formatTokens(n: number): string {
@@ -37,10 +37,10 @@ function BusyLine({
   const elapsed = Math.max(0, Math.floor((now - since) / 1000));
   const parts = [`${elapsed}s`];
   if (inputTokens > 0) parts.push(`↓ ${formatTokens(inputTokens)} tokens`);
-  if (thinking) parts.push("thinking");
+  if (thinking) parts.push('thinking');
   return (
     <Text color="yellow" italic>
-      ✽ {text} ({parts.join(" · ")})
+      ✽ {text} ({parts.join(' · ')})
     </Text>
   );
 }
@@ -71,7 +71,7 @@ function UsageLine({ turn }: { turn: Turn }) {
   if (!turn.usage) return null;
   return (
     <Text dimColor>
-      (⏱ {Math.round((turn.elapsedMs ?? 0) / 1000)}s · ↓ {formatTokens(turn.usage.input_tokens)} · ↑{" "}
+      (⏱ {Math.round((turn.elapsedMs ?? 0) / 1000)}s · ↓ {formatTokens(turn.usage.input_tokens)} · ↑{' '}
       {formatTokens(turn.usage.output_tokens)} tokens)
     </Text>
   );
@@ -79,7 +79,7 @@ function UsageLine({ turn }: { turn: Turn }) {
 
 /** 单条消息（user / assistant），assistant 走 markdown 渲染 */
 function TurnView({ turn }: { turn: Turn }) {
-  if (turn.role === "user") {
+  if (turn.role === 'user') {
     return (
       <Box flexDirection="column">
         <Text bold color="cyan">
@@ -89,8 +89,7 @@ function TurnView({ turn }: { turn: Turn }) {
       </Box>
     );
   }
-  const hasContent =
-    turn.text.trim().length > 0 || turn.tools.length > 0 || (turn.thinking ?? "").length > 0;
+  const hasContent = turn.text.trim().length > 0 || turn.tools.length > 0 || (turn.thinking ?? '').length > 0;
   if (!hasContent) return null;
   return (
     <Box flexDirection="column">
@@ -118,7 +117,7 @@ function TurnRemainder({ turn }: { turn: Turn }) {
   const hasContent =
     turn.text.trim().length > 0 ||
     turn.tools.length > 0 ||
-    (turn.thinking ?? "").trim().length > 0 ||
+    (turn.thinking ?? '').trim().length > 0 ||
     turn.usage !== undefined;
   if (!hasContent) return null;
   return (
@@ -145,9 +144,9 @@ function TurnRemainder({ turn }: { turn: Turn }) {
  * 已提交的 turn 会被 Ink 永久打印、不再重渲染——提交条件保守，宁可晚提交。
  */
 function isCommittable(turn: Turn, isLast: boolean, busy: string | null): boolean {
-  if (turn.role === "user") return true;
+  if (turn.role === 'user') return true;
   if (turn.streaming) return false;
-  if (turn.tools.some((t) => t.status !== "done")) return false;
+  if (turn.tools.some((t) => t.status !== 'done')) return false;
   // 最后一条已完成的 assistant turn 在模型调用进行中仍可能回填 usage → 暂留 live
   if (isLast && turn.usage === undefined && busy !== null) return false;
   return true;
@@ -155,9 +154,9 @@ function isCommittable(turn: Turn, isLast: boolean, busy: string | null): boolea
 
 /** <Static> 条目：整 turn（未分段）| 流式期提交的片段 | 分段 turn 落定后的余量收尾 */
 type StaticEntry =
-  | { kind: "turn"; key: string; turn: Turn }
-  | { kind: "chunk"; key: string; text: string; thinking: boolean; firstOfTurn: boolean }
-  | { kind: "rest"; key: string; turn: Turn };
+  | { kind: 'turn'; key: string; turn: Turn }
+  | { kind: 'chunk'; key: string; text: string; thinking: boolean; firstOfTurn: boolean }
+  | { kind: 'rest'; key: string; turn: Turn };
 
 function hasChunks(t: Turn): boolean {
   return t.chunks.length > 0 || t.thinkingChunks.length > 0;
@@ -195,8 +194,8 @@ export function MessageList({
     let firstOfTurn = true;
     const pushChunk = (text: string, thinking: boolean, idx: number) => {
       entries.push({
-        kind: "chunk",
-        key: `t${t.id}-${thinking ? "h" : "c"}${idx}`,
+        kind: 'chunk',
+        key: `t${t.id}-${thinking ? 'h' : 'c'}${idx}`,
         text,
         thinking,
         firstOfTurn,
@@ -208,8 +207,8 @@ export function MessageList({
     if (isCommittable(t, i === turns.length - 1, busy)) {
       entries.push(
         firstOfTurn
-          ? { kind: "turn", key: `t${t.id}`, turn: t }
-          : { kind: "rest", key: `t${t.id}-r`, turn: t },
+          ? { kind: 'turn', key: `t${t.id}`, turn: t }
+          : { kind: 'rest', key: `t${t.id}-r`, turn: t },
       );
     } else {
       live.push(t);
@@ -221,11 +220,11 @@ export function MessageList({
       <Static items={entries}>
         {(e) => {
           switch (e.kind) {
-            case "turn":
+            case 'turn':
               return <TurnView key={e.key} turn={e.turn} />;
-            case "rest":
+            case 'rest':
               return <TurnRemainder key={e.key} turn={e.turn} />;
-            case "chunk":
+            case 'chunk':
               return (
                 <Box key={e.key} flexDirection="column">
                   {e.firstOfTurn ? <AssistantHeader /> : null}
@@ -247,12 +246,7 @@ export function MessageList({
         )}
         {busy && busySince !== null ? (
           <Box marginTop={1}>
-            <BusyLine
-              text={busy}
-              since={busySince}
-              thinking={busyThinking}
-              inputTokens={busyInputTokens}
-            />
+            <BusyLine text={busy} since={busySince} thinking={busyThinking} inputTokens={busyInputTokens} />
           </Box>
         ) : null}
       </Box>

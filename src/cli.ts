@@ -1,18 +1,18 @@
-import * as readline from "node:readline";
-import { Agent } from "./agent.js";
-import type { Registry } from "./registry.js";
-import { clearSessionFile, loadSession, saveSession } from "./session.js";
-import { resolveSkill, discoverSkills } from "./skills.js";
-import { saveMemory } from "./memory.js";
-import { closeAllMcpConnections } from "./mcp.js";
-import { formatMcpList, resolveMcpConfigs } from "./mcp-config.js";
-import { AppController } from "./ui/controller.js";
-import type { WizardStep } from "./ui/controller.js";
-import { mountTtyApp } from "./ui/render.js";
-import { BUILTIN_SLASH_ITEMS } from "./ui/slash.js";
-import { newSessionId, recentTurns, renderRecentTurns } from "./session.js";
-import type { SpinnerLike } from "./ui.js";
-import type { Mode } from "./permissions.js";
+import * as readline from 'node:readline';
+import { Agent } from './agent.js';
+import type { Registry } from './registry.js';
+import { clearSessionFile, loadSession, saveSession } from './session.js';
+import { resolveSkill, discoverSkills } from './skills.js';
+import { saveMemory } from './memory.js';
+import { closeAllMcpConnections } from './mcp.js';
+import { formatMcpList, resolveMcpConfigs } from './mcp-config.js';
+import { AppController } from './ui/controller.js';
+import type { WizardStep } from './ui/controller.js';
+import { mountTtyApp } from './ui/render.js';
+import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
+import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
+import type { SpinnerLike } from './ui.js';
+import type { Mode } from './permissions.js';
 
 /**
  * CLI 外壳（施工图 L1 cli.ts）
@@ -43,26 +43,26 @@ export interface CliArgs {
   instruction: string;
 }
 
-const FLAG_ONLY = new Set(["--resume", "--plan", "--yolo", "--auto"]);
+const FLAG_ONLY = new Set(['--resume', '--plan', '--yolo', '--auto']);
 
 export function parseCliArgs(argv: string[]): CliArgs {
-  let goal = "";
+  let goal = '';
   let loop = 0;
-  let session = "";
+  let session = '';
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i] ?? "";
+    const a = argv[i] ?? '';
     if (FLAG_ONLY.has(a)) {
       rest.push(a); // 留给下方 boolean 判断（也保留在原位，避免丢失语义）
-    } else if (a === "--goal") {
-      goal = argv[i + 1] ?? "";
+    } else if (a === '--goal') {
+      goal = argv[i + 1] ?? '';
       i++;
-    } else if (a === "--loop") {
+    } else if (a === '--loop') {
       const n = Number(argv[i + 1] ?? 0);
       loop = Number.isFinite(n) && n > 0 ? n : 0;
       i++;
-    } else if (a === "--session") {
-      session = argv[i + 1] ?? "";
+    } else if (a === '--session') {
+      session = argv[i + 1] ?? '';
       i++;
     } else {
       rest.push(a);
@@ -70,13 +70,13 @@ export function parseCliArgs(argv: string[]): CliArgs {
   }
   const instruction = rest
     .filter((a) => !FLAG_ONLY.has(a))
-    .join(" ")
+    .join(' ')
     .trim();
   return {
-    resume: rest.includes("--resume"),
-    plan: rest.includes("--plan"),
-    yolo: rest.includes("--yolo"),
-    auto: rest.includes("--auto"),
+    resume: rest.includes('--resume'),
+    plan: rest.includes('--plan'),
+    yolo: rest.includes('--yolo'),
+    auto: rest.includes('--auto'),
     goal,
     loop,
     session,
@@ -84,15 +84,15 @@ export function parseCliArgs(argv: string[]): CliArgs {
   };
 }
 
-function initialMode(args: Pick<CliArgs, "plan" | "yolo" | "auto">): Mode {
+function initialMode(args: Pick<CliArgs, 'plan' | 'yolo' | 'auto'>): Mode {
   // plan 的只读契约优先于一切；auto 用分类器代替确认框；bypass 跳过确认
-  return args.plan ? "plan" : args.auto ? "auto" : args.yolo ? "bypass" : "default";
+  return args.plan ? 'plan' : args.auto ? 'auto' : args.yolo ? 'bypass' : 'default';
 }
 
 const CONFIRM_OPTIONS = [
-  { label: "Yes", value: "yes" },
-  { label: "本轮会话自动审批通过", value: "allow_all" },
-  { label: "No", value: "no" },
+  { label: 'Yes', value: 'yes' },
+  { label: '本轮会话自动审批通过', value: 'allow_all' },
+  { label: 'No', value: 'no' },
 ];
 
 /** choice → 单步向导（模型驱动选择统一为 Wizard 的适配） */
@@ -102,7 +102,7 @@ export function choiceAsWizard(
 ): WizardStep[] {
   return [
     {
-      title: "选择",
+      title: '选择',
       question,
       options: options.map((o) => ({ label: o.label, value: o.value })),
     },
@@ -112,7 +112,10 @@ export function choiceAsWizard(
 /** tabs/grouped → 多步向导（每组一步） */
 export function groupsAsWizard(
   question: string,
-  groups: Array<{ title: string; options: Array<{ label: string; value: string }> }>,
+  groups: Array<{
+    title: string;
+    options: Array<{ label: string; value: string }>;
+  }>,
 ): WizardStep[] {
   return groups.map((g) => ({
     title: g.title,
@@ -123,9 +126,7 @@ export function groupsAsWizard(
 
 /** /mcp：某 MCP server 在 registry 中已挂载的工具数（0 = 启动时连接失败，fail-open） */
 function countMcpTools(registry: Registry, serverName: string): number | null {
-  const n = registry
-    .list()
-    .filter((mp) => mp.name.startsWith(`mcp__${serverName}__`)).length;
+  const n = registry.list().filter((mp) => mp.name.startsWith(`mcp__${serverName}__`)).length;
   return n > 0 ? n : null;
 }
 
@@ -142,8 +143,8 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     askUser: async (question) => {
       if (autoApprove) return true;
       const choice = await ctrl.ask(question, CONFIRM_OPTIONS);
-      if (choice === "allow_all") autoApprove = true;
-      return choice === "yes" || choice === "allow_all";
+      if (choice === 'allow_all') autoApprove = true;
+      return choice === 'yes' || choice === 'allow_all';
     },
     // 模型主动询问（ask_user 工具）：选择统一转 Wizard（模型驱动选择的唯一形态）、文本走 AskInput
     askChoice: (question, options) => ctrl.askWizard(question, choiceAsWizard(question, options)),
@@ -157,28 +158,28 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     } satisfies SpinnerLike,
     events: (ev) => {
       switch (ev.type) {
-        case "tools_planned":
+        case 'tools_planned':
           ctrl.planTools(ev.tools);
           break;
-        case "tool_start":
+        case 'tool_start':
           ctrl.toolStart(ev.id, ev.name, ev.input);
           break;
-        case "tool_end":
+        case 'tool_end':
           ctrl.toolEnd(ev.id, ev.output);
           break;
-        case "stream_end":
+        case 'stream_end':
           ctrl.finishStream();
           break;
-        case "thinking":
+        case 'thinking':
           if (ev.text) ctrl.streamThinking(ev.text);
           break;
-        case "busy_think":
+        case 'busy_think':
           ctrl.setBusyThinking(true);
           break;
-        case "busy_tokens":
+        case 'busy_tokens':
           ctrl.setBusyTokens(ev.input_tokens);
           break;
-        case "usage":
+        case 'usage':
           // 真实用量：回填 busy 行 input token + 落 turn 元信息（耗时从 busy 开始算）
           ctrl.setBusyTokens(ev.usage.input_tokens);
           ctrl.setTurnUsage(ev.usage, Date.now() - (ctrl.busySince ?? Date.now()));
@@ -186,6 +187,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       }
     },
   });
+
+  // 绿色欢迎文案
+  process.stderr.write('\x1b[32m🚀 您的AI编程助手，B Code 已就绪\x1b[0m\n\n');
 
   await agent.initMcp();
 
@@ -207,17 +211,22 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       recent.map((r) => ({
         role: r.role,
         text: r.text,
-        tools: r.tools.map((name, i) => ({ id: `r-${i}`, name, input: "", status: "done" })),
+        tools: r.tools.map((name, i) => ({
+          id: `r-${i}`,
+          name,
+          input: '',
+          status: 'done',
+        })),
         streaming: false,
       })),
     );
-    const rounds = recent.filter((r) => r.role === "user").length;
+    const rounds = recent.filter((r) => r.role === 'user').length;
     initialOutput.push(`(resumed ${saved.length} messages · 最近 ${rounds} 轮)`);
   } else if (args.resume || args.session) {
-    initialOutput.push("(no session to resume)");
+    initialOutput.push('(no session to resume)');
   }
-  if (args.plan) initialOutput.push("(plan mode: read-only)");
-  if (args.auto) initialOutput.push("(auto mode: classifier gates write/shell)");
+  if (args.plan) initialOutput.push('(plan mode: read-only)');
+  if (args.auto) initialOutput.push('(auto mode: classifier gates write/shell)');
   if (args.goal) initialOutput.push(`(pursuing goal: ${args.goal})`);
   if (args.loop > 0 && args.instruction) initialOutput.push(`(loop every ${args.loop}s; Ctrl-C to stop)`);
 
@@ -252,44 +261,41 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     running = true;
     try {
       const trimmed = input.trim();
-      if (trimmed === "exit" || trimmed === "quit") {
+      if (trimmed === 'exit' || trimmed === 'quit') {
         quit(0);
         return;
       }
-      if (trimmed === "/clear") {
+      if (trimmed === '/clear') {
         agent.clearHistory();
         autoApprove = false; // 新一轮会话重新询问审批
         await clearSessionFile();
         ctrl.clearAll();
-        ctrl.pushOutput("(history cleared)");
+        ctrl.pushOutput('(history cleared)');
         return;
       }
-      if (trimmed === "/plan" || trimmed === "/yolo" || trimmed === "/default" || trimmed === "/auto") {
+      if (trimmed === '/plan' || trimmed === '/yolo' || trimmed === '/default' || trimmed === '/auto') {
         const mode = trimmed.slice(1) as Mode;
         agent.setMode(mode);
         ctrl.setMode(mode);
         ctrl.pushOutput(`(mode → ${mode})`);
         return;
       }
-      if (trimmed === "/skills") {
+      if (trimmed === '/skills') {
         const skills = discoverSkills()
           .filter((s) => s.userInvocable)
           .map((s) => `/${s.name}: ${s.description}`)
-          .join("\n");
-        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : "(no skills)");
+          .join('\n');
+        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : '(no skills)');
         return;
       }
-      if (trimmed === "/mcp") {
-        ctrl.pushOutput(
-          formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)),
-        );
+      if (trimmed === '/mcp') {
+        ctrl.pushOutput(formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)));
         return;
       }
-      if (trimmed.startsWith("/remember ")) {
-        const fact = trimmed.slice("/remember ".length).trim();
-        const name =
-          fact.split(/\W+/).filter(Boolean).slice(0, 4).join("_").toLowerCase() || "fact";
-        saveMemory(name, fact, "reference", fact);
+      if (trimmed.startsWith('/remember ')) {
+        const fact = trimmed.slice('/remember '.length).trim();
+        const name = fact.split(/\W+/).filter(Boolean).slice(0, 4).join('_').toLowerCase() || 'fact';
+        saveMemory(name, fact, 'reference', fact);
         ctrl.pushOutput(`(saved to memory: ${name})`);
         return;
       }
@@ -299,7 +305,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       ctrl.pushUser(trimmed);
 
       if (args.goal) {
-        await agent.pursueGoal(args.goal, effective || "Continue working toward the goal.");
+        await agent.pursueGoal(args.goal, effective || 'Continue working toward the goal.');
         await saveSession(agent.history(), sessionId);
         quit(0);
         return;
@@ -308,11 +314,11 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       await saveSession(agent.history(), sessionId);
 
       if (agent.interruptedByUser) {
-        ctrl.pushOutput("(interrupted — 可以输入新指令或继续)");
+        ctrl.pushOutput('(interrupted — 可以输入新指令或继续)');
       }
 
       if (args.loop > 0) {
-        setTimeout(() => void handle(args.instruction ?? ""), args.loop * 1000);
+        setTimeout(() => void handle(args.instruction ?? ''), args.loop * 1000);
       } else if (oneShot) {
         quit(0);
       }
@@ -323,7 +329,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
 
   // 启动即执行模式（one-shot / goal / loop）；否则进入 REPL 等用户输入
   if (args.instruction || args.goal) {
-    await handle(args.instruction || "Continue working toward the goal.");
+    await handle(args.instruction || 'Continue working toward the goal.');
   }
 }
 
@@ -372,7 +378,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
    * 行重绘（clearLine）会把同行内容整行擦掉——表现为"回复刚出来就消失一块"。
    */
   const nextPrompt = (rl: readline.Interface) => {
-    process.stdout.write("\n");
+    process.stdout.write('\n');
     rl.prompt();
   };
 
@@ -380,8 +386,11 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   const getRl = (): readline.Interface => {
     const existing = currentRl();
     if (existing) return existing;
-    const created = readline.createInterface({ input: process.stdin, output: process.stdout });
-    created.on("line", async (raw) => {
+    const created = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    created.on('line', async (raw) => {
       if (consumeAnswer(raw)) return;
       // 仅 REPL 模式处理命令行输入；one-shot 里到达的 stray 输入直接忽略
       if (!replMode) return;
@@ -391,44 +400,43 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         created.prompt();
         return;
       }
-      if (input === "exit" || input === "quit") {
+      if (input === 'exit' || input === 'quit') {
         created.close();
         return;
       }
-      if (input === "/clear") {
+      if (input === '/clear') {
         agent.clearHistory();
         await clearSessionFile();
-        process.stdout.write("(history cleared)\n");
+        process.stdout.write('(history cleared)\n');
         created.prompt();
         return;
       }
-      if (input === "/plan" || input === "/yolo" || input === "/default" || input === "/auto") {
+      if (input === '/plan' || input === '/yolo' || input === '/default' || input === '/auto') {
         agent.setMode(input.slice(1) as Mode);
         process.stdout.write(`(mode → ${input.slice(1)})\n`);
         created.prompt();
         return;
       }
-      if (input === "/skills") {
+      if (input === '/skills') {
         const skills = discoverSkills()
           .filter((s) => s.userInvocable)
           .map((s) => `/${s.name}: ${s.description}`)
-          .join("\n");
-        process.stdout.write(skills ? `Available skills:\n${skills}\n` : "(no skills)\n");
+          .join('\n');
+        process.stdout.write(skills ? `Available skills:\n${skills}\n` : '(no skills)\n');
         created.prompt();
         return;
       }
-      if (input === "/mcp") {
+      if (input === '/mcp') {
         process.stdout.write(
           `${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`,
         );
         created.prompt();
         return;
       }
-      if (input.startsWith("/remember ")) {
-        const fact = input.slice("/remember ".length).trim();
-        const name =
-          fact.split(/\W+/).filter(Boolean).slice(0, 4).join("_").toLowerCase() || "fact";
-        saveMemory(name, fact, "reference", fact);
+      if (input.startsWith('/remember ')) {
+        const fact = input.slice('/remember '.length).trim();
+        const name = fact.split(/\W+/).filter(Boolean).slice(0, 4).join('_').toLowerCase() || 'fact';
+        saveMemory(name, fact, 'reference', fact);
         process.stdout.write(`(saved to memory: ${name})\n`);
         created.prompt();
         return;
@@ -457,9 +465,9 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         else nextPrompt(created);
       }
     });
-    created.on("close", () => {
+    created.on('close', () => {
       closing = true;
-      process.stdout.write("\n");
+      process.stdout.write('\n');
       if (!busy) finish();
     });
     rl = created;
@@ -467,19 +475,19 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   };
 
   // 非交互下 EOF 兜底：管道押完输入就断（或 stdin 为空），confirm 的答案可能永远等不来。
-// 持久监听 stdin end：记录 stdinEnded（可能早于 confirm 发生）+ 顺手解决当场 pending 的回答。
-// 交互终端（TTY）不监听——退出是用户主动 quit，不该被主动 deny（fail-closed 也不适用于 TTY）。
-let eofDenyInstalled = false;
-let stdinEnded = false;
+  // 持久监听 stdin end：记录 stdinEnded（可能早于 confirm 发生）+ 顺手解决当场 pending 的回答。
+  // 交互终端（TTY）不监听——退出是用户主动 quit，不该被主动 deny（fail-closed 也不适用于 TTY）。
+  let eofDenyInstalled = false;
+  let stdinEnded = false;
 
-const agent = new Agent({
+  const agent = new Agent({
     mode: initialMode({ plan, yolo, auto }),
     askUser: (question) =>
       new Promise<boolean>((resolve) => {
         process.stdout.write(`  ${question} `);
         if (!process.stdin.isTTY && !eofDenyInstalled) {
           eofDenyInstalled = true;
-          process.stdin.on("end", () => {
+          process.stdin.on('end', () => {
             stdinEnded = true;
             if (awaitingAnswer) {
               const deny = awaitingAnswer;
@@ -490,7 +498,7 @@ const agent = new Agent({
         }
         // stdin 已 EOF → 没有还会来的答案，fail-closed 拒绝（覆盖"end 先于 confirm"的时序）
         if (stdinEnded) {
-          process.stdout.write("(no input — denied)\n");
+          process.stdout.write('(no input — denied)\n');
           resolve(false);
           return;
         }
@@ -508,14 +516,14 @@ const agent = new Agent({
     process.stdout.write(`(resumed ${saved.length} messages)\n`);
     process.stdout.write(renderRecentTurns(recentTurns(saved))); // 回看最近 5 轮
   } else if (resume || session) {
-    process.stdout.write("(no session to resume)\n");
+    process.stdout.write('(no session to resume)\n');
   }
 
   // ── goal 模式：无人值守追条件（评估器回灌直到达成）────────────
   if (goal) {
     busy = true;
     try {
-      await agent.pursueGoal(goal, instruction || "Continue working toward the goal.");
+      await agent.pursueGoal(goal, instruction || 'Continue working toward the goal.');
     } finally {
       await saveSession(agent.history(), sessionId);
       busy = false;
@@ -530,11 +538,11 @@ const agent = new Agent({
   if (loop > 0 && instruction) {
     process.stdout.write(`(loop every ${loop}s; Ctrl-C to stop)\n`);
     const stop = () => {
-      process.stdout.write("\n(loop stopped)\n");
+      process.stdout.write('\n(loop stopped)\n');
       closeAllMcpConnections();
       process.exit(130);
     };
-    process.on("SIGINT", stop);
+    process.on('SIGINT', stop);
     busy = true;
     try {
       for (;;) {
@@ -558,9 +566,10 @@ const agent = new Agent({
       await saveSession(agent.history(), sessionId);
       busy = false;
     }
-    process.stdout.write("\n(done)\n");
+    process.stdout.write('\n(done)\n');
     closeAllMcpConnections(); // MCP 子进程不杀则进程永不退出
-    if (closing) finish(); // chat 期间 EOF：现在补退出
+    if (closing)
+      finish(); // chat 期间 EOF：现在补退出
     else currentRl()?.close();
     return;
   }

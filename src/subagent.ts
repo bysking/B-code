@@ -1,7 +1,7 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
-import type { Registry, RuntimeContext } from "./registry.js";
-import { FileStore } from "./file-store.js";
+import type Anthropic from '@anthropic-ai/sdk';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { Registry, RuntimeContext } from './registry.js';
+import { FileStore } from './file-store.js';
 
 /**
  * 子 Agent（施工图 §11）：一个独立的、只读的 Agent 循环。
@@ -21,7 +21,7 @@ import { FileStore } from "./file-store.js";
  */
 
 const SUBAGENT_SYSTEM =
-  "You are an explore sub-agent. Investigate read-only and report back a concise summary.";
+  'You are an explore sub-agent. Investigate read-only and report back a concise summary.';
 
 /** 对抗性审查角色（Plan critic）：对定稿前的计划/设计做独立攻击式审查，找漏洞而非捧场 */
 export const CRITIC_SYSTEM = `You are an adversarial reviewer sub-agent (a "Plan critic").
@@ -48,38 +48,36 @@ export async function runSubAgent(
   // （否则主模型 file_content status_only 会误答 "unchanged"——它根本没读过）。
   // 其余 ctx 字段浅拷贝共享（callModel/askWizard 等只读）。
   const subCtx: RuntimeContext = { ...ctx, fileStore: new FileStore() };
-  const messages: MessageParam[] = [{ role: "user", content: task }];
+  const messages: MessageParam[] = [{ role: 'user', content: task }];
   // 只给只读工具（模式门控，sub-agent 无权限层）
-  const tools = registry.toolsSchema().filter((t) => registry.resolve(t.name)?.mode === "read");
+  const tools = registry.toolsSchema().filter((t) => registry.resolve(t.name)?.mode === 'read');
 
   while (true) {
     const reply = await subCtx.callModel({
       model: subCtx.model,
-      system: [{ type: "text", text: system }],
+      system: [{ type: 'text', text: system }],
       tools,
       messages,
     });
-    messages.push({ role: "assistant", content: reply.content });
+    messages.push({ role: 'assistant', content: reply.content });
 
-    const toolUses = reply.content.filter(
-      (b): b is Anthropic.ToolUseBlockParam => b.type === "tool_use",
-    );
+    const toolUses = reply.content.filter((b): b is Anthropic.ToolUseBlockParam => b.type === 'tool_use');
     if (toolUses.length === 0) {
       return reply.content
-        .filter((b): b is Anthropic.TextBlockParam => b.type === "text")
+        .filter((b): b is Anthropic.TextBlockParam => b.type === 'text')
         .map((b) => b.text)
-        .join("");
+        .join('');
     }
 
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
       const mp = registry.resolve(tu.name);
       const output =
-        mp?.mode === "read"
+        mp?.mode === 'read'
           ? await mp.handler((tu.input ?? {}) as Record<string, any>, subCtx)
           : `Denied: the sub-agent is read-only.`;
-      results.push({ type: "tool_result", tool_use_id: tu.id, content: output });
+      results.push({ type: 'tool_result', tool_use_id: tu.id, content: output });
     }
-    messages.push({ role: "user", content: results });
+    messages.push({ role: 'user', content: results });
   }
 }

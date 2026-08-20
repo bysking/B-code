@@ -45,10 +45,7 @@ export function loadSettings(file: string = settingsPath()): Settings {
 
 /** 把配置应用进环境（真实 env 优先，缺省才回填） */
 export function applySettings(
-  env: Record<string, string | undefined> = process.env as Record<
-    string,
-    string | undefined
-  >,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
   settings: Settings = loadSettings(),
 ): void {
   if (settings.env) {
@@ -56,20 +53,14 @@ export function applySettings(
       if (env[k] === undefined) env[k] = v;
     }
   }
-  if (settings.model && env.B_CODE_MODEL === undefined)
-    env.B_CODE_MODEL = settings.model;
+  if (settings.model && env.B_CODE_MODEL === undefined) env.B_CODE_MODEL = settings.model;
 
   if (settings.apiKey) {
     if (settings.provider === 'anthropic') {
-      if (env.ANTHROPIC_API_KEY === undefined)
-        env.ANTHROPIC_API_KEY = settings.apiKey;
+      if (env.ANTHROPIC_API_KEY === undefined) env.ANTHROPIC_API_KEY = settings.apiKey;
     } else if (settings.provider === 'openai') {
-      if (env.OPENAI_API_KEY === undefined)
-        env.OPENAI_API_KEY = settings.apiKey;
-    } else if (
-      env.OPENAI_API_KEY === undefined &&
-      env.ANTHROPIC_API_KEY === undefined
-    ) {
+      if (env.OPENAI_API_KEY === undefined) env.OPENAI_API_KEY = settings.apiKey;
+    } else if (env.OPENAI_API_KEY === undefined && env.ANTHROPIC_API_KEY === undefined) {
       // 未声明 provider：有 baseUrl 视为 OpenAI 兼容端点，否则 Anthropic
       if (settings.baseUrl) env.OPENAI_API_KEY = settings.apiKey;
       else env.ANTHROPIC_API_KEY = settings.apiKey;
@@ -78,8 +69,7 @@ export function applySettings(
 
   if (settings.baseUrl) {
     if (settings.provider === 'anthropic') {
-      if (env.ANTHROPIC_BASE_URL === undefined)
-        env.ANTHROPIC_BASE_URL = settings.baseUrl;
+      if (env.ANTHROPIC_BASE_URL === undefined) env.ANTHROPIC_BASE_URL = settings.baseUrl;
     } else if (env.OPENAI_BASE_URL === undefined) {
       env.OPENAI_BASE_URL = settings.baseUrl;
     }

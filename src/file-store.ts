@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash } from 'node:crypto';
 
 /**
  * 会话级文件快照缓存（根治"压缩丢内容 → 模型重读"的关键设施）。
@@ -30,12 +30,12 @@ export interface FileSnapshot {
 
 /** 对 UTF-8 buffer 计算内容指纹（sha1 截断，版本标签用，不参与新鲜度判定） */
 export function contentHash(buf: Buffer): string {
-  return createHash("sha1").update(buf).digest("hex").slice(0, 12);
+  return createHash('sha1').update(buf).digest('hex').slice(0, 12);
 }
 
 /** 生成 read_file 结果末尾的指针行（也供非首次读取时单独返回） */
 export function filePointer(path: string, snap: FileSnapshot): string {
-  const lines = snap.content.split("\n").length;
+  const lines = snap.content.split('\n').length;
   return `\n\n📄 ${path} (${lines} 行, ${snap.size} 字节, hash ${snap.hash})`;
 }
 

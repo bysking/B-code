@@ -1,11 +1,8 @@
-import Anthropic, { type ClientOptions } from "@anthropic-ai/sdk";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
-import {
-  EnvHttpProxyAgent,
-  fetch as undiciFetch,
-} from "undici";
-import type { SystemBlock } from "./prompt.js";
-import { flattenSystemBlocks } from "./prompt.js";
+import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import { EnvHttpProxyAgent, fetch as undiciFetch } from 'undici';
+import type { SystemBlock } from './prompt.js';
+import { flattenSystemBlocks } from './prompt.js';
 
 /**
  * 网络层：自包含的 undici v6（与 Node 22 内置同源）。
@@ -22,7 +19,7 @@ import { flattenSystemBlocks } from "./prompt.js";
 // 污染 stderr 与测试输出；在构造瞬间临时压制该条特定警告。
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = ((...args: Parameters<typeof process.emitWarning>) => {
-  if (String(args[0]).includes("EnvHttpProxyAgent")) return;
+  if (String(args[0]).includes('EnvHttpProxyAgent')) return;
   originalEmitWarning(...args);
 }) as typeof process.emitWarning;
 const proxyAgent = new EnvHttpProxyAgent();
@@ -107,14 +104,14 @@ export function useOpenAI(): boolean {
 
 export function defaultModel(): string {
   if (process.env.B_CODE_MODEL) return process.env.B_CODE_MODEL;
-  return useOpenAI() ? "gpt-4o-mini" : "claude-sonnet-4-5-20250929";
+  return useOpenAI() ? 'gpt-4o-mini' : 'claude-sonnet-4-5-20250929';
 }
 
 // ── OpenAI 兼容 方向转换（导出供测试；纯函数，不读环境）──────────
 
 export function toOpenAITools(tools: Anthropic.Tool[]): any[] {
   return tools.map((t) => ({
-    type: "function",
+    type: 'function',
     function: { name: t.name, description: t.description, parameters: t.input_schema },
   }));
 }
@@ -123,24 +120,27 @@ export function toOpenAITools(tools: Anthropic.Tool[]): any[] {
 export function toOpenAIMessages(messages: MessageParam[]): any[] {
   const out: any[] = [];
   for (const m of messages) {
-    if (typeof m.content === "string") {
+    if (typeof m.content === 'string') {
       out.push({ role: m.role, content: m.content });
       continue;
     }
-    if (m.role === "assistant") {
-      const texts = m.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    if (m.role === 'assistant') {
+      const texts = m.content
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
       const toolCalls = m.content
-        .filter((b) => b.type === "tool_use")
+        .filter((b) => b.type === 'tool_use')
         .map((b) => {
           const tu = b as Anthropic.ToolUseBlock;
           return {
             id: tu.id,
-            type: "function",
+            type: 'function',
             function: { name: tu.name, arguments: JSON.stringify(tu.input) },
           };
         });
       out.push({
-        role: "assistant",
+        role: 'assistant',
         content: texts || null,
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       });
@@ -148,8 +148,8 @@ export function toOpenAIMessages(messages: MessageParam[]): any[] {
       // user 消息的块：tool_result
       for (const b of m.content) {
         const tr = b as Anthropic.ToolResultBlockParam;
-        if (tr.type === "tool_result") {
-          out.push({ role: "tool", tool_call_id: tr.tool_use_id, content: String(tr.content) });
+        if (tr.type === 'tool_result') {
+          out.push({ role: 'tool', tool_call_id: tr.tool_use_id, content: String(tr.content) });
         }
       }
     }
@@ -161,7 +161,7 @@ export function toOpenAIMessages(messages: MessageParam[]): any[] {
 export function fromOpenAIResponse(data: any): ModelOutput {
   const msg = data.choices?.[0]?.message;
   const content: Anthropic.ContentBlockParam[] = [];
-  if (msg?.content) content.push({ type: "text", text: String(msg.content) });
+  if (msg?.content) content.push({ type: 'text', text: String(msg.content) });
   for (const tc of msg?.tool_calls ?? []) {
     let input: Record<string, any> = {};
     try {
@@ -169,7 +169,7 @@ export function fromOpenAIResponse(data: any): ModelOutput {
     } catch {
       // 参数 JSON 损坏时保留空对象，避免循环崩溃
     }
-    content.push({ type: "tool_use", id: tc.id, name: tc.function.name, input });
+    content.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input });
   }
   return { content, usage: usageFromOpenAI(data) };
 }
@@ -180,7 +180,7 @@ export function usageFromOpenAI(data: any): { input_tokens: number; output_token
   if (!u) return undefined;
   const input_tokens = u.prompt_tokens ?? u.input_tokens;
   const output_tokens = u.completion_tokens ?? u.output_tokens;
-  if (typeof input_tokens !== "number" || typeof output_tokens !== "number") return undefined;
+  if (typeof input_tokens !== 'number' || typeof output_tokens !== 'number') return undefined;
   return { input_tokens, output_tokens };
 }
 
@@ -195,7 +195,7 @@ export function withToolCacheBreakpoint(tools: Anthropic.Tool[]): Anthropic.Tool
   if (tools.length === 0) return tools;
   const last = tools[tools.length - 1]!;
   if ((last as { cache_control?: unknown }).cache_control) return tools;
-  return [...tools.slice(0, -1), { ...last, cache_control: { type: "ephemeral" } }];
+  return [...tools.slice(0, -1), { ...last, cache_control: { type: 'ephemeral' } }];
 }
 
 /**
@@ -206,12 +206,12 @@ export function withToolCacheBreakpoint(tools: Anthropic.Tool[]): Anthropic.Tool
 export function withMessageCacheBreakpoint(messages: MessageParam[]): MessageParam[] {
   if (messages.length === 0) return messages;
   const last = messages[messages.length - 1]!;
-  if (typeof last.content !== "string") return messages;
+  if (typeof last.content !== 'string') return messages;
   return [
     ...messages.slice(0, -1),
     {
       ...last,
-      content: [{ type: "text", text: last.content, cache_control: { type: "ephemeral" } }],
+      content: [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }],
     },
   ];
 }
@@ -224,7 +224,7 @@ const RETRY_BASE_DELAY_MS = 800;
 
 /** 流式空闲超时（ms）：超过该时长没有新 chunk 就 abort——防 API 半挂时会话永久挂死 */
 export const IDLE_TIMEOUT_MS = (() => {
-  const n = Number(process.env.B_CODE_HTTP_TIMEOUT ?? "120000");
+  const n = Number(process.env.B_CODE_HTTP_TIMEOUT ?? '120000');
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 })();
 
@@ -271,7 +271,7 @@ function applyOpenAIDelta(ctx: OpenAIStreamCtx, delta: any): void {
   // OpenAI 的 tool_calls 按 index 分多个 chunk 到达，逐块拼接
   for (const tc of delta.tool_calls ?? []) {
     const idx: number = tc.index ?? 0;
-    const entry = ctx.toolMap.get(idx) ?? { id: `call_${idx}`, name: "", args: "" };
+    const entry = ctx.toolMap.get(idx) ?? { id: `call_${idx}`, name: '', args: '' };
     ctx.toolMap.set(idx, entry);
     if (tc.id) entry.id = tc.id;
     if (tc.function?.name) entry.name = tc.function.name; // name 整块到达，覆盖式
@@ -280,9 +280,7 @@ function applyOpenAIDelta(ctx: OpenAIStreamCtx, delta: any): void {
 }
 
 function finishOpenAIStream(ctx: OpenAIStreamCtx): ModelOutput {
-  const toolCalls = [...ctx.toolMap.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, v]) => v);
+  const toolCalls = [...ctx.toolMap.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
   return fromOpenAIResponse({
     choices: [
       {
@@ -290,7 +288,7 @@ function finishOpenAIStream(ctx: OpenAIStreamCtx): ModelOutput {
           content: ctx.content || null,
           tool_calls: toolCalls.map((t) => ({
             id: t.id,
-            type: "function",
+            type: 'function',
             function: { name: t.name, arguments: t.args },
           })),
         },
@@ -304,9 +302,9 @@ function finishOpenAIStream(ctx: OpenAIStreamCtx): ModelOutput {
 /** 逐行喂给 SSE 解析器：多块 TCP 到达时 buffer 残尾，下一段续接 */
 function feedSSELine(ctx: OpenAIStreamCtx, line: string): void {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("data:")) return;
+  if (!trimmed.startsWith('data:')) return;
   const data = trimmed.slice(5).trim();
-  if (data === "[DONE]") return;
+  if (data === '[DONE]') return;
   let chunk: any;
   try {
     chunk = JSON.parse(data);
@@ -328,10 +326,10 @@ async function streamOpenAISSE(
   resp: Awaited<ReturnType<typeof undiciFetch>>,
   onText?: (delta: string) => void,
 ): Promise<ModelOutput> {
-  const ctx: OpenAIStreamCtx = { content: "", toolMap: new Map(), onText };
+  const ctx: OpenAIStreamCtx = { content: '', toolMap: new Map(), onText };
   const reader = resp.body!.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let buffer = '';
   let idleTimer: NodeJS.Timeout | null = null;
   let timedOut = false;
 
@@ -352,8 +350,8 @@ async function streamOpenAISSE(
       armIdle(); // 有数据到达 → 重置空闲计时
       if (value) {
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // 残尾留待下段
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? ''; // 残尾留待下段
         for (const line of lines) feedSSELine(ctx, line);
       }
     }
@@ -369,19 +367,19 @@ async function streamOpenAISSE(
 
 /** OpenAI 兼容后端：SSE 流式 + 边界转换，零 SDK 依赖（fetch 直连） */
 export class OpenAIBackend implements ModelBackend {
-  readonly kind = "openai-compatible";
+  readonly kind = 'openai-compatible';
 
   async call(input: ModelInput): Promise<ModelOutput> {
     const systemText = flattenSystemBlocks(input.system);
     const resp = await fetchWithRetry(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model: input.model,
-        messages: [{ role: "system", content: systemText }, ...toOpenAIMessages(input.messages)],
+        messages: [{ role: 'system', content: systemText }, ...toOpenAIMessages(input.messages)],
         tools: toOpenAITools(input.tools),
         stream: true,
         // 流式末尾回传 usage 块（不支持的兼容服务会忽略该字段，优雅降级）
@@ -393,7 +391,7 @@ export class OpenAIBackend implements ModelBackend {
     }
 
     // 兼容性：部分 OpenAI 兼容服务即使请求 stream:true 也返回普通 JSON → 非流式降级
-    const isSSE = (resp.headers.get("content-type") ?? "").includes("text/event-stream");
+    const isSSE = (resp.headers.get('content-type') ?? '').includes('text/event-stream');
     if (!isSSE) {
       return fromOpenAIResponse(JSON.parse(await resp.text()));
     }
@@ -404,13 +402,13 @@ export class OpenAIBackend implements ModelBackend {
 
 /** Anthropic 原生后端：官方 SDK 流式（ANTHROPIC_BASE_URL 可自定义端点） */
 export class AnthropicBackend implements ModelBackend {
-  readonly kind = "anthropic";
+  readonly kind = 'anthropic';
   private client = (() => {
     const baseURL = process.env.ANTHROPIC_BASE_URL;
     return new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
       // SDK 走 fetch；注入代理穿透的包装，保持双后端行为一致
-      fetch: proxiedFetch as unknown as ClientOptions["fetch"],
+      fetch: proxiedFetch as unknown as ClientOptions['fetch'],
       ...(baseURL ? { baseURL } : {}),
     });
   })();
@@ -418,14 +416,14 @@ export class AnthropicBackend implements ModelBackend {
   async call(input: ModelInput): Promise<ModelOutput> {
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new Error(
-        "[b-code] Missing ANTHROPIC_API_KEY in .env (or set OPENAI_API_KEY + OPENAI_BASE_URL for a compatible backend)",
+        '[b-code] Missing ANTHROPIC_API_KEY in .env (or set OPENAI_API_KEY + OPENAI_BASE_URL for a compatible backend)',
       );
     }
     // B_CODE_THINKING 设为正整数时开启 extended thinking（预算 token 数）。
     // 默认不启用，避免 token 成本/行为突变；供应商本身回 thinking 时纯管道也能显示。
-    const thinkingBudget = Number(process.env.B_CODE_THINKING ?? "");
+    const thinkingBudget = Number(process.env.B_CODE_THINKING ?? '');
     // B_CODE_MAX_TOKENS：输出上限可配（默认 4096；无效值回退默认）
-    const maxTokens = Number(process.env.B_CODE_MAX_TOKENS ?? "4096");
+    const maxTokens = Number(process.env.B_CODE_MAX_TOKENS ?? '4096');
     const stream = this.client.messages.stream({
       model: input.model,
       max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
@@ -434,15 +432,15 @@ export class AnthropicBackend implements ModelBackend {
       tools: withToolCacheBreakpoint(input.tools),
       messages: withMessageCacheBreakpoint(input.messages),
       ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
-        ? { thinking: { type: "enabled" as const, budget_tokens: thinkingBudget } }
+        ? { thinking: { type: 'enabled' as const, budget_tokens: thinkingBudget } }
         : {}),
     });
     if (input.onText) {
-      stream.on("text", (text) => input.onText!(text));
+      stream.on('text', (text) => input.onText!(text));
     }
     if (input.onThinking) {
       // SDK MessageStream 对 thinking_delta 事件 emit 这个签名：(delta, snapshot)
-      stream.on("thinking", (delta) => input.onThinking!(delta));
+      stream.on('thinking', (delta) => input.onThinking!(delta));
     }
     const reply = await stream.finalMessage();
     return {
@@ -463,5 +461,4 @@ export function createBackend(): ModelBackend {
  * 默认后端入口（向后兼容的薄壳：策略可替换的最小体现）。
  * Agent 默认用它；测试/高级用法可注入任意 ModelInput → ModelOutput 函数。
  */
-export const callModel = (input: ModelInput): Promise<ModelOutput> =>
-  createBackend().call(input);
+export const callModel = (input: ModelInput): Promise<ModelOutput> => createBackend().call(input);

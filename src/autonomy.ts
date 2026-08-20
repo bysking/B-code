@@ -1,4 +1,4 @@
-import type { ModelInput, ModelOutput } from "./backend.js";
+import type { ModelInput, ModelOutput } from './backend.js';
 
 /**
  * 自治三件套（施工图 §13）：
@@ -17,7 +17,7 @@ export interface GoalVerdict {
 }
 
 const GOAL_SYSTEM =
-  "You are a goal evaluator. Given a condition and a transcript, " +
+  'You are a goal evaluator. Given a condition and a transcript, ' +
   "reply exactly 'MET' if the condition is satisfied, " +
   "'NOT_MET: <short reason>' if not, " +
   "or 'NOT_MET impossible: <reason>' if it can never be satisfied.";
@@ -30,21 +30,19 @@ export async function evaluateGoal(
 ): Promise<GoalVerdict> {
   const out = await call({
     model,
-    system: [{ type: "text", text: GOAL_SYSTEM }],
+    system: [{ type: 'text', text: GOAL_SYSTEM }],
     tools: [],
-    messages: [{ role: "user", content: `Condition: ${condition}\n\nTranscript so far:\n${transcript}` }],
+    messages: [{ role: 'user', content: `Condition: ${condition}\n\nTranscript so far:\n${transcript}` }],
   });
   const text = extractText(out).trim();
-  if (text === "MET" || text.startsWith("MET")) return { met: true, reason: "", impossible: false };
-  const impossible = text.startsWith("NOT_MET impossible");
-  const reason = text
-    .replace(/^NOT_MET impossible:?\s*/i, "")
-    .replace(/^NOT_MET:?\s*/i, "");
+  if (text === 'MET' || text.startsWith('MET')) return { met: true, reason: '', impossible: false };
+  const impossible = text.startsWith('NOT_MET impossible');
+  const reason = text.replace(/^NOT_MET impossible:?\s*/i, '').replace(/^NOT_MET:?\s*/i, '');
   return { met: false, reason, impossible };
 }
 
 const CLASSIFIER_SYSTEM =
-  "You are an action classifier. Given a tool call and the conversation transcript, " +
+  'You are an action classifier. Given a tool call and the conversation transcript, ' +
   "reply 'ALLOW' if the action is safe, or 'BLOCK: <reason>' if it looks dangerous.";
 
 export interface ActionVerdict {
@@ -61,37 +59,36 @@ export async function classifyAction(
 ): Promise<ActionVerdict> {
   const out = await call({
     model,
-    system: [{ type: "text", text: CLASSIFIER_SYSTEM }],
+    system: [{ type: 'text', text: CLASSIFIER_SYSTEM }],
     tools: [],
-    messages: [{ role: "user", content: `Tool: ${name}(${JSON.stringify(input)})\n\nTranscript:\n${transcript}` }],
+    messages: [
+      { role: 'user', content: `Tool: ${name}(${JSON.stringify(input)})\n\nTranscript:\n${transcript}` },
+    ],
   });
   const text = extractText(out).trim();
-  if (text === "ALLOW" || text.startsWith("ALLOW")) return { allow: true, reason: "" };
-  return { allow: false, reason: text.replace(/^BLOCK:?\s*/i, "") };
+  if (text === 'ALLOW' || text.startsWith('ALLOW')) return { allow: true, reason: '' };
+  return { allow: false, reason: text.replace(/^BLOCK:?\s*/i, '') };
 }
 
 /** 渲染消息数组为纯文本（tool 块不展开细节——脱敏，评估器/分类器只看"谁说了什么"）。
  * 窗口化：保留头部 3 条 + 最近 maxItems 条，中间省略——长会话下避免 transcript
  * 随会话线性膨胀（每次 classify 都序列化全部历史会烧 token）。 */
-export function renderTranscript(
-  messages: { role: string; content: unknown }[],
-  maxItems = 40,
-): string {
+export function renderTranscript(messages: { role: string; content: unknown }[], maxItems = 40): string {
   const render = (m: { role: string; content: unknown }): string =>
-    `${m.role}: ${typeof m.content === "string" ? m.content : "[tool call / result]"}`;
+    `${m.role}: ${typeof m.content === 'string' ? m.content : '[tool call / result]'}`;
 
   if (messages.length <= maxItems) {
-    return messages.map(render).join("\n");
+    return messages.map(render).join('\n');
   }
   const head = messages.slice(0, 3).map(render);
   const tail = messages.slice(-maxItems).map(render);
   const omitted = messages.length - 3 - maxItems;
-  return [...head, `… (${omitted} earlier messages omitted)`, ...tail].join("\n");
+  return [...head, `… (${omitted} earlier messages omitted)`, ...tail].join('\n');
 }
 
 function extractText(out: ModelOutput): string {
   return out.content
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
     .map((b) => b.text)
-    .join("");
+    .join('');
 }

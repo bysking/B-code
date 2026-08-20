@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import React, { useEffect, useRef, useState } from 'react';
+import { Box, Text, useInput } from 'ink';
 
 /**
  * 自定义文本输入 — 替代 ink-text-input。
@@ -78,7 +78,7 @@ export function SimpleTextInput({
 
   // 渲染文本 + 光标
   const before = value.slice(0, cursor);
-  const cursorChar = value[cursor] || " ";
+  const cursorChar = value[cursor] || ' ';
   const after = value.slice(cursor + 1);
 
   return (
@@ -86,9 +86,7 @@ export function SimpleTextInput({
       {before}
       <Text inverse>{cursorChar}</Text>
       {after}
-      {cursor >= value.length && !value && placeholder ? (
-        <Text dimColor>{placeholder}</Text>
-      ) : null}
+      {cursor >= value.length && !value && placeholder ? <Text dimColor>{placeholder}</Text> : null}
     </Text>
   );
 }
@@ -111,14 +109,14 @@ export function InputBox({
   return (
     <Box>
       <Text color="cyan" bold>
-        {"> "}
+        {'> '}
       </Text>
       <SimpleTextInput
         value={value}
         onChange={onChange}
         onSubmit={onSubmit}
         focus={!disabled}
-        placeholder={disabled ? "……" : undefined}
+        placeholder={disabled ? '……' : undefined}
       />
     </Box>
   );

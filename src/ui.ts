@@ -14,14 +14,14 @@ export interface SpinnerLike {
   stop(): void;
 }
 
-const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const FRAME_MS = 80;
-const CLEAR = "\r\x1b[K"; // 擦除当前行并回到行首
+const CLEAR = '\r\x1b[K'; // 擦除当前行并回到行首
 
 export class Spinner implements SpinnerLike {
   private timer: ReturnType<typeof setInterval> | null = null;
   private frame = 0;
-  private msg = "";
+  private msg = '';
   private active = false; // stop 幂等闸：未 start 或已 stop 时不写入
   private startedAt = 0;
 
@@ -61,7 +61,7 @@ export class Spinner implements SpinnerLike {
 
   private render(): void {
     const elapsed = Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000));
-    const suffix = this.startedAt && elapsed > 0 ? ` (${elapsed}s)` : "";
+    const suffix = this.startedAt && elapsed > 0 ? ` (${elapsed}s)` : '';
     this.stream.write(`${CLEAR}${FRAMES[this.frame % FRAMES.length]} ${this.msg}${suffix}`);
   }
 }

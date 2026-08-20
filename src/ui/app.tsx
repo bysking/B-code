@@ -1,22 +1,22 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Box, Static, Text, useInput } from "ink";
-import type { AppController, SlashItem, ToolCallDisplay } from "./controller.js";
-import type { Mode } from "../permissions.js";
+import React, { useEffect, useRef, useState } from 'react';
+import { Box, Static, Text, useInput } from 'ink';
+import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
+import type { Mode } from '../permissions.js';
 
 /** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
 function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
   return ctrl.turns.flatMap((t) => t.tools);
 }
-import { MessageList } from "./message-list.js";
-import { Confirm } from "./confirm.js";
-import { Wizard } from "./wizard.js";
-import { SlashMenu } from "./slash-menu.js";
-import { InputBox } from "./input-box.js";
-import { OutputPanel } from "./output-panel.js";
-import { TaskPanel } from "./task-panel.js";
-import { AskInput } from "./ask-input.js";
-import { ModeBar } from "./mode-bar.js";
-import { buildSlash } from "./slash.js";
+import { MessageList } from './message-list.js';
+import { Confirm } from './confirm.js';
+import { Wizard } from './wizard.js';
+import { SlashMenu } from './slash-menu.js';
+import { InputBox } from './input-box.js';
+import { OutputPanel } from './output-panel.js';
+import { TaskPanel } from './task-panel.js';
+import { AskInput } from './ask-input.js';
+import { ModeBar } from './mode-bar.js';
+import { buildSlash } from './slash.js';
 
 /**
  * ink 根组件：控制器状态 → 渲染树。
@@ -44,13 +44,13 @@ export function App({
   // 终端尺寸变化：重估流式防溢出预算（live 帧超终端行数会触发 Ink 整屏清屏，滚动位置被重置）
   useEffect(() => {
     const onResize = () => ctrl.handleResize();
-    process.stdout.on("resize", onResize);
+    process.stdout.on('resize', onResize);
     return () => {
-      process.stdout.off("resize", onResize);
+      process.stdout.off('resize', onResize);
     };
   }, [ctrl]);
 
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState('');
   // 补全时 ++ 强制 TextInput 重挂：让光标回到新文本末尾（"补全词 + 空格"之后）
   const [inputNonce, setInputNonce] = useState(0);
   // 双 Ctrl+C：第一次提示，第二次真正退出（2s 内有效）
@@ -61,19 +61,19 @@ export function App({
 
   useInput((_input, key) => {
     // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
-    if (key.ctrl && _input === "c") {
+    if (key.ctrl && _input === 'c') {
       if (ctrl.askState) {
         // Ctrl+C 取消审批 = 拒绝（Yes 已在第一项，不能用 options[0]）
-        const deny = ctrl.askState.options.find((o) => o.value === "no");
-        ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? "");
+        const deny = ctrl.askState.options.find((o) => o.value === 'no');
+        ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? '');
         return;
       }
       if (ctrl.askWizardState) {
-        ctrl.resolveAskWizard("__cancel__");
+        ctrl.resolveAskWizard('__cancel__');
         return;
       }
       if (ctrl.askTextState) {
-        ctrl.resolveAskText("", true);
+        ctrl.resolveAskText('', true);
         return;
       }
       if (quitArmed) {
@@ -81,12 +81,11 @@ export function App({
         return;
       }
       setQuitArmed(true);
-      ctrl.pushOutput("(再按一次 Ctrl+C 退出)");
       setTimeout(() => setQuitArmed(false), 2000);
       return;
     }
     // Ctrl+O：切换工具输出面板（再次按下或 Esc 关闭）
-    if (key.ctrl && _input === "o") {
+    if (key.ctrl && _input === 'o') {
       ctrl.toggleOutputPanel();
       return;
     }
@@ -102,7 +101,7 @@ export function App({
       if (hist.length > 0 && historyIdx < hist.length - 1) {
         const newIdx = historyIdx + 1;
         setHistoryIdx(newIdx);
-        setInput(hist[hist.length - 1 - newIdx] ?? "");
+        setInput(hist[hist.length - 1 - newIdx] ?? '');
         setInputNonce((n) => n + 1); // 重挂 TextInput 让光标到末尾
       }
       return;
@@ -112,11 +111,11 @@ export function App({
       if (historyIdx > 0) {
         const newIdx = historyIdx - 1;
         setHistoryIdx(newIdx);
-        setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? "");
+        setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? '');
         setInputNonce((n) => n + 1);
       } else if (historyIdx === 0) {
         setHistoryIdx(-1);
-        setInput("");
+        setInput('');
         setInputNonce((n) => n + 1);
       }
       return;
@@ -127,7 +126,7 @@ export function App({
       return;
     }
     if (key.escape && ctrl.askTextState) {
-      ctrl.resolveAskText("", true);
+      ctrl.resolveAskText('', true);
       return;
     }
     if (key.escape && !ctrl.askState && !ctrl.askWizardState && ctrl.busy !== null) {
@@ -139,7 +138,7 @@ export function App({
     setInput(value);
     // 用户手动编辑时退出历史导航态
     if (historyIdx !== -1) setHistoryIdx(-1);
-    if (value.startsWith("/")) ctrl.openSlash(value.slice(1));
+    if (value.startsWith('/')) ctrl.openSlash(value.slice(1));
     else if (ctrl.slashOpen) ctrl.closeSlash();
   };
 
@@ -158,7 +157,7 @@ export function App({
     const hist = inputHistory.current;
     if (hist[hist.length - 1] !== trimmed) hist.push(trimmed);
     setHistoryIdx(-1);
-    setInput("");
+    setInput('');
     ctrl.closeSlash();
     onSubmit(trimmed);
   };
@@ -169,7 +168,10 @@ export function App({
         {/* 固定输出行走 <Static>：只追加不重渲染，避免 (resumed…)/(done) 及 /skills、/mcp
             等大段输出撑大 live 区触发 Ink 的 overflow 整屏清屏（连 scrollback 一起清）。 */}
         <Static
-          items={[...(initialOutput ?? []).map((l, i) => ({ k: `i${i}`, text: l })), ...ctrl.output.map((l, i) => ({ k: `o${i}`, text: l }))]}
+          items={[
+            ...(initialOutput ?? []).map((l, i) => ({ k: `i${i}`, text: l })),
+            ...ctrl.output.map((l, i) => ({ k: `o${i}`, text: l })),
+          ]}
         >
           {({ k, text }) => (
             <Text key={k} dimColor>
@@ -193,10 +195,7 @@ export function App({
       ) : null}
 
       {ctrl.askTextState ? (
-        <AskInput
-          question={ctrl.askTextState.question}
-          onSubmit={(v) => ctrl.resolveAskText(v)}
-        />
+        <AskInput question={ctrl.askTextState.question} onSubmit={(v) => ctrl.resolveAskText(v)} />
       ) : null}
 
       {ctrl.slashOpen ? (
@@ -212,6 +211,12 @@ export function App({
       {ctrl.outputPanel ? <OutputPanel tools={allToolOutputs(ctrl)} /> : null}
 
       {ctrl.task ? <TaskPanel task={ctrl.task} /> : null}
+
+      {quitArmed ? (
+        <Box>
+          <Text dimColor>(再按一次 Ctrl+C 退出)</Text>
+        </Box>
+      ) : null}
 
       <Box flexDirection="column">
         <InputBox

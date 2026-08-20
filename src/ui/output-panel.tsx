@@ -1,7 +1,7 @@
-import React from "react";
-import { Box, Text } from "ink";
-import type { ToolCallDisplay } from "./controller.js";
-import { estimateLines, terminalRows } from "./scroll-budget.js";
+import React from 'react';
+import { Box, Text } from 'ink';
+import type { ToolCallDisplay } from './controller.js';
+import { estimateLines, terminalRows } from './scroll-budget.js';
 
 /** 面板中单条输出展示上限（避免长输出撑爆屏幕） */
 const MAX_OUTPUT = 2000;
@@ -13,26 +13,20 @@ const MAX_OUTPUT = 2000;
  * 一起清），用户向上滚动的视图会被弹回顶部——超出预算的较早输出直接省略并提示。
  */
 export function OutputPanel({ tools }: { tools: ToolCallDisplay[] }) {
-  const withOutput = tools.filter((t) => t.status === "done");
+  const withOutput = tools.filter((t) => t.status === 'done');
   const budget = Math.max(terminalRows() - 12, 8);
   const shown: typeof withOutput = [];
   let used = 3; // 边框 + 标题行
   for (const t of withOutput) {
-    const out = t.output ? t.output.slice(0, MAX_OUTPUT) : "";
-    const lines = 1 + estimateLines(out || "(no captured output)");
+    const out = t.output ? t.output.slice(0, MAX_OUTPUT) : '';
+    const lines = 1 + estimateLines(out || '(no captured output)');
     if (used + lines > budget && shown.length > 0) break;
     shown.push(t);
     used += lines;
   }
   const omitted = withOutput.length - shown.length;
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor="magenta"
-      paddingX={1}
-      flexGrow={1}
-    >
+    <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} flexGrow={1}>
       <Text bold color="magenta">
         ⚙ 工具输出（Ctrl+O / Esc 关闭）
       </Text>
@@ -50,7 +44,7 @@ export function OutputPanel({ tools }: { tools: ToolCallDisplay[] }) {
                 ? t.output.length > MAX_OUTPUT
                   ? `${t.output.slice(0, MAX_OUTPUT)}\n… (truncated)`
                   : t.output
-                : "(no captured output)"}
+                : '(no captured output)'}
             </Text>
           </Box>
         ))

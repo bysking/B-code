@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import type { Registry } from "./registry.js";
-import { resolveMcpConfigs } from "./mcp-config.js";
-import { log } from "./utils/log.js";
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import type { Registry } from './registry.js';
+import { resolveMcpConfigs } from './mcp-config.js';
+import { log } from './utils/log.js';
 
 /**
  * MCP 客户端 + mcp-loader（施工图 §12）
@@ -26,7 +26,7 @@ export interface McpConnection {
   close(): void;
 }
 
-const PROTOCOL_VERSION = "2024-11-05";
+const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 // MCP server 是长驻子进程，若不 kill 会拖住主进程事件循环，导致 chat 完成后进程永不退出。
@@ -37,7 +37,7 @@ let cleanupInstalled = false;
 function installExitCleanup(): void {
   if (cleanupInstalled) return;
   cleanupInstalled = true;
-  process.on("beforeExit", closeAllMcpConnections);
+  process.on('beforeExit', closeAllMcpConnections);
 }
 
 /** 显式关闭全部已连接 server（业务终点调用：one-shot 结束、REPL 关闭） */
@@ -67,17 +67,17 @@ export async function connectMcp(
 
   // stdio 声明为 pipe 后 stdout/stdin 类型非空，无需强转
   const proc = spawn(command, args, {
-    stdio: ["pipe", "pipe", "inherit"],
+    stdio: ['pipe', 'pipe', 'inherit'],
     env: env ? { ...process.env, ...env } : process.env,
   });
 
   // spawn 失败（ENOENT 等）是异步 error 事件，必须有人接，否则 uncaughtException 炸整个进程
-  const spawnError = new Promise((_, reject) => proc.once("error", reject));
-  proc.on("error", () => {}); // 后续错误（如进程被杀）静默收尾
+  const spawnError = new Promise((_, reject) => proc.once('error', reject));
+  proc.on('error', () => {}); // 后续错误（如进程被杀）静默收尾
   try {
-    await Promise.race([spawnError, new Promise<void>((r) => proc.once("spawn", r))]);
+    await Promise.race([spawnError, new Promise<void>((r) => proc.once('spawn', r))]);
   } catch (err) {
-    proc.off("error", () => {});
+    proc.off('error', () => {});
     throw err;
   }
 
@@ -90,10 +90,10 @@ export async function connectMcp(
     for (const p of pending.values()) p.reject(err);
     pending.clear();
   };
-  proc.on("exit", (code) => failAll(new Error(`MCP server exited with code ${code}`)));
-  proc.on("error", (err) => failAll(err));
+  proc.on('exit', (code) => failAll(new Error(`MCP server exited with code ${code}`)));
+  proc.on('error', (err) => failAll(err));
 
-  rl.on("line", (line) => {
+  rl.on('line', (line) => {
     try {
       const msg = JSON.parse(line);
       if (msg.id && pending.has(msg.id)) {
@@ -123,35 +123,31 @@ export async function connectMcp(
           reject(err);
         },
       });
-      proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     });
 
-  await request("initialize", {
+  await request('initialize', {
     protocolVersion: PROTOCOL_VERSION,
     capabilities: {},
-    clientInfo: { name: "b-code", version: "0.1.0" },
+    clientInfo: { name: 'b-code', version: '0.1.0' },
   });
-  proc.stdin.write(
-    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
-  );
+  proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 
-  const listed = await request("tools/list");
+  const listed = await request('tools/list');
   const tools: McpToolInfo[] = (listed.result?.tools ?? []).map((t: any) => ({
     name: t.name,
-    description: t.description ?? "",
-    inputSchema: t.inputSchema ?? { type: "object", properties: {} },
+    description: t.description ?? '',
+    inputSchema: t.inputSchema ?? { type: 'object', properties: {} },
   }));
 
   const conn: McpConnection = {
     tools,
     async callTool(name, callArgs) {
-      const resp = await request("tools/call", { name, arguments: callArgs });
+      const resp = await request('tools/call', { name, arguments: callArgs });
       // MCP 返回 content 块数组；取文本，纯结构化内容 JSON 兜底
       const content = resp.result?.content;
       if (Array.isArray(content)) {
-        return content
-          .map((c: any) => (c.type === "text" ? c.text : JSON.stringify(c)))
-          .join("\n");
+        return content.map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c))).join('\n');
       }
       return JSON.stringify(resp.result);
     },
@@ -187,9 +183,9 @@ export async function loadMcpServers(registry: Registry, cwd = process.cwd()): P
             name: prefixed,
             description: tool.description || `[MCP:${serverName}] ${tool.name}`,
             inputSchema: tool.inputSchema,
-            kind: "mcp",
+            kind: 'mcp',
             // 外部工具默认 fail-closed → confirm；读类 server 可在 mcp.json 里显式标注
-            mode: cfg.mode === "read" ? "read" : "external",
+            mode: cfg.mode === 'read' ? 'read' : 'external',
             handler: async (input) => conn.callTool(tool.name, input),
           });
         }

@@ -1,7 +1,7 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import type { ModelInput, ModelOutput } from "./backend.js";
-import type { Mode } from "./permissions.js";
-import type { FileStore } from "./file-store.js";
+import type Anthropic from '@anthropic-ai/sdk';
+import type { ModelInput, ModelOutput } from './backend.js';
+import type { Mode } from './permissions.js';
+import type { FileStore } from './file-store.js';
 
 /**
  * 统一注册表（施工图 §2.4.3 —— 架构可扩展性的核心）
@@ -12,7 +12,7 @@ import type { FileStore } from "./file-store.js";
  * 新增能力 = 实现接口 + register 一行，循环代码一行不改。
  */
 
-export type ToolMode = "read" | "write" | "shell" | "external";
+export type ToolMode = 'read' | 'write' | 'shell' | 'external';
 
 export interface UserOption {
   label: string;
@@ -48,7 +48,7 @@ export interface MountPoint {
   description: string;
   inputSchema: Record<string, unknown>;
   handler(input: Record<string, any>, ctx: RuntimeContext): Promise<string> | string;
-  kind?: "builtin" | "mcp" | "subagent";
+  kind?: 'builtin' | 'mcp' | 'subagent';
   /** 权限层用：read 放行 / write·shell 需确认 / shell 走危险检测 / external 归类 */
   mode?: ToolMode;
   /** 默认不发给模型（省 token）；plan 模式等需要时放开 */
@@ -77,9 +77,7 @@ export class Registry {
 
   /** 模型可见的工具 schema（deferred 默认排除；includeDeferred 供 plan 等模式放开） */
   toolsSchema(includeDeferred = false): Anthropic.Tool[] {
-    return this.list(
-      (mp) => (mp.deferred ? includeDeferred : true),
-    ).map((mp) => ({
+    return this.list((mp) => (mp.deferred ? includeDeferred : true)).map((mp) => ({
       name: mp.name,
       description: mp.description,
       input_schema: mp.inputSchema as Anthropic.Tool.InputSchema,

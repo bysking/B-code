@@ -1,6 +1,6 @@
-import { resolve } from "node:path";
-import type { ContextPolicy } from "./types.js";
-import type { FileSnapshot } from "./file-store.js";
+import { resolve } from 'node:path';
+import type { ContextPolicy } from './types.js';
+import type { FileSnapshot } from './file-store.js';
 
 /**
  * 上下文管理（施工图 P3 §7）
@@ -36,7 +36,7 @@ export const COMPACT_THRESHOLD = 45; // 条数触发（兜底）：超过 45 条
 export const KEEP_RECENT = 5; // 保留最近 5 条不压缩
 
 /** 模型上下文窗口（token，env 可配：B_CODE_CONTEXT_WINDOW；默认 100 万） */
-export const CONTEXT_WINDOW_TOKENS = Number(process.env.B_CODE_CONTEXT_WINDOW ?? "1000000");
+export const CONTEXT_WINDOW_TOKENS = Number(process.env.B_CODE_CONTEXT_WINDOW ?? '1000000');
 /** 估算输入达窗口比例的触发线。40% 留出余量：字符估算偏低 + 压缩摘要调用要读旧消息 */
 export const COMPACT_BUDGET_RATIO = 0.4;
 
@@ -67,49 +67,49 @@ export function renderCompaction(
   const toolUses = new Map<string, { name: string; filePath?: string }>();
   const lines: string[] = [];
   for (const m of messages) {
-    if (typeof m.content === "string") {
+    if (typeof m.content === 'string') {
       lines.push(`${m.role}: ${m.content}`);
       continue;
     }
     const blocks = m.content as Array<Record<string, any>>;
     const parts: string[] = [];
     for (const b of blocks) {
-      if (b?.type === "tool_use") {
+      if (b?.type === 'tool_use') {
         toolUses.set(b.id, { name: b.name, filePath: b.input?.file_path });
         parts.push(`[tool call ${b.name}]`);
-      } else if (b?.type === "tool_result") {
+      } else if (b?.type === 'tool_result') {
         const tu = toolUses.get(b.tool_use_id);
         const path = tu?.filePath;
         const snap = path && store ? store.get(resolve(path)) : undefined;
-        if (tu?.name === "read_file" && snap) {
-          parts.push(`read ${path} (${snap.content.split("\n").length} 行, hash ${snap.hash})`);
+        if (tu?.name === 'read_file' && snap) {
+          parts.push(`read ${path} (${snap.content.split('\n').length} 行, hash ${snap.hash})`);
         } else {
-          parts.push("[tool result]");
+          parts.push('[tool result]');
         }
       }
     }
-    lines.push(`${m.role}: ${parts.join(" | ")}`);
+    lines.push(`${m.role}: ${parts.join(' | ')}`);
   }
-  return lines.join("\n");
+  return lines.join('\n');
 }
 
 /** 确定性"已读文件索引"：追加到摘要末尾，让模型知道可用的已读资源（不依赖摘要模型自觉） */
 export function buildFileIndex(store: CompactionStore): string {
   const rows = store.entries().map(([path, snap]) => {
-    const lines = snap.content.split("\n").length;
-    const state = snap.dirty ? " (changed since read, re-verify with file_content)" : "";
+    const lines = snap.content.split('\n').length;
+    const state = snap.dirty ? ' (changed since read, re-verify with file_content)' : '';
     return `- ${path}: ${lines} 行, hash ${snap.hash}${state}`;
   });
-  return rows.length ? `\n\n# Read files this session\n${rows.join("\n")}` : "";
+  return rows.length ? `\n\n# Read files this session\n${rows.join('\n')}` : '';
 }
 
 /** user 消息是否为 tool_result 块（其配对 tool_use 必须在前一条 assistant 消息里） */
 function isToolResultMessage(m: { role: string; content: unknown }): boolean {
   return (
-    m.role === "user" &&
+    m.role === 'user' &&
     Array.isArray(m.content) &&
     m.content.some(
-      (b) => typeof b === "object" && b !== null && (b as { type?: string }).type === "tool_result",
+      (b) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_result',
     )
   );
 }
@@ -147,7 +147,7 @@ export async function maybeCompact<T extends { role: string; content: unknown }>
   if (!summary) return messages; // 摘要失败则保持原样，宁可爆窗也不丢上下文
 
   const summaryMessage = {
-    role: "user",
+    role: 'user',
     content: `[Summary of earlier conversation]\n${summary}`,
   } as unknown as T;
 

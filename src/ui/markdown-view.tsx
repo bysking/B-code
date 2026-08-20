@@ -1,8 +1,8 @@
-import React from "react";
-import { Text } from "ink";
-import { marked } from "marked";
-import TerminalRenderer from "marked-terminal";
-import { latexToUnicode } from "@devhub-io/latex-to-unicode";
+import React from 'react';
+import { Text } from 'ink';
+import { marked } from 'marked';
+import TerminalRenderer from 'marked-terminal';
+import { latexToUnicode } from '@devhub-io/latex-to-unicode';
 
 /**
  * markdown 渲染：marked + marked-terminal。
@@ -43,8 +43,8 @@ function stripBoxed(text: string): string {
     let end = start;
     while (depth > 0 && end < result.length - 1) {
       end++;
-      if (result[end] === "{") depth++;
-      else if (result[end] === "}") depth--;
+      if (result[end] === '{') depth++;
+      else if (result[end] === '}') depth--;
     }
     // 替换 \boxed{...} 为内部内容
     result = result.slice(0, m.index) + result.slice(start + 1, end) + result.slice(end + 1);
@@ -75,8 +75,8 @@ function preprocessMath(text: string): string {
   });
 
   // 3. 独行 [ ... ] 显示数学（无反斜杠简写）→ 围栏代码块
-  result = result.replace(/^\[\s*$/gm, "```");
-  result = result.replace(/^\]\s*$/gm, "```");
+  result = result.replace(/^\[\s*$/gm, '```');
+  result = result.replace(/^\]\s*$/gm, '```');
 
   // 4. \( ... \) 行内数学 → 反引号行内代码
   result = result.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner: string) => {

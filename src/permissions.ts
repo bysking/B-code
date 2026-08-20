@@ -11,11 +11,11 @@
  * 这样 MCP/未来工具接入时权限自动正确，注册表是唯一真相源。
  */
 
-import type { MountPoint } from "./registry.js";
-import type { PermissionPolicy } from "./types.js";
+import type { MountPoint } from './registry.js';
+import type { PermissionPolicy } from './types.js';
 
-export type Permission = "allow" | "deny" | "confirm";
-export type Mode = "default" | "plan" | "bypass" | "auto";
+export type Permission = 'allow' | 'deny' | 'confirm';
+export type Mode = 'default' | 'plan' | 'bypass' | 'auto';
 
 /** 规则表实现（P7 策略化）：危险命令 + plan 只读 + read 放行 + fail-closed */
 export const rulePermission: PermissionPolicy = {
@@ -24,54 +24,47 @@ export const rulePermission: PermissionPolicy = {
 
 /** 危险命令正则：命中即 deny（连 --yolo 也拦不住） */
 export const DANGEROUS_PATTERNS: RegExp[] = [
-  /\brm\s+-rf\b/,             // 递归删除
-  /\bgit\s+push\b/,           // 推送代码
+  /\brm\s+-rf\b/, // 递归删除
+  /\bgit\s+push\b/, // 推送代码
   /\bgit\s+reset\s+--hard\b/, // 硬重置
-  /\bsudo\b/,                  // 提权
-  /\bmkfs\b/,                  // 格式化磁盘
-  />\s*\/dev\//,              // 写入设备
-  /\bdd\s/,                    // 磁盘操作
-  /\bkill\b/,                  // 杀进程
-  /\breboot\b/,                // 重启
-  /\bshutdown\b/,              // 关机
+  /\bsudo\b/, // 提权
+  /\bmkfs\b/, // 格式化磁盘
+  />\s*\/dev\//, // 写入设备
+  /\bdd\s/, // 磁盘操作
+  /\bkill\b/, // 杀进程
+  /\breboot\b/, // 重启
+  /\bshutdown\b/, // 关机
 ];
 
-export function checkPermission(
-  mp: MountPoint,
-  input: Record<string, any>,
-  mode: Mode,
-): Permission {
+export function checkPermission(mp: MountPoint, input: Record<string, any>, mode: Mode): Permission {
   // ① 自授权工具放行（如 ask_user：它是"与用户对话"，不该再触发一次权限确认）
-  if (mp.selfGranted) return "allow";
+  if (mp.selfGranted) return 'allow';
 
   // ② deny 优先：shell 工具命中危险命令（任何模式绕不过，含 --yolo）
-  if (
-    mp.mode === "shell" &&
-    DANGEROUS_PATTERNS.some((re) => re.test(String(input.command ?? "")))
-  ) {
-    return "deny";
+  if (mp.mode === 'shell' && DANGEROUS_PATTERNS.some((re) => re.test(String(input.command ?? '')))) {
+    return 'deny';
   }
 
   // ② plan 只读契约：非 read 工具全部拦截（allowInPlan 的工具除外，如 write_plan）
-  if (mode === "plan" && mp.mode !== "read" && !mp.allowInPlan) {
-    return "deny";
+  if (mode === 'plan' && mp.mode !== 'read' && !mp.allowInPlan) {
+    return 'deny';
   }
 
   // ③ 只读操作放行
-  if (mp.mode === "read") return "allow";
+  if (mp.mode === 'read') return 'allow';
 
   // ④ fail-closed：write/shell/external/未声明 mode → 需要确认
-  return "confirm";
+  return 'confirm';
 }
 
 /** 会话级白名单键：shell 用命令内容做键（同命令不再问），其他按工具名 */
 export function allowlistKey(mp: MountPoint, input: Record<string, any>): string {
-  return mp.mode === "shell" ? `shell:${String(input.command ?? "")}` : mp.name;
+  return mp.mode === 'shell' ? `shell:${String(input.command ?? '')}` : mp.name;
 }
 
 // ── 放行决策（P7 策略化的落地：agent.chat 里的权限分支收拢到此）────────
 
-import type { ActionVerdict } from "./autonomy.js";
+import type { ActionVerdict } from './autonomy.js';
 
 /** 工具执行放行决策结果 */
 export interface ExecDecision {
@@ -106,21 +99,21 @@ export async function decideExecution(
   const permission = checkPermission(mp, input, ctx.mode);
 
   // ① deny 优先：危险命令任何模式都拦得住（含 --yolo）
-  if (permission === "deny") {
+  if (permission === 'deny') {
     return { allow: false, reason: `Denied: ${mp.name} was blocked by the permission system.` };
   }
   // ② Auto Mode：写/编辑/shell 先过分类器（分类器代替人工确认框）
-  if (ctx.mode === "auto" && (mp.mode === "write" || mp.mode === "shell")) {
+  if (ctx.mode === 'auto' && (mp.mode === 'write' || mp.mode === 'shell')) {
     const verdict = await ctx.classify(mp.name, input);
     return verdict.allow
       ? { allow: true }
       : { allow: false, reason: `Blocked by auto-mode monitor: ${verdict.reason}` };
   }
   // ③ confirm：白名单命中直接放行，否则问用户（bypass 跳过）
-  if (permission === "confirm" && ctx.mode !== "bypass") {
+  if (permission === 'confirm' && ctx.mode !== 'bypass') {
     const key = allowlistKey(mp, input);
     if (ctx.allowlist.has(key)) return { allow: true };
-    const label = mp.mode === "shell" ? String(input.command ?? "") : mp.name;
+    const label = mp.mode === 'shell' ? String(input.command ?? '') : mp.name;
     const ok = await ctx.askUser(`Allow ${label}? (y/n)`);
     if (ok) return { allow: true, remember: true };
     return { allow: false, reason: `Denied: user rejected ${mp.name}.` };

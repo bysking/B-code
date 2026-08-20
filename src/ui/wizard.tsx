@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
-import TextInput from "ink-text-input";
-import type { AskWizardState, WizardStepOption } from "./controller.js";
+import React, { useEffect, useState } from 'react';
+import { Box, Text, useInput } from 'ink';
+import TextInput from 'ink-text-input';
+import type { AskWizardState, WizardStepOption } from './controller.js';
 
 /**
  * 多步向导（参考 Claude Code 的 tab 向导）：
@@ -15,7 +15,7 @@ import type { AskWizardState, WizardStepOption } from "./controller.js";
  *  "→ 完成本步"（最后一步为"✔ 完成并查看汇总"）；Review 汇总每步逗号拼接。
  */
 
-export const CUSTOM_LABEL = "我想自己提供一个不在选项里面的答案";
+export const CUSTOM_LABEL = '我想自己提供一个不在选项里面的答案';
 
 /** 每步导航范围 = 选项数 + 1 个特殊项（单选=自定义 / 多选=完成本步） */
 export function wizardNavTotal(optionCount: number): number {
@@ -23,42 +23,36 @@ export function wizardNavTotal(optionCount: number): number {
 }
 
 export function wizardProgress(step: number, stepCount: number): string {
-  const marks = ["←"];
+  const marks = ['←'];
   for (let i = 0; i < stepCount; i++) {
-    const mark = i < step ? "☒" : i === step ? "●" : "○";
+    const mark = i < step ? '☒' : i === step ? '●' : '○';
     marks.push(`${mark}${i + 1}`);
   }
   marks.push(`✔Submit→`);
-  return marks.join(" ");
+  return marks.join(' ');
 }
 
 /** 汇总各步答案（未答标 未选）；多选步的值为数组，逗号拼接 */
 export function buildWizardResult(
-  steps: AskWizardState["steps"],
+  steps: AskWizardState['steps'],
   answers: Record<number, string | string[]>,
 ): string {
   return steps
     .map((s, i) => {
       const v = answers[i];
-      const text = Array.isArray(v) ? v.filter(Boolean).join(", ") : (v ?? "");
-      return `${s.title}: ${text.trim() ? text.trim() : "（未选）"}`;
+      const text = Array.isArray(v) ? v.filter(Boolean).join(', ') : (v ?? '');
+      return `${s.title}: ${text.trim() ? text.trim() : '（未选）'}`;
     })
-    .join("\n");
+    .join('\n');
 }
 
 /** 单选答案字符串 / 多选答案数组 → 展示文本 */
 export function answerText(v: string | string[] | undefined): string {
-  if (Array.isArray(v)) return v.filter(Boolean).join(", ");
-  return v ?? "";
+  if (Array.isArray(v)) return v.filter(Boolean).join(', ');
+  return v ?? '';
 }
 
-export function Wizard({
-  ask,
-  onResolve,
-}: {
-  ask: AskWizardState;
-  onResolve: (value: string) => void;
-}) {
+export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (value: string) => void }) {
   const steps = ask.steps;
   /** 分步多选：每步可勾选多个选项（Enter/空格切换），特殊项为"完成本步" */
   const multi = !!ask.multi;
@@ -68,7 +62,7 @@ export function Wizard({
   const [answers, setAnswers] = useState<Record<number, string | string[]>>({});
   /** true = 选中"自定义"后的行内输入态（其余按键暂停响应；多选模式无此态） */
   const [typing, setTyping] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState('');
   /** 是否为 Review（提交前汇总）视图 */
   const review = step >= steps.length;
   const reviewIdx = idx;
@@ -90,7 +84,7 @@ export function Wizard({
     setIdx(0);
     setAnswers({});
     setTyping(false);
-    setDraft("");
+    setDraft('');
   }, [ask.question]);
 
   const pickIdx = (i: number, len: number) => (len <= 0 ? 0 : (i + len) % len);
@@ -98,22 +92,22 @@ export function Wizard({
   useInput(
     (_input, key) => {
       if (key.escape) {
-        onResolve("__cancel__");
+        onResolve('__cancel__');
         return;
       }
-      if (key.upArrow || key.downArrow || _input === "j" || _input === "k") {
-        const delta = key.upArrow || _input === "k" ? -1 : 1;
+      if (key.upArrow || key.downArrow || _input === 'j' || _input === 'k') {
+        const delta = key.upArrow || _input === 'k' ? -1 : 1;
         // 导航范围含 1 个特殊项（自定义）——否则光标永远到不了它
         const len = review ? 2 : wizardNavTotal(steps[step]?.options.length ?? 0);
         setIdx((i) => pickIdx(i + delta, len));
         return;
       }
-      if (key.leftArrow || _input === "h") {
+      if (key.leftArrow || _input === 'h') {
         setStep((s) => Math.max(0, s - 1));
         setIdx(0);
         return;
       }
-      if (key.rightArrow || key.tab || _input === "l") {
+      if (key.rightArrow || key.tab || _input === 'l') {
         // 前进：未到 Review 先到下一步／Review；Review 里 → 回最后一步
         setStep((s) => {
           if (s + 1 > steps.length) return s;
@@ -125,7 +119,7 @@ export function Wizard({
       if (key.return) {
         if (review) {
           // Review：0=Submit answers，1=Cancel
-          onResolve(idx === 0 ? buildWizardResult(steps, answers) : "__cancel__");
+          onResolve(idx === 0 ? buildWizardResult(steps, answers) : '__cancel__');
           return;
         }
         const opts = steps[step]?.options ?? [];
@@ -151,13 +145,13 @@ export function Wizard({
           } else {
             // 选中"自定义"：光标落入该项右侧内联输入框
             setTyping(true);
-            setDraft("");
+            setDraft('');
           }
         }
         return;
       }
       // 多选：空格切换勾选（与 Enter 等价）
-      if (multi && !review && _input === " ") {
+      if (multi && !review && _input === ' ') {
         const opts = steps[step]?.options ?? [];
         if (idx < opts.length) {
           const opt = opts[idx] as WizardStepOption | undefined;
@@ -174,7 +168,7 @@ export function Wizard({
     (_input, key) => {
       if (key.escape) {
         setTyping(false);
-        setDraft("");
+        setDraft('');
       }
     },
     { isActive: typing },
@@ -183,7 +177,7 @@ export function Wizard({
   const commitTyped = () => {
     const text = draft.trim();
     // 自定义：记录为本步答案并前进
-    const next = { ...answers, [step]: text || "(自定义)" };
+    const next = { ...answers, [step]: text || '(自定义)' };
     setAnswers(next);
     setTyping(false);
     if (step + 1 >= steps.length) setStep(steps.length);
@@ -206,18 +200,18 @@ export function Wizard({
             const t = answerText(answers[i]);
             return (
               <Text key={s.title}>
-                {"  ● "}
-                {s.question}: <Text bold>{t.trim() ? t : "（未选）"}</Text>
+                {'  ● '}
+                {s.question}: <Text bold>{t.trim() ? t : '（未选）'}</Text>
               </Text>
             );
           })}
           {[
-            { label: "Submit answers", hint: "" },
-            { label: "Cancel", hint: "" },
+            { label: 'Submit answers', hint: '' },
+            { label: 'Cancel', hint: '' },
           ].map((o, i) => (
-            <Text key={o.label} color={i === idx ? "cyan" : undefined} bold={i === idx}>
-              {"  "}
-              {i === idx ? "❯ " : "  "}
+            <Text key={o.label} color={i === idx ? 'cyan' : undefined} bold={i === idx}>
+              {'  '}
+              {i === idx ? '❯ ' : '  '}
               {i + 1}. {o.label}
             </Text>
           ))}
@@ -230,10 +224,10 @@ export function Wizard({
               const active = i === idx;
               const checked = multi && selectedFor(step).includes(o.label);
               return (
-                <Text key={o.value} color={active ? "cyan" : undefined} bold={active}>
-                  {"  "}
-                  {active ? "❯ " : "  "}
-                  {multi ? (checked ? "✓ " : "○ ") : ""}
+                <Text key={o.value} color={active ? 'cyan' : undefined} bold={active}>
+                  {'  '}
+                  {active ? '❯ ' : '  '}
+                  {multi ? (checked ? '✓ ' : '○ ') : ''}
                   {i + 1}. {o.label}
                   {o.description ? <Text dimColor> — {o.description}</Text> : null}
                 </Text>
@@ -241,17 +235,17 @@ export function Wizard({
             })}
             {multi ? (
               /* 多选特殊项：完成本步进入下一步（最后一步进 Review） */
-              <Text color={customActive ? "magenta" : "gray"} bold={customActive}>
-                {"  "}
-                {customActive ? "❯ " : "  "}
-                {itemLen + 1}. {step >= steps.length - 1 ? "✔ 完成并查看汇总" : "→ 完成本步，下一步"}
+              <Text color={customActive ? 'magenta' : 'gray'} bold={customActive}>
+                {'  '}
+                {customActive ? '❯ ' : '  '}
+                {itemLen + 1}. {step >= steps.length - 1 ? '✔ 完成并查看汇总' : '→ 完成本步，下一步'}
               </Text>
             ) : (
               /* 特殊项：选中后该项右侧出现内联输入框，输入即作为该步答案 */
               <Box>
-                <Text color={customActive ? "magenta" : "gray"} bold={customActive}>
-                  {"  "}
-                  {customActive ? "❯ " : "  "}
+                <Text color={customActive ? 'magenta' : 'gray'} bold={customActive}>
+                  {'  '}
+                  {customActive ? '❯ ' : '  '}
                   {itemLen + 1}. ✎ {CUSTOM_LABEL}
                   {typing ? <Text> </Text> : null}
                 </Text>
@@ -270,10 +264,10 @@ export function Wizard({
       )}
       <Text dimColor>
         {typing
-          ? "Enter 提交自定义答案 · Esc 返回选项"
+          ? 'Enter 提交自定义答案 · Esc 返回选项'
           : multi
-            ? "Enter/空格 勾选/取消 · ↑↓ 选项 · ←/→ 步骤 · Esc 取消"
-            : "Enter 选择 · ↑↓ 选项 · ←/→ 步骤 · Esc 取消"}
+            ? 'Enter/空格 勾选/取消 · ↑↓ 选项 · ←/→ 步骤 · Esc 取消'
+            : 'Enter 选择 · ↑↓ 选项 · ←/→ 步骤 · Esc 取消'}
       </Text>
     </Box>
   );

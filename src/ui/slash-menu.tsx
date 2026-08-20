@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
-import type { SlashItem } from "./controller.js";
-import { clampIndex, filterSlash } from "./slash.js";
+import React, { useEffect, useState } from 'react';
+import { Box, Text, useInput } from 'ink';
+import type { SlashItem } from './controller.js';
+import { clampIndex, filterSlash } from './slash.js';
 
 /**
  * / 斜杠快捷键提示菜单：输入以 / 开头时弹出，↑↓ 选择，Enter 执行，
@@ -27,8 +27,8 @@ export function SlashMenu({
   useEffect(() => setIdx(0), [query]);
 
   useInput((_input, key) => {
-    if (key.upArrow || _input === "k") setIdx((i) => clampIndex(i - 1, filtered.length));
-    else if (key.downArrow || _input === "j") setIdx((i) => clampIndex(i + 1, filtered.length));
+    if (key.upArrow || _input === 'k') setIdx((i) => clampIndex(i - 1, filtered.length));
+    else if (key.downArrow || _input === 'j') setIdx((i) => clampIndex(i + 1, filtered.length));
     else if (key.return) {
       const picked = filtered[clampIndex(idx, filtered.length)];
       if (picked) onPick(picked);
@@ -51,8 +51,8 @@ export function SlashMenu({
       {filtered.slice(0, 8).map((item, i) => {
         const active = i === clampIndex(idx, filtered.length);
         return (
-          <Text key={item.name} color={active ? "cyan" : undefined} bold={active}>
-            {active ? "❯ " : "  "}/{item.name}
+          <Text key={item.name} color={active ? 'cyan' : undefined} bold={active}>
+            {active ? '❯ ' : '  '}/{item.name}
             {item.description ? <Text dimColor> — {item.description}</Text> : null}
           </Text>
         );

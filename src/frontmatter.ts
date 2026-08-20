@@ -15,14 +15,14 @@ export interface Frontmatter {
 }
 
 export function parseFrontmatter(content: string): Frontmatter {
-  const lines = content.split("\n");
+  const lines = content.split('\n');
 
-  if (lines[0]?.trim() !== "---") return { meta: {}, body: content };
+  if (lines[0]?.trim() !== '---') return { meta: {}, body: content };
 
   // 找结尾的 ---
   let endIdx = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (lines[i]?.trim() === "---") {
+    if (lines[i]?.trim() === '---') {
       endIdx = i;
       break;
     }
@@ -34,14 +34,20 @@ export function parseFrontmatter(content: string): Frontmatter {
   for (let i = 1; i < endIdx; i++) {
     const line = lines[i];
     if (!line) continue;
-    const colonIdx = line.indexOf(":");
+    const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
-    const value = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, "");
+    const value = line
+      .slice(colonIdx + 1)
+      .trim()
+      .replace(/^["']|["']$/g, '');
     if (key) meta[key] = value;
   }
 
-  const body = lines.slice(endIdx + 1).join("\n").trim();
+  const body = lines
+    .slice(endIdx + 1)
+    .join('\n')
+    .trim();
   return { meta, body };
 }
 
@@ -49,6 +55,6 @@ export function parseFrontmatter(content: string): Frontmatter {
 export function formatFrontmatter(meta: Record<string, string>, body: string): string {
   const head = Object.entries(meta)
     .map(([k, v]) => `${k}: ${v}`)
-    .join("\n");
+    .join('\n');
   return `---\n${head}\n---\n\n${body.trim()}\n`;
 }

@@ -6,26 +6,21 @@
  * 订阅渲染。非 TTY 路径不使用本类（保持 raw 直写）。
  */
 
-import {
-  estimateLines,
-  findStreamSplit,
-  liveLineBudget,
-  terminalCols,
-} from "./scroll-budget.js";
-import type { Mode } from "../permissions.js";
+import { estimateLines, findStreamSplit, liveLineBudget, terminalCols } from './scroll-budget.js';
+import type { Mode } from '../permissions.js';
 
-export type ToolStatus = "queued" | "running" | "done";
+export type ToolStatus = 'queued' | 'running' | 'done';
 
 /** 工具/子项状态符号与配色（message-list 与 TaskPanel 共用） */
 export const TOOL_SYMBOL: Record<ToolStatus, string> = {
-  queued: "○",
-  running: "⠒",
-  done: "✓",
+  queued: '○',
+  running: '⠒',
+  done: '✓',
 };
 export const TOOL_COLOR: Record<ToolStatus, string | undefined> = {
   queued: undefined,
-  running: "yellow",
-  done: "green",
+  running: 'yellow',
+  done: 'green',
 };
 
 export interface ToolCallDisplay {
@@ -40,7 +35,7 @@ export interface ToolCallDisplay {
 
 export interface Turn {
   id: number;
-  role: "user" | "assistant";
+  role: 'user' | 'assistant';
   text: string;
   /** assistant 的思考块（extended thinking）逐字累计；非空时以灰色斜体渲染 */
   thinking?: string;
@@ -75,30 +70,30 @@ export interface TaskPanelState {
 
 /** 工具名 → 动词 / 单位（整批同名时用于推导标题） */
 const TASK_VERB: Record<string, string> = {
-  read_file: "读取",
-  write_file: "写入",
-  edit_file: "编辑",
-  list_files: "列出",
-  grep_search: "搜索",
-  file_content: "读取",
-  run_shell: "执行",
+  read_file: '读取',
+  write_file: '写入',
+  edit_file: '编辑',
+  list_files: '列出',
+  grep_search: '搜索',
+  file_content: '读取',
+  run_shell: '执行',
 };
 const TASK_UNIT: Record<string, string> = {
-  read_file: "文件",
-  write_file: "文件",
-  edit_file: "文件",
-  list_files: "文件",
-  grep_search: "文件",
-  file_content: "文件",
-  run_shell: "命令",
+  read_file: '文件',
+  write_file: '文件',
+  edit_file: '文件',
+  list_files: '文件',
+  grep_search: '文件',
+  file_content: '文件',
+  run_shell: '命令',
 };
 
 /** 从工具的 input 里抽展示名（file_path → pattern → command），没有就退回工具名 */
 function taskItemLabel(it: { name: string; input: unknown }): string {
   const o = (it.input ?? {}) as Record<string, unknown>;
-  for (const key of ["file_path", "pattern", "command"]) {
+  for (const key of ['file_path', 'pattern', 'command']) {
     const v = o[key];
-    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return it.name;
 }
@@ -115,9 +110,9 @@ export function deriveTaskPanel(
   const unit = sameName ? TASK_UNIT[first] : undefined;
   const title = verb && unit ? `${verb} ${items.length} 个${unit}` : `执行 ${items.length} 个任务`;
   return {
-    verb: verb ?? "执行",
+    verb: verb ?? '执行',
     title,
-    items: items.map((it) => ({ id: it.id, label: taskItemLabel(it), status: "queued" })),
+    items: items.map((it) => ({ id: it.id, label: taskItemLabel(it), status: 'queued' })),
   };
 }
 
@@ -156,8 +151,8 @@ export interface SlashItem {
 
 function prettyInput(input: unknown): string {
   const s = JSON.stringify(input);
-  if (!s || s === "{}") return "";
-  return s.length > 80 ? s.slice(0, 77) + "…" : s;
+  if (!s || s === '{}') return '';
+  return s.length > 80 ? s.slice(0, 77) + '…' : s;
 }
 
 export class AppController {
@@ -178,7 +173,7 @@ export class AppController {
   askWizardState: AskWizardState | null = null;
   /** / 斜杠菜单状态 */
   slashOpen = false;
-  slashQuery = "";
+  slashQuery = '';
   slashItems: SlashItem[] = [];
   /** Ctrl+O 工具输出面板（展示全部已执行工具的真实输出） */
   outputPanel = false;
@@ -187,7 +182,7 @@ export class AppController {
   /** 文本输入提问（askText）：null = 无 */
   askTextState: { question: string } | null = null;
   /** 当前模式（plan / auto / bypass / default），UI 底部展示 */
-  mode: Mode = "default";
+  mode: Mode = 'default';
 
   private askTextResolver: ((value: string | null) => void) | null = null;
 
@@ -227,7 +222,7 @@ export class AppController {
 
   pushUser(text: string) {
     const id = ++this.nextUserTurnId;
-    this.turns.push({ id, role: "user", text, tools: [], streaming: false, chunks: [], thinkingChunks: [] });
+    this.turns.push({ id, role: 'user', text, tools: [], streaming: false, chunks: [], thinkingChunks: [] });
     this.task = null; // 新一轮输入 → 面板清空（已完成状态让位于新任务）
     this.bump();
   }
@@ -235,11 +230,11 @@ export class AppController {
   /** 流式文本：首个 delta 开新 assistant turn，其后追加；超预算时提交前缀防溢出 */
   streamText(delta: string) {
     const last = this.turns[this.turns.length - 1];
-    if (last && last.role === "assistant" && last.streaming) last.text += delta;
+    if (last && last.role === 'assistant' && last.streaming) last.text += delta;
     else
       this.turns.push({
         id: ++this.nextUserTurnId,
-        role: "assistant",
+        role: 'assistant',
         text: delta,
         tools: [],
         streaming: true,
@@ -251,7 +246,7 @@ export class AppController {
   }
 
   /** 恢复会话：把最近几轮灌进消息流渲染（id 重新分配，避免与后续新轮冲突） */
-  loadTurns(turns: Array<Omit<Turn, "id" | "chunks" | "thinkingChunks">>) {
+  loadTurns(turns: Array<Omit<Turn, 'id' | 'chunks' | 'thinkingChunks'>>) {
     this.turns = turns.map((t, i) => ({ chunks: [], thinkingChunks: [], ...t, id: i + 1 }));
     this.nextUserTurnId = Math.max(this.nextUserTurnId, this.turns.length);
     this.bump();
@@ -260,7 +255,7 @@ export class AppController {
   /** 模型本轮结束（assistant 不再追加） */
   finishStream() {
     const last = this.turns[this.turns.length - 1];
-    if (last?.role === "assistant" && last.streaming) {
+    if (last?.role === 'assistant' && last.streaming) {
       last.streaming = false;
       this.bump();
     }
@@ -269,7 +264,7 @@ export class AppController {
   // ── 工具调用块 ──────────────────────────────────────────────
   private activeAssistant(): Turn | null {
     const last = this.turns[this.turns.length - 1];
-    return last?.role === "assistant" ? last : null;
+    return last?.role === 'assistant' ? last : null;
   }
 
   /** 模型宣布一批工具调用：先记 pending，首个工具开始时整批落地（避免过早建空 turn 干扰流式） */
@@ -289,28 +284,28 @@ export class AppController {
     // 此处改走 annotationTurn() 新建，保证每条 turn 只承载一轮模型调用的输出。
     const active = this.activeAssistant();
     const turn =
-      active && !active.streaming && active.tools.every((t) => t.status === "done")
+      active && !active.streaming && active.tools.every((t) => t.status === 'done')
         ? this.annotationTurn()
         : (active ?? this.annotationTurn());
     // 首个工具开始：把整批 queued 一次性挂上（列表全量展示，再逐个转 running/done）
     if (this.pendingTools && this.pendingTools.length > 0) {
       for (const it of this.pendingTools) {
-        turn.tools.push({ id: it.id, name: it.name, input: prettyInput(it.input), status: "queued" });
+        turn.tools.push({ id: it.id, name: it.name, input: prettyInput(it.input), status: 'queued' });
       }
       this.pendingTools = null;
     }
     const tool = turn.tools.find((t) => t.id === id);
     if (tool) {
-      tool.status = "running";
+      tool.status = 'running';
       tool.name = name;
       tool.input = prettyInput(input);
     } else {
       // 未预先 planTools（如恢复的旧会话）→ 兜底直接挂一条 running
-      turn.tools.push({ id, name, input: prettyInput(input), status: "running" });
+      turn.tools.push({ id, name, input: prettyInput(input), status: 'running' });
     }
     // 任务面板同步：对应子项 → running
     const item = this.task?.items.find((t) => t.id === id);
-    if (item) item.status = "running";
+    if (item) item.status = 'running';
     this.bump();
   }
 
@@ -318,10 +313,10 @@ export class AppController {
     const turn = this.activeAssistant();
     const tool = turn?.tools.find((t) => t.id === id);
     if (tool) {
-      tool.status = "done";
+      tool.status = 'done';
       if (output !== undefined) tool.output = output;
       // 整批执行完 → 关掉 streaming，避免下一轮回复并进本 turn
-      if (turn && turn.tools.length > 0 && turn.tools.every((t) => t.status === "done")) {
+      if (turn && turn.tools.length > 0 && turn.tools.every((t) => t.status === 'done')) {
         turn.streaming = false;
       }
       this.bump();
@@ -329,8 +324,8 @@ export class AppController {
     // 任务面板同步：对应子项 → done；全部完成 → 面板移除（任务结束不再展示）
     const item = this.task?.items.find((t) => t.id === id);
     if (item) {
-      item.status = "done";
-      if (this.task && this.task.items.every((t) => t.status === "done")) {
+      item.status = 'done';
+      if (this.task && this.task.items.every((t) => t.status === 'done')) {
         this.task = null;
       }
       this.bump();
@@ -340,8 +335,8 @@ export class AppController {
   private annotationTurn(): Turn {
     const t: Turn = {
       id: ++this.nextUserTurnId,
-      role: "assistant",
-      text: "",
+      role: 'assistant',
+      text: '',
       tools: [],
       streaming: false,
       chunks: [],
@@ -354,13 +349,13 @@ export class AppController {
   /** 思考块增量：累计到当前 streaming assistant turn，否则新建一个；超预算时提交前缀防溢出 */
   streamThinking(delta: string) {
     const last = this.turns[this.turns.length - 1];
-    if (last && last.role === "assistant" && last.streaming) {
-      last.thinking = (last.thinking ?? "") + delta;
+    if (last && last.role === 'assistant' && last.streaming) {
+      last.thinking = (last.thinking ?? '') + delta;
     } else {
       this.turns.push({
         id: ++this.nextUserTurnId,
-        role: "assistant",
-        text: "",
+        role: 'assistant',
+        text: '',
         thinking: delta,
         tools: [],
         streaming: true,
@@ -385,7 +380,7 @@ export class AppController {
    */
   private enforceLiveHeight(turn: Turn) {
     const cols = terminalCols();
-    const th = estimateLines(turn.thinking ?? "", cols);
+    const th = estimateLines(turn.thinking ?? '', cols);
     const tx = estimateLines(turn.text, cols);
     const budget = liveLineBudget();
     if (th + tx <= budget) return;
@@ -453,7 +448,7 @@ export class AppController {
   }
 
   /** 模型调用完成：真实用量落当前 assistant turn（busy 清空后仍可见） */
-  setTurnUsage(usage: NonNullable<Turn["usage"]>, elapsedMs: number) {
+  setTurnUsage(usage: NonNullable<Turn['usage']>, elapsedMs: number) {
     const turn = this.activeAssistant();
     if (!turn) return;
     turn.usage = usage;
@@ -516,7 +511,7 @@ export class AppController {
   }
 
   // ── / 斜杠菜单 ─────────────────────────────────────────────
-  openSlash(query = "") {
+  openSlash(query = '') {
     this.slashOpen = true;
     this.slashQuery = query;
     this.bump();
@@ -525,7 +520,7 @@ export class AppController {
   closeSlash() {
     if (!this.slashOpen) return;
     this.slashOpen = false;
-    this.slashQuery = "";
+    this.slashQuery = '';
     this.bump();
   }
 
@@ -546,16 +541,17 @@ export class AppController {
   }
 
   /** 所有模式（按循环顺序排列） */
-  static readonly MODE_CYCLE: Mode[] = ["default", "plan", "auto", "bypass"];
+  static readonly MODE_CYCLE: Mode[] = ['default', 'plan', 'auto', 'bypass'];
 
   /** 切换模式：循环到下一个（Shift+Tab 向后循环） */
   cycleMode(forward = true) {
     const cycle = AppController.MODE_CYCLE;
     const idx = cycle.indexOf(this.mode);
-    if (idx === -1) { this.mode = "default"; return; }
-    const next = forward
-      ? cycle[(idx + 1) % cycle.length]!
-      : cycle[(idx - 1 + cycle.length) % cycle.length]!;
+    if (idx === -1) {
+      this.mode = 'default';
+      return;
+    }
+    const next = forward ? cycle[(idx + 1) % cycle.length]! : cycle[(idx - 1 + cycle.length) % cycle.length]!;
     this.mode = next;
     this.bump();
   }

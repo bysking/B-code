@@ -1,13 +1,13 @@
-import React from "react";
-import { Box, Text } from "ink";
-import type { Mode } from "../permissions.js";
+import React from 'react';
+import { Box, Text } from 'ink';
+import type { Mode } from '../permissions.js';
 
 /** 模式展示名与配色 */
 const MODE_META: Record<Mode, { label: string; color: string }> = {
-  default: { label: "default", color: "cyan" },
-  plan: { label: "plan", color: "yellow" },
-  auto: { label: "auto", color: "green" },
-  bypass: { label: "bypass", color: "red" },
+  default: { label: 'default', color: 'cyan' },
+  plan: { label: 'plan', color: 'yellow' },
+  auto: { label: 'auto', color: 'green' },
+  bypass: { label: 'bypass', color: 'red' },
 };
 
 /**
@@ -28,4 +28,4 @@ export function ModeBar({ mode }: { mode: Mode }) {
 }
 
 /** 模式列表（循环顺序，与 controller 的 MODE_CYCLE 保持同步） */
-export const MODE_CYCLE: Mode[] = ["default", "plan", "auto", "bypass"];
+export const MODE_CYCLE: Mode[] = ['default', 'plan', 'auto', 'bypass'];

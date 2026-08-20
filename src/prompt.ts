@@ -1,8 +1,8 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import type Anthropic from '@anthropic-ai/sdk';
+import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 
 /**
  * 两段式 System Prompt（施工图 L4 prompt.ts）
@@ -70,17 +70,13 @@ You help with software engineering tasks using the tools available to you.
   sparingly, like a careful engineer would.`;
 
 /** 完整 System Prompt：静态核心（缓存标记）+ 动态上下文 + 记忆/技能注入段 */
-export function buildSystemPrompt(
-  args: { cwd?: string } & DynamicSections = {},
-): SystemBlock[] {
-  const blocks: SystemBlock[] = [
-    { type: "text", text: STATIC_CORE, cache_control: { type: "ephemeral" } },
-  ];
+export function buildSystemPrompt(args: { cwd?: string } & DynamicSections = {}): SystemBlock[] {
+  const blocks: SystemBlock[] = [{ type: 'text', text: STATIC_CORE, cache_control: { type: 'ephemeral' } }];
   const dynamic = buildDynamicContext(args.cwd ?? process.cwd(), {
     memory: args.memory,
     skills: args.skills,
   });
-  if (dynamic) blocks.push({ type: "text", text: dynamic });
+  if (dynamic) blocks.push({ type: 'text', text: dynamic });
   return blocks;
 }
 
@@ -90,11 +86,11 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
 
   // Git 状态（非 git 目录静默跳过）
   try {
-    const branch = execSync("git branch --show-current", { cwd, encoding: "utf-8" }).trim();
-    const dirty = execSync("git -c color.ui=never status --porcelain", { cwd, encoding: "utf-8" })
+    const branch = execSync('git branch --show-current', { cwd, encoding: 'utf-8' }).trim();
+    const dirty = execSync('git -c color.ui=never status --porcelain', { cwd, encoding: 'utf-8' })
       .toString()
       .trim();
-    parts.push(`\n# Git\n- Branch: ${branch || "(detached)"}`);
+    parts.push(`\n# Git\n- Branch: ${branch || '(detached)'}`);
     if (dirty) parts.push(`- Uncommitted changes:\n${dirty.slice(0, 500)}`);
   } catch {
     // 不在 git 仓库
@@ -108,7 +104,7 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
     if (section) parts.push(section);
   }
 
-  return parts.join("\n");
+  return parts.join('\n');
 }
 
 const MAX_INCLUDE_DEPTH = 5;
@@ -124,7 +120,7 @@ export function loadClaudeMd(startDir: string = process.cwd()): string {
   const visited = new Set<string>();
 
   for (;;) {
-    const file = join(dir, "CLAUDE.md");
+    const file = join(dir, 'CLAUDE.md');
     if (existsSync(file) && !visited.has(file)) {
       parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, visited)}\n</file>`);
     }
@@ -132,19 +128,17 @@ export function loadClaudeMd(startDir: string = process.cwd()): string {
     if (parent === dir) break; // 到根目录
     dir = parent;
   }
-  return parts.join("\n");
+  return parts.join('\n');
 }
 
 function resolveIncludes(file: string, depth: number, visited: Set<string>): string {
   if (depth > MAX_INCLUDE_DEPTH) return `<!-- include too deep: ${file} -->`;
   visited.add(file);
 
-  let content = readFileSync(file, "utf-8");
+  let content = readFileSync(file, 'utf-8');
   content = content.replace(/^@(.+)$/gm, (_, raw: string) => {
     const p = raw.trim();
-    const resolved = p.startsWith("~")
-      ? join(homedir(), p.slice(1))
-      : resolve(join(dirname(file), p));
+    const resolved = p.startsWith('~') ? join(homedir(), p.slice(1)) : resolve(join(dirname(file), p));
     if (!existsSync(resolved)) return `<!-- not found: ${p} -->`;
     if (visited.has(resolved)) return `<!-- circular include: ${p} -->`;
     return resolveIncludes(resolved, depth + 1, visited);
@@ -154,5 +148,5 @@ function resolveIncludes(file: string, depth: number, visited: Set<string>): str
 
 /** 供 Agent 直接取纯文本（未来 OpenAI 边界也用得到） */
 export function flattenSystemBlocks(blocks: SystemBlock[]): string {
-  return blocks.map((b) => b.text).join("\n\n");
+  return blocks.map((b) => b.text).join('\n\n');
 }

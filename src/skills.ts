@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { parseFrontmatter } from "./frontmatter.js";
-import { basePath } from "./utils/paths.js";
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { parseFrontmatter } from './frontmatter.js';
+import { basePath } from './utils/paths.js';
 
 /**
  * 技能系统（施工图 P4 §9）：把常用提示词包装成一个 `/name 参数` 命令。
@@ -17,14 +17,14 @@ import { basePath } from "./utils/paths.js";
  */
 
 const MAX_ARGUMENTS_CHARS = 2000;
-export const SKILLS_DIR_ENV = "B_CODE_SKILLS_DIR";
+export const SKILLS_DIR_ENV = 'B_CODE_SKILLS_DIR';
 
 function skillDirs(cwd: string): string[] {
-  const dirs: string[] = [join(cwd, ".claude", "skills")];
+  const dirs: string[] = [join(cwd, '.claude', 'skills')];
   const envDir = process.env[SKILLS_DIR_ENV];
   if (envDir) dirs.push(envDir);
-  dirs.push(join(basePath(), "skills"));
-  dirs.push(join(homedir(), ".claude", "skills"));
+  dirs.push(join(basePath(), 'skills'));
+  dirs.push(join(homedir(), '.claude', 'skills'));
   return dirs;
 }
 
@@ -42,16 +42,16 @@ export function discoverSkills(cwd: string = process.cwd()): SkillInfo[] {
 
   for (const dir of skillDirs(cwd)) {
     if (!existsSync(dir)) continue;
-    for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.md'))) {
       const name = file.slice(0, -3);
       if (seen.has(name)) continue; // 高优先级目录已注册同名
       seen.add(name);
       try {
-        const { meta } = parseFrontmatter(readFileSync(join(dir, file), "utf-8"));
+        const { meta } = parseFrontmatter(readFileSync(join(dir, file), 'utf-8'));
         out.push({
           name,
-          description: meta.description ?? "",
-          userInvocable: meta["user-invocable"] === "true",
+          description: meta.description ?? '',
+          userInvocable: meta['user-invocable'] === 'true',
           dir,
         });
       } catch {
@@ -67,17 +67,17 @@ export function discoverSkills(cwd: string = process.cwd()): SkillInfo[] {
  * 命中返回替换好 $ARGUMENTS 的正文；未命中返回 null。
  */
 export function resolveSkill(input: string, cwd: string = process.cwd()): string | null {
-  if (!input.startsWith("/")) return null;
-  const [name, ...rest] = input.slice(1).split(" ");
+  if (!input.startsWith('/')) return null;
+  const [name, ...rest] = input.slice(1).split(' ');
   if (!name) return null;
 
   for (const dir of skillDirs(cwd)) {
     const file = join(dir, `${name}.md`);
     if (!existsSync(file)) continue;
-    const { meta, body } = parseFrontmatter(readFileSync(file, "utf-8"));
+    const { meta, body } = parseFrontmatter(readFileSync(file, 'utf-8'));
     if (!meta.name) continue; // 无 name 的 frontmatter 不算技能
 
-    const args = rest.join(" ").trim();
+    const args = rest.join(' ').trim();
     let prompt = body;
     if (args) prompt = prompt.replace(/\$ARGUMENTS/g, args.slice(0, MAX_ARGUMENTS_CHARS));
     return prompt;
@@ -88,7 +88,7 @@ export function resolveSkill(input: string, cwd: string = process.cwd()): string
 /** 把 user-invocable 技能注入 system prompt（只暴露用户可主动调用的） */
 export function buildSkillDescriptions(cwd: string = process.cwd()): string {
   const skills = discoverSkills(cwd).filter((s) => s.userInvocable);
-  if (skills.length === 0) return "";
+  if (skills.length === 0) return '';
   const lines = skills.map((s) => `- /${s.name}: ${s.description}`);
-  return `\n\n# Available Skills\n${lines.join("\n")}`;
+  return `\n\n# Available Skills\n${lines.join('\n')}`;
 }

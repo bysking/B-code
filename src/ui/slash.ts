@@ -1,4 +1,4 @@
-import type { SlashItem } from "./controller.js";
+import type { SlashItem } from './controller.js';
 
 /**
  * / 斜杠菜单的过滤与键盘选择逻辑（纯函数，供 SlashMenu 组件与单测共用）。
@@ -6,18 +6,18 @@ import type { SlashItem } from "./controller.js";
  */
 
 export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
-  { name: "clear", description: "清空当前对话历史" },
-  { name: "plan", description: "切换 plan（只读）模式" },
-  { name: "yolo", description: "切换 bypass 模式" },
-  { name: "default", description: "切换回默认模式" },
-  { name: "skills", description: "列出可用技能" },
-  { name: "mcp", description: "列出已配置的 MCP server" },
-  { name: "exit", description: "退出 b-code" },
+  { name: 'clear', description: '清空当前对话历史' },
+  { name: 'plan', description: '切换 plan（只读）模式' },
+  { name: 'yolo', description: '切换 bypass 模式' },
+  { name: 'default', description: '切换回默认模式' },
+  { name: 'skills', description: '列出可用技能' },
+  { name: 'mcp', description: '列出已配置的 MCP server' },
+  { name: 'exit', description: '退出 b-code' },
 ];
 
 /** 输入为 /name 参数 形态时，基础名用于过滤 */
 export function slashBaseName(query: string): string {
-  return query.replace(/^\//, "").split(/\s+/)[0] ?? "";
+  return query.replace(/^\//, '').split(/\s+/)[0] ?? '';
 }
 
 /** 过滤候选：基础名前缀匹配（不区分大小写） */

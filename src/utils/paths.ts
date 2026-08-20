@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 
 /**
  * 统一数据根目录：所有「数据往哪放」的问题都收敛到这里
@@ -13,8 +13,8 @@ import { isAbsolute, join } from "node:path";
  * 未来会话（session.json）、日志、记忆、mcp.json、缓存全部以 basePath() 为根。
  */
 
-const DATA_DIR_NAME = ".b-code";
-export const BASE_PATH_ENV = "B_CODE_HOME";
+const DATA_DIR_NAME = '.b-code';
+export const BASE_PATH_ENV = 'B_CODE_HOME';
 
 /** 当前系统登录用户主目录（跨平台） */
 export function userHomeDir(): string {
@@ -36,17 +36,17 @@ export function basePath(): string {
 /** 各类存放位置（懒函数，避免初始化顺序问题） */
 export const dirs = {
   /** 会话持久化文件 */
-  sessionFile: () => join(basePath(), "session.json"),
+  sessionFile: () => join(basePath(), 'session.json'),
   /** 调试日志目录 */
-  logsDir: () => join(basePath(), "logs"),
+  logsDir: () => join(basePath(), 'logs'),
   /** 跨项目记忆根目录（P4 使用） */
-  projectsDir: () => join(basePath(), "projects"),
+  projectsDir: () => join(basePath(), 'projects'),
   /** 用户级技能目录（随 B_CODE_HOME 迁移；P4 使用） */
-  skillsDir: () => join(basePath(), "skills"),
+  skillsDir: () => join(basePath(), 'skills'),
   /** 用户级 MCP 服务器配置（P5 使用） */
-  mcpConfigFile: () => join(basePath(), "mcp.json"),
+  mcpConfigFile: () => join(basePath(), 'mcp.json'),
   /** Plan 文件目录（P5 使用） */
-  plansDir: () => join(basePath(), "plans"),
+  plansDir: () => join(basePath(), 'plans'),
 };
 
 /**
@@ -56,11 +56,11 @@ export const dirs = {
  */
 export function safeName(name: string): string {
   const cleaned = name
-    .replace(/[<>:"/\\|?*\x00-\x1f\s]/g, "_")
-    .replace(/^\.+|\.+$/g, "_")
-    .replace(/_+/g, "_")
+    .replace(/[<>:"/\\|?*\x00-\x1f\s]/g, '_')
+    .replace(/^\.+|\.+$/g, '_')
+    .replace(/_+/g, '_')
     .trim()
-    .replace(/^_+|_+$/g, "")
+    .replace(/^_+|_+$/g, '')
     .slice(0, 120);
-  return cleaned || "unnamed";
+  return cleaned || 'unnamed';
 }

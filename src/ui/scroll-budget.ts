@@ -11,7 +11,7 @@
  * 注：这些常量/估算只服务于"防溢出"的高度预算，不追求与 Ink 实际渲染逐行精确一致——
  * 保留 KEEP_RATIO 的余量即为吸收 markdown 渲染（表格/代码框）带来的少量行数膨胀。
  */
-import wrapAnsi from "wrap-ansi";
+import wrapAnsi from 'wrap-ansi';
 
 /** 终端行数（非 TTY/测试环境兜底 40） */
 export function terminalRows(): number {
@@ -36,7 +36,7 @@ export function liveLineBudget(): number {
 /** 估算文本按终端宽度硬换行后的行数（CJK 宽度由 wrap-ansi 内部的 string-width 处理） */
 export function estimateLines(text: string, cols = terminalCols()): number {
   if (text == null) return 0;
-  return wrapAnsi(text, Math.max(cols, 10), { hard: true, trim: false }).split("\n").length;
+  return wrapAnsi(text, Math.max(cols, 10), { hard: true, trim: false }).split('\n').length;
 }
 
 export interface StreamSplit {
@@ -55,7 +55,7 @@ function parseFenceOpen(line: string): { marker: string; info: string } | null {
   const m = FENCE_OPEN_RE.exec(line);
   if (!m) return null;
   // CommonMark：反引号围栏的 info string 不能包含反引号
-  if (m[1]!.startsWith("`") && m[2]!.includes("`")) return null;
+  if (m[1]!.startsWith('`') && m[2]!.includes('`')) return null;
   return { marker: m[1]!, info: m[2]!.trim() };
 }
 
@@ -81,7 +81,7 @@ export function findStreamSplit(
 ): StreamSplit | null {
   const cols = opts.cols ?? terminalCols();
   const markdown = opts.markdown ?? true;
-  const lines = text.split("\n");
+  const lines = text.split('\n');
   if (lines.length < 2) return null;
 
   // 逐行累计渲染高度，并记录每行之后仍处于打开状态的代码围栏
@@ -120,11 +120,11 @@ export function findStreamSplit(
       inFence = {
         cut: offset,
         closeFence: fence.marker,
-        openFence: `${fence.marker}${fence.info ? fence.info : ""}\n`,
+        openFence: `${fence.marker}${fence.info ? fence.info : ''}\n`,
       };
     } else {
       outside = { cut: offset, closeFence: null, openFence: null };
-      if (lines[i]!.trim() === "" || lines[i + 1]!.trim() === "") blank = outside;
+      if (lines[i]!.trim() === '' || lines[i + 1]!.trim() === '') blank = outside;
     }
   }
   return blank ?? outside ?? inFence;

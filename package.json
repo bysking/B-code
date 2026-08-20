@@ -1,6 +1,6 @@
 {
   "name": "@bysking/b-code",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里",
   "type": "module",
   "main": "dist/cli.mjs",
@@ -15,6 +15,8 @@
     "build": "node build.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test --test-force-exit --test-concurrency=1 test/*.test.ts test/*.test.tsx",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "prepublishOnly": "npm run build && npm run typecheck"
   },
   "engines": {
@@ -58,6 +60,7 @@
     "@types/react": "^19.2.18",
     "esbuild": "^0.25.12",
     "ink-testing-library": "^4.0.0",
+    "prettier": "^3.9.6",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }

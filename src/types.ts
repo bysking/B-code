@@ -1,5 +1,5 @@
-import type { MountPoint } from "./registry.js";
-import type { Permission, Mode } from "./permissions.js";
+import type { MountPoint } from './registry.js';
+import type { Permission, Mode } from './permissions.js';
 
 /**
  * types.ts —— 契约层（施工图 P7）
@@ -11,13 +11,13 @@ import type { Permission, Mode } from "./permissions.js";
  */
 
 // ── 模型后端 ──────────────────────────────────────────────────
-export type { ModelInput, ModelOutput, ModelBackend } from "./backend.js";
+export type { ModelInput, ModelOutput, ModelBackend } from './backend.js';
 
 // ── 工具/能力挂载 ─────────────────────────────────────────────
-export type { MountPoint, RuntimeContext, ToolMode } from "./registry.js";
+export type { MountPoint, RuntimeContext, ToolMode } from './registry.js';
 
 // ── 权限 ──────────────────────────────────────────────────────
-export type { Permission, Mode } from "./permissions.js";
+export type { Permission, Mode } from './permissions.js';
 
 /** 权限策略：同一职责多实现（规则表 / 白名单 / AI 分类器）的替换点 */
 export interface PermissionPolicy {
@@ -25,7 +25,7 @@ export interface PermissionPolicy {
 }
 
 // ── 上下文管理 ────────────────────────────────────────────────
-export type { SystemBlock, DynamicSections } from "./prompt.js";
+export type { SystemBlock, DynamicSections } from './prompt.js';
 
 /** 上下文策略：控制"消息能占多大、塞不下怎么办" */
 export interface ContextPolicy {
@@ -42,10 +42,10 @@ export interface Memory {
 }
 
 // ── 技能 ──────────────────────────────────────────────────────
-export type { SkillInfo } from "./skills.js";
+export type { SkillInfo } from './skills.js';
 
 // ── 自治 ──────────────────────────────────────────────────────
-export type { GoalVerdict, ActionVerdict } from "./autonomy.js";
+export type { GoalVerdict, ActionVerdict } from './autonomy.js';
 
 // ── UI ────────────────────────────────────────────────────────
-export type { SpinnerLike } from "./ui.js";
+export type { SpinnerLike } from './ui.js';

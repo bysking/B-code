@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { dirs } from "./utils/paths.js";
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { dirs } from './utils/paths.js';
 
 /**
  * MCP 配置解析（P5 前置）：mcp.json 在哪里找、怎么合并。
@@ -18,19 +18,19 @@ export interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   /** 声明 "read" 则该 server 所有工具按只读放行（免确认）；缺省 fail-closed → confirm */
-  mode?: "read";
+  mode?: 'read';
 }
 
 export type McpConfig = Record<string, McpServerConfig>;
 
-export const MCP_CONFIG_ENV = "B_CODE_MCP_CONFIG";
+export const MCP_CONFIG_ENV = 'B_CODE_MCP_CONFIG';
 
 /** 按优先级列出候选配置文件路径 */
 export function mcpConfigPaths(cwd: string = process.cwd()): string[] {
   const paths: string[] = [];
   const envPath = process.env[MCP_CONFIG_ENV];
   if (envPath) paths.push(envPath);
-  paths.push(join(cwd, ".claude", "mcp.json"));
+  paths.push(join(cwd, '.claude', 'mcp.json'));
   paths.push(dirs.mcpConfigFile()); // {basePath}/mcp.json
   return paths;
 }
@@ -42,10 +42,10 @@ export function resolveMcpConfigs(cwd: string = process.cwd()): McpConfig {
   for (const file of [...mcpConfigPaths(cwd)].reverse()) {
     if (!existsSync(file)) continue;
     try {
-      const raw = JSON.parse(readFileSync(file, "utf-8"));
+      const raw = JSON.parse(readFileSync(file, 'utf-8'));
       const servers: Record<string, McpServerConfig> = raw.mcpServers ?? raw;
       for (const [name, cfg] of Object.entries(servers)) {
-        if (cfg && typeof cfg === "object") merged[name] = cfg;
+        if (cfg && typeof cfg === 'object') merged[name] = cfg;
       }
     } catch {
       // 坏配置文件跳过，不阻塞启动
@@ -59,20 +59,17 @@ export function resolveMcpConfigs(cwd: string = process.cwd()): McpConfig {
  * 连接判定由调用方注入：toolCount 返回该 server 在 registry 中已挂载的工具数（未连接返回 null）。
  * 纯函数（不依赖 registry），供 cli 的 TTY / 非 TTY 两条路径共用。
  */
-export function formatMcpList(
-  configs: McpConfig,
-  toolCount: (serverName: string) => number | null,
-): string {
+export function formatMcpList(configs: McpConfig, toolCount: (serverName: string) => number | null): string {
   const names = Object.keys(configs);
-  if (names.length === 0) return "(no MCP servers configured)";
+  if (names.length === 0) return '(no MCP servers configured)';
   return names
     .map((name) => {
       const cfg = configs[name]!;
-      const cmd = [cfg.command, ...(cfg.args ?? [])].join(" ");
+      const cmd = [cfg.command, ...(cfg.args ?? [])].join(' ');
       const count = toolCount(name);
       if (count === null) return `✗ ${name} — ${cmd} — 未连接`;
-      const mode = cfg.mode === "read" ? " (read)" : "";
+      const mode = cfg.mode === 'read' ? ' (read)' : '';
       return `✓ ${name} — ${cmd} — ${count} 工具${mode}`;
     })
-    .join("\n");
+    .join('\n');
 }

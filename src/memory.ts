@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { dirs, safeName } from "./utils/paths.js";
-import { formatFrontmatter, parseFrontmatter } from "./frontmatter.js";
-import type { Memory } from "./types.js";
-import type { Registry } from "./registry.js";
+import { createHash } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { dirs, safeName } from './utils/paths.js';
+import { formatFrontmatter, parseFrontmatter } from './frontmatter.js';
+import type { Memory } from './types.js';
+import type { Registry } from './registry.js';
 
 /** 文件记忆实现（P7 策略化；未来换向量库 = 实现同一接口替换） */
 export class FileMemory implements Memory {
@@ -23,11 +23,11 @@ export class FileMemory implements Memory {
 
 /** 项目键：同一目录的工作区隔离各自的记忆 */
 export function projectKey(cwd: string): string {
-  return createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+  return createHash('sha256').update(cwd).digest('hex').slice(0, 16);
 }
 
 export function memoryDir(cwd: string = process.cwd()): string {
-  return join(dirs.projectsDir(), projectKey(cwd), "memory");
+  return join(dirs.projectsDir(), projectKey(cwd), 'memory');
 }
 
 /** 保存一条记忆（同步：REPL 路径简单可靠，量级远小于磁盘能力） */
@@ -41,7 +41,7 @@ export function saveMemory(
   const dir = memoryDir(cwd);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${safeName(name)}.md`);
-  writeFileSync(file, formatFrontmatter({ name, description, type }, content), "utf-8");
+  writeFileSync(file, formatFrontmatter({ name, description, type }, content), 'utf-8');
   return file;
 }
 
@@ -51,31 +51,31 @@ export function saveMemory(
  */
 export function registerMemoryTool(registry: Registry): void {
   registry.register({
-    name: "save_memory",
+    name: 'save_memory',
     description:
-      "Save a durable fact, user preference, or reusable lesson to long-term memory. " +
-      "Use when you learn something worth remembering across sessions; the user will confirm the write.",
+      'Save a durable fact, user preference, or reusable lesson to long-term memory. ' +
+      'Use when you learn something worth remembering across sessions; the user will confirm the write.',
     inputSchema: {
-      type: "object",
+      type: 'object',
       properties: {
-        name: { type: "string", description: "Short memory name, e.g. 'staging url'" },
+        name: { type: 'string', description: "Short memory name, e.g. 'staging url'" },
         type: {
-          type: "string",
-          enum: ["reference", "project", "feedback"],
-          description: "记忆类型（缺省 reference）",
+          type: 'string',
+          enum: ['reference', 'project', 'feedback'],
+          description: '记忆类型（缺省 reference）',
         },
-        content: { type: "string", description: "The fact to remember" },
+        content: { type: 'string', description: 'The fact to remember' },
       },
-      required: ["name", "content"],
+      required: ['name', 'content'],
     },
-    mode: "write",
-    kind: "builtin",
+    mode: 'write',
+    kind: 'builtin',
     handler: (input) => {
       const file = saveMemory(
-        String(input.name ?? "memory"),
-        String(input.name ?? "memory"),
-        String(input.type ?? "reference"),
-        String(input.content ?? ""),
+        String(input.name ?? 'memory'),
+        String(input.name ?? 'memory'),
+        String(input.type ?? 'reference'),
+        String(input.content ?? ''),
       );
       return `Saved to memory: ${file}`;
     },
@@ -104,23 +104,19 @@ function tokenize(text: string): Set<string> {
 }
 
 /** 关键词召回：按重叠分排序取 top limit，注入段不存在返回空串 */
-export function recallMemories(
-  query: string,
-  limit = 3,
-  cwd: string = process.cwd(),
-): string {
+export function recallMemories(query: string, limit = 3, cwd: string = process.cwd()): string {
   const dir = memoryDir(cwd);
-  if (!existsSync(dir)) return "";
+  if (!existsSync(dir)) return '';
 
   const queryTokens = tokenize(query.toLowerCase());
   // 大幅过滤：只留查询中有信息量的词（少于 2 个体征就放弃，避免匹配噪声）
-  const sig = [...queryTokens].filter((t) => !(t.length === 2 && t !== "" && /[a-z]/.test(t.charAt(0))));
-  if (sig.length === 0 && !queryTokens.size) return "";
+  const sig = [...queryTokens].filter((t) => !(t.length === 2 && t !== '' && /[a-z]/.test(t.charAt(0))));
+  if (sig.length === 0 && !queryTokens.size) return '';
 
   const scored: { text: string; score: number }[] = [];
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
-    const { meta, body } = parseFrontmatter(readFileSync(join(dir, file), "utf-8"));
-    const searchText = `${meta.name ?? ""} ${meta.description ?? ""} ${body}`.toLowerCase();
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.md'))) {
+    const { meta, body } = parseFrontmatter(readFileSync(join(dir, file), 'utf-8'));
+    const searchText = `${meta.name ?? ''} ${meta.description ?? ''} ${body}`.toLowerCase();
     const words = tokenize(searchText);
 
     let score = 0;
@@ -128,11 +124,11 @@ export function recallMemories(
     if (score > 0) scored.push({ text: `- ${meta.name ?? file}: ${body.slice(0, 300)}`, score });
   }
 
-  if (scored.length === 0) return "";
+  if (scored.length === 0) return '';
   const top = scored
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => s.text)
-    .join("\n");
+    .join('\n');
   return `\n\n# Memory\n${top}`;
 }

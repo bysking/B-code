@@ -9,8 +9,8 @@
  *   运行时它并不真的 extends（靠 duck-typing 匹配方法），类型上如此声明
  *   即可满足 marked 的 renderer 入参要求。
  */
-declare module "marked-terminal" {
-  import { Renderer } from "marked";
+declare module 'marked-terminal' {
+  import { Renderer } from 'marked';
 
   export interface TerminalRendererOptions {
     width?: number;

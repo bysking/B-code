@@ -1,8 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Registry } from "./registry.js";
-import { safeName } from "./utils/paths.js";
-import { CRITIC_SYSTEM } from "./subagent.js";
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Registry } from './registry.js';
+import { safeName } from './utils/paths.js';
+import { CRITIC_SYSTEM } from './subagent.js';
 
 /**
  * Plan Mode 工具（施工图 §10）：只读模式由 permissions 强制，这里提供四个 deferred 工具：
@@ -24,54 +24,53 @@ export interface PlanToolsOptions {
 
 export function registerPlanTools(registry: Registry, opts: PlanToolsOptions): void {
   registry.register({
-    name: "enter_plan_mode",
-    description:
-      "Enter plan mode to switch to a read-only planning phase. Use this before writing a plan.",
-    inputSchema: { type: "object", properties: {} },
-    mode: "external",
-    kind: "builtin",
+    name: 'enter_plan_mode',
+    description: 'Enter plan mode to switch to a read-only planning phase. Use this before writing a plan.',
+    inputSchema: { type: 'object', properties: {} },
+    mode: 'external',
+    kind: 'builtin',
     deferred: true,
     handler: async (_input, ctx) => {
-      ctx.setMode("plan");
-      return "Now in plan mode (read-only). You may only read files and write the plan file.";
+      ctx.setMode('plan');
+      return 'Now in plan mode (read-only). You may only read files and write the plan file.';
     },
   });
 
   registry.register({
-    name: "exit_plan_mode",
-    description: "Exit plan mode after writing your plan file.",
-    inputSchema: { type: "object", properties: {} },
-    mode: "external",
-    kind: "builtin",
+    name: 'exit_plan_mode',
+    description: 'Exit plan mode after writing your plan file.',
+    inputSchema: { type: 'object', properties: {} },
+    mode: 'external',
+    kind: 'builtin',
     deferred: true,
     handler: async (_input, ctx) => {
-      ctx.setMode("default");
-      return "Exited plan mode. You may now make changes, subject to permission checks.";
+      ctx.setMode('default');
+      return 'Exited plan mode. You may now make changes, subject to permission checks.';
     },
   });
 
   registry.register({
-    name: "write_plan",
-    description: "Write the plan to a markdown file in the plans directory.",
+    name: 'write_plan',
+    description: 'Write the plan to a markdown file in the plans directory.',
     inputSchema: {
-      type: "object",
+      type: 'object',
       properties: {
-        title: { type: "string", description: "Short plan title" },
-        plan: { type: "string", description: "The full plan in markdown" },
+        title: { type: 'string', description: 'Short plan title' },
+        plan: { type: 'string', description: 'The full plan in markdown' },
       },
-      required: ["title", "plan"],
+      required: ['title', 'plan'],
     },
-    mode: "write",
+    mode: 'write',
     allowInPlan: true, // plan 模式下唯一放行的写工具
-    kind: "builtin",
+    kind: 'builtin',
     deferred: true,
     handler: async (input) => {
-      const title = safeName(String(input.title ?? "plan"));
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const title = safeName(String(input.title ?? 'plan'));
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const file = join(opts.plansDir, `${stamp}-${title}.md`);
       try {
         mkdirSync(opts.plansDir, { recursive: true });
-        writeFileSync(file, `# ${input.title ?? "Plan"}\n\n${input.plan}\n`, "utf-8");
+        writeFileSync(file, `# ${input.title ?? 'Plan'}\n\n${input.plan}\n`, 'utf-8');
         return `Plan written to ${file}`;
       } catch (err) {
         return `Error writing plan: ${(err as Error).message}`;
@@ -80,40 +79,42 @@ export function registerPlanTools(registry: Registry, opts: PlanToolsOptions): v
   });
 
   registry.register({
-    name: "review_plan",
+    name: 'review_plan',
     description:
-      "Dispatch an independent adversarial-review sub-agent (Plan critic) to attack the drafted plan or technical design: " +
-      "validate mechanism completeness and hunt for holes (missing steps, edge cases, security, ordering, testability). " +
-      "Use when the design is near-final, before committing to implementation. " +
-      "Revise the plan according to the report and review again if needed.",
+      'Dispatch an independent adversarial-review sub-agent (Plan critic) to attack the drafted plan or technical design: ' +
+      'validate mechanism completeness and hunt for holes (missing steps, edge cases, security, ordering, testability). ' +
+      'Use when the design is near-final, before committing to implementation. ' +
+      'Revise the plan according to the report and review again if needed.',
     inputSchema: {
-      type: "object",
+      type: 'object',
       properties: {
-        plan: { type: "string", description: "The plan or technical design to review (markdown text)" },
+        plan: { type: 'string', description: 'The plan or technical design to review (markdown text)' },
         focus: {
-          type: "string",
+          type: 'string',
           description: "Optional: aspects to stress, e.g. 'security', 'edge cases', 'migration'",
         },
       },
-      required: ["plan"],
+      required: ['plan'],
     },
-    mode: "read", // 只读（子 Agent 本身只读）：plan 模式下自动放行
-    kind: "builtin",
+    mode: 'read', // 只读（子 Agent 本身只读）：plan 模式下自动放行
+    kind: 'builtin',
     deferred: true, // 只放开给主 Agent（plan 模式）；子 Agent 工具面看不到 → 防递归
     handler: async (input) => {
-      const plan = String(input.plan ?? "");
+      const plan = String(input.plan ?? '');
       if (!plan.trim()) {
         return "Error: review_plan requires a non-empty 'plan' argument (pass the plan or design text).";
       }
       const critic = opts.runSubAgent;
       if (!critic) {
-        return "Error: review_plan is not wired up — no sub-agent runner configured.";
+        return 'Error: review_plan is not wired up — no sub-agent runner configured.';
       }
-      const focus = input.focus ? String(input.focus) : "";
+      const focus = input.focus ? String(input.focus) : '';
       const task = [
-        focus ? `Adversarial review — focus areas to stress: ${focus}.` : "Adversarial review of the plan below.",
+        focus
+          ? `Adversarial review — focus areas to stress: ${focus}.`
+          : 'Adversarial review of the plan below.',
         plan,
-      ].join("\n\n");
+      ].join('\n\n');
       return critic(task, CRITIC_SYSTEM);
     },
   });
