@@ -322,6 +322,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       } else if (oneShot) {
         quit(0);
       }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctrl.pushOutput(`(error: ${msg})`);
     } finally {
       running = false;
     }

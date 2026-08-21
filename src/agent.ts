@@ -275,17 +275,24 @@ export class Agent {
       this.spinner.start('thinking…');
       this.events?.({ type: 'busy_think' });
       this.events?.({ type: 'busy_tokens', input_tokens: inputTokens });
-      const reply = await this.call({
-        model: this.model,
-        system,
-        // P5：tools 由注册表生成（plan 模式放开 deferred 的 plan 工具）
-        tools,
-        messages: this.messages,
-        // 流式文本直接进 UI；busy 行保持（不在此 stop），调用结束统一清理
-        onText: (delta) => this.print(delta),
-        // 思考块增量 → thinking 事件（UI 以灰色斜体展示）；spinner 不动
-        onThinking: (delta) => this.events?.({ type: 'thinking', text: delta }),
-      });
+      let reply: ModelOutput;
+      try {
+        reply = await this.call({
+          model: this.model,
+          system,
+          // P5：tools 由注册表生成（plan 模式放开 deferred 的 plan 工具）
+          tools,
+          messages: this.messages,
+          // 流式文本直接进 UI；busy 行保持（不在此 stop），调用结束统一清理
+          onText: (delta) => this.print(delta),
+          // 思考块增量 → thinking 事件（UI 以灰色斜体展示）；spinner 不动
+          onThinking: (delta) => this.events?.({ type: 'thinking', text: delta }),
+        });
+      } catch (err) {
+        this.spinner.stop();
+        this.events?.({ type: 'stream_end' });
+        throw err;
+      }
       // 真实 token 用量：落 turn 元信息 + 回填 busy 行（清空前瞬间显示真实值）
       if (reply.usage) {
         this.events?.({ type: 'usage', usage: reply.usage });
