@@ -324,7 +324,10 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      ctrl.pushOutput(`(error: ${msg})`);
+      // P1：API 调用错误直接输出到 stderr，确保用户看到（UI 输出可能被滚动冲掉）
+      console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
+      console.error(`   ${msg.replace(/\n/g, '\n   ')}`);
+      ctrl.pushOutput(`\x1b[31m❌ 接口调用出错: ${msg}\x1b[0m`);
     } finally {
       running = false;
     }
@@ -449,7 +452,14 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       if (skillPrompt) {
         busy = true;
         try {
-          await agent.chat(skillPrompt);
+          try {
+            await agent.chat(skillPrompt);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
+            console.error(`   ${msg.replace(/\n/g, '\n   ')}`);
+            process.stdout.write(`\x1b[31m❌ 接口调用出错: ${msg}\x1b[0m\n`);
+          }
           await saveSession(agent.history(), sessionId);
         } finally {
           busy = false;
@@ -460,7 +470,14 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       }
       busy = true;
       try {
-        await agent.chat(input);
+        try {
+          await agent.chat(input);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
+          console.error(`   ${msg.replace(/\n/g, '\n   ')}`);
+          process.stdout.write(`\x1b[31m❌ 接口调用出错: ${msg}\x1b[0m\n`);
+        }
         await saveSession(agent.history(), sessionId);
       } finally {
         busy = false;
