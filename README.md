@@ -74,8 +74,10 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 | `/clear`           | 清空当前对话历史（并重置"本轮自动审批"标记） |
 | `/plan`            | 切换 Plan（只读）模式                        |
 | `/yolo`            | 切换 Bypass 模式                             |
+| `/auto`            | 切换 Auto 模式（分类器管控写/shell）         |
 | `/default`         | 切换回默认模式                               |
 | `/skills`          | 列出可用技能                                 |
+| `/mcp`             | 列出已配置的 MCP server                      |                        |
 | `/remember <事实>` | 保存一条长期记忆                             |
 | `exit` / `quit`    | 退出                                         |
 

@@ -99,8 +99,9 @@ export function App({
       onSetMode(ctrl.mode);
       return;
     }
-    // 上箭头：导航到历史中更早的输入
+    // 上箭头：导航到历史中更早的输入（有确认框/向导/文本输入时，由对应组件处理）
     if (key.upArrow && !key.ctrl && !key.meta) {
+      if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
       const hist = inputHistory.current;
       if (hist.length > 0 && historyIdx < hist.length - 1) {
         const newIdx = historyIdx + 1;
@@ -110,8 +111,9 @@ export function App({
       }
       return;
     }
-    // 下箭头：导航到历史中更新的输入（或清空到当前输入）
+    // 下箭头：导航到历史中更新的输入（或清空到当前输入；有确认框/向导/文本输入时，由对应组件处理）
     if (key.downArrow && !key.ctrl && !key.meta) {
+      if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
       if (historyIdx > 0) {
         const newIdx = historyIdx - 1;
         setHistoryIdx(newIdx);
@@ -264,6 +266,7 @@ export function App({
           onSubmit={handleSubmit}
           onPaste={handlePaste}
           disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
+          slashOpen={ctrl.slashOpen}
         />
         <ModeBar mode={ctrl.mode} />
       </Box>

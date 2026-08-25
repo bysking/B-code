@@ -310,11 +310,11 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           .filter((s) => s.userInvocable)
           .map((s) => `/${s.name}: ${s.description}`)
           .join('\n');
-        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : '(no skills)');
+        console.log(`\n${skills ? `Available skills:\n${skills}` : '(no skills)'}\n`);
         return;
       }
       if (trimmed === '/mcp') {
-        ctrl.pushOutput(formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)));
+        console.log(`\n${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`);
         return;
       }
       if (trimmed.startsWith('/remember ')) {
@@ -322,18 +322,6 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         const name = fact.split(/\W+/).filter(Boolean).slice(0, 4).join('_').toLowerCase() || 'fact';
         saveMemory(name, fact, 'reference', fact);
         ctrl.pushOutput(`(saved to memory: ${name})`);
-        return;
-      }
-
-      if (trimmed === '/image') {
-        const clipboardImage = readClipboardImage();
-        if (clipboardImage) {
-          ctrl.pushUser(trimmed);
-          await agent.chat({ text: '请描述这张图片', images: [clipboardImage] });
-          await saveSession(agent.history(), sessionId);
-        } else {
-          ctrl.pushOutput('(剪贴板中没有图片)');
-        }
         return;
       }
 
@@ -484,18 +472,6 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         created.prompt();
         return;
       }
-      if (input === '/image') {
-        const clipboardImage = readClipboardImage();
-        if (clipboardImage) {
-          await chatWithClipboard(agent, '请描述这张图片');
-          await saveSession(agent.history(), sessionId);
-        } else {
-          process.stdout.write('(剪贴板中没有图片)\n');
-        }
-        created.prompt();
-        return;
-      }
-      // 技能调用优先："/commit 参数" → 技能正文（含替换后的 $ARGUMENTS）
       const skillPrompt = resolveSkill(input);
       if (skillPrompt) {
         busy = true;

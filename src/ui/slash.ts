@@ -9,10 +9,11 @@ export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
   { name: 'clear', description: '清空当前对话历史' },
   { name: 'plan', description: '切换 plan（只读）模式' },
   { name: 'yolo', description: '切换 bypass 模式' },
+  { name: 'auto', description: '切换 auto 模式（分类器管控写/shell）' },
   { name: 'default', description: '切换回默认模式' },
   { name: 'skills', description: '列出可用技能' },
   { name: 'mcp', description: '列出已配置的 MCP server' },
-  { name: 'image', description: '发送剪贴板中的图片' },
+  { name: 'remember', description: '保存一条长期记忆' },
   { name: 'exit', description: '退出 b-code' },
 ];
 

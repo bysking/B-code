@@ -18,6 +18,7 @@ export function SimpleTextInput({
   focus = true,
   placeholder,
   onPaste,
+  slashOpen = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -25,6 +26,8 @@ export function SimpleTextInput({
   focus?: boolean;
   placeholder?: string;
   onPaste?: () => string | null;
+  /** slash 菜单打开时，InputBox 不处理 Enter（由 SlashMenu 接管） */
+  slashOpen?: boolean;
 }) {
   const [cursor, setCursor] = useState(value.length);
 
@@ -41,8 +44,8 @@ export function SimpleTextInput({
   useInput((input, key) => {
     if (!focus) return;
 
-    // Enter：提交
-    if (key.return) {
+    // Enter：提交（slash 菜单打开时交给 SlashMenu 处理，避免双发）
+    if (key.return && !slashOpen) {
       onSubmit(value);
       return;
     }
@@ -115,12 +118,14 @@ export function InputBox({
   onSubmit,
   disabled,
   onPaste,
+  slashOpen = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   disabled: boolean;
   onPaste?: () => string | null;
+  slashOpen?: boolean;
 }) {
   return (
     <Box>
@@ -134,6 +139,7 @@ export function InputBox({
         onPaste={onPaste}
         focus={!disabled}
         placeholder={disabled ? '……' : undefined}
+        slashOpen={slashOpen}
       />
     </Box>
   );
