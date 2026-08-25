@@ -13,6 +13,20 @@ import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
 import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
 import type { SpinnerLike } from './ui.js';
 import type { Mode } from './permissions.js';
+import { readClipboardImage, type ClipboardImage } from './utils/clipboard.js';
+
+/**
+ * 聊天输入封装：自动检测剪贴板图片，如果存在则与文本一起发送给模型。
+ * 纯文本（无图片）时行为与直接调用 agent.chat(text) 一致。
+ */
+async function chatWithClipboard(agent: Agent, text: string): Promise<void> {
+  const clipboardImage = readClipboardImage();
+  if (clipboardImage) {
+    await agent.chat({ text, images: [clipboardImage] });
+  } else {
+    await agent.chat(text);
+  }
+}
 
 /**
  * CLI 外壳（施工图 L1 cli.ts）
@@ -256,10 +270,21 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   );
   unmount = unmountApp;
 
-  async function handle(input: string) {
+  async function handle(input: string | { text: string; images?: ClipboardImage[] }) {
     if (running) return;
     running = true;
     try {
+      // 结构化输入（带图片）：直接发送，跳过 slash 命令处理
+      if (typeof input !== 'string') {
+        const { text, images } = input;
+        const displayText = text + (images && images.length > 0 ? ` [图片×${images.length}]` : '');
+        ctrl.pushUser(displayText);
+        await agent.chat({ text, images });
+        await saveSession(agent.history(), sessionId);
+        if (oneShot) quit(0);
+        return;
+      }
+
       const trimmed = input.trim();
       if (trimmed === 'exit' || trimmed === 'quit') {
         quit(0);
@@ -300,6 +325,18 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         return;
       }
 
+      if (trimmed === '/image') {
+        const clipboardImage = readClipboardImage();
+        if (clipboardImage) {
+          ctrl.pushUser(trimmed);
+          await agent.chat({ text: '请描述这张图片', images: [clipboardImage] });
+          await saveSession(agent.history(), sessionId);
+        } else {
+          ctrl.pushOutput('(剪贴板中没有图片)');
+        }
+        return;
+      }
+
       // 技能调用优先（含 $ARGUMENTS 替换），未命中走普通对话
       const effective = resolveSkill(trimmed) ?? trimmed;
       ctrl.pushUser(trimmed);
@@ -310,7 +347,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         quit(0);
         return;
       }
-      await agent.chat(effective);
+      await chatWithClipboard(agent, effective);
       await saveSession(agent.history(), sessionId);
 
       if (agent.interruptedByUser) {
@@ -447,13 +484,24 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         created.prompt();
         return;
       }
+      if (input === '/image') {
+        const clipboardImage = readClipboardImage();
+        if (clipboardImage) {
+          await chatWithClipboard(agent, '请描述这张图片');
+          await saveSession(agent.history(), sessionId);
+        } else {
+          process.stdout.write('(剪贴板中没有图片)\n');
+        }
+        created.prompt();
+        return;
+      }
       // 技能调用优先："/commit 参数" → 技能正文（含替换后的 $ARGUMENTS）
       const skillPrompt = resolveSkill(input);
       if (skillPrompt) {
         busy = true;
         try {
           try {
-            await agent.chat(skillPrompt);
+            await chatWithClipboard(agent, skillPrompt);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
@@ -471,7 +519,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       busy = true;
       try {
         try {
-          await agent.chat(input);
+          await chatWithClipboard(agent, input);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
@@ -566,7 +614,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     busy = true;
     try {
       for (;;) {
-        await agent.chat(instruction);
+        await chatWithClipboard(agent, instruction);
         await new Promise((r) => setTimeout(r, loop * 1000));
       }
     } finally {
@@ -581,7 +629,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     busy = true; // 中途 stdin 可能 EOF（管道押完 y 就断），close 只标记不退出
     const effective = resolveSkill(instruction) ?? instruction; // 支持 one-shot 技能调用
     try {
-      await agent.chat(effective);
+      await chatWithClipboard(agent, effective);
     } finally {
       await saveSession(agent.history(), sessionId);
       busy = false;

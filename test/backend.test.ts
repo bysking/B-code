@@ -228,6 +228,48 @@ test('toOpenAIMessages：tool_result 块 → role=tool 且带 tool_call_id', () 
   assert.equal(msg.content, 'file contents');
 });
 
+test('toOpenAIMessages：image 块（base64）→ image_url 格式', () => {
+  const input = [
+    {
+      role: 'user' as const,
+      content: [
+        { type: 'text' as const, text: '描述这张图片' },
+        {
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ' },
+        },
+      ],
+    },
+  ];
+  const [msg] = toOpenAIMessages(input);
+  assert.equal(msg.role, 'user');
+  assert.ok(Array.isArray(msg.content));
+  assert.equal(msg.content[0].type, 'text');
+  assert.equal(msg.content[0].text, '描述这张图片');
+  assert.equal(msg.content[1].type, 'image_url');
+  assert.ok(msg.content[1].image_url.url.startsWith('data:image/png;base64,'));
+  assert.ok(msg.content[1].image_url.url.includes('iVBORw0KGgo'));
+});
+
+test('toOpenAIMessages：image 块（URL）→ image_url 格式', () => {
+  const input = [
+    {
+      role: 'user' as const,
+      content: [
+        { type: 'text' as const, text: '看这个' },
+        {
+          type: 'image' as const,
+          source: { type: 'url' as const, url: 'https://example.com/image.png' },
+        },
+      ],
+    },
+  ];
+  const [msg] = toOpenAIMessages(input);
+  assert.equal(msg.role, 'user');
+  assert.equal(msg.content[1].type, 'image_url');
+  assert.equal(msg.content[1].image_url.url, 'https://example.com/image.png');
+});
+
 test('fromOpenAIResponse：纯文本回复 → text 块', () => {
   const out = fromOpenAIResponse({ choices: [{ message: { content: 'done', tool_calls: [] } }] });
   assert.deepEqual(out.content, [{ type: 'text', text: 'done' }]);

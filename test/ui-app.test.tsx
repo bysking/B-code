@@ -4,10 +4,11 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../src/ui/app.js';
 import { AppController } from '../src/ui/controller.js';
+import type { ClipboardImage } from '../src/utils/clipboard.js';
 
 function renderApp(
   ctrl: AppController,
-  onSubmit: (text: string) => void = () => {},
+  onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void = () => {},
   onExit: () => void = () => {},
 ) {
   const frame = render(
@@ -157,7 +158,7 @@ test('回归：完整一轮结束后再输入，新一轮用户消息仍展示',
 
 test('渲染：斜杠菜单打开显示候选', async () => {
   const ctrl = new AppController();
-  const submitted: string[] = [];
+  const submitted: (string | { text: string; images?: ClipboardImage[] })[] = [];
   const frame = renderApp(ctrl, (t) => submitted.push(t));
   ctrl.setSlashItems([
     ...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS,

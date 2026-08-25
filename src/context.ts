@@ -86,6 +86,12 @@ export function renderCompaction(
         } else {
           parts.push('[tool result]');
         }
+      } else if (b?.type === 'text') {
+        // 文本块：直接渲染（可能在 content 数组中与图片并列）
+        parts.push(b.text ?? '');
+      } else if (b?.type === 'image') {
+        // 图片块：不泄漏 base64 数据
+        parts.push('[image]');
       }
     }
     lines.push(`${m.role}: ${parts.join(' | ')}`);

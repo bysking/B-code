@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { callModel, defaultModel, estimateTokens, type ModelInput, type ModelOutput } from './backend.js';
+import type { ClipboardImage } from './utils/clipboard.js';
 import { registerBuiltinTools } from './tools.js';
 import { registerPlanTools } from './plan.js';
 import { runSubAgent } from './subagent.js';
@@ -62,7 +64,20 @@ function estimateInputTokens(
     n += estimateTokens(`${t.name} ${t.description ?? ''} ${JSON.stringify(t.input_schema ?? {})}`);
   }
   for (const m of messages) {
-    n += estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+    if (typeof m.content === 'string') {
+      n += estimateTokens(m.content);
+    } else {
+      for (const b of m.content) {
+        if (b.type === 'text') {
+          n += estimateTokens(b.text);
+        } else if (b.type === 'image') {
+          // 图片 token 估算：Anthropic 按像素计费，简化估算 800 token/图
+          n += 800;
+        } else if (b.type === 'tool_use' || b.type === 'tool_result') {
+          n += estimateTokens(JSON.stringify(b));
+        }
+      }
+    }
   }
   return n;
 }
@@ -238,14 +253,29 @@ export class Agent {
   }
 
   /** 处理一次用户输入，可能包含多轮工具调用 */
-  async chat(userText: string): Promise<void> {
+  async chat(userText: string | { text: string; images?: ClipboardImage[] }): Promise<void> {
     this.lastInterrupted = false;
-    this.messages.push({ role: 'user', content: userText });
+
+    // 构建消息内容：纯文本 → content 字符串；带图片 → content 数组（text + image blocks）
+    const text = typeof userText === 'string' ? userText : userText.text;
+    const images = typeof userText === 'object' ? userText.images : undefined;
+    if (images && images.length > 0) {
+      const content: ContentBlockParam[] = [
+        { type: 'text', text },
+        ...images.map((img) => ({
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: img.media_type, data: img.data },
+        })),
+      ];
+      this.messages.push({ role: 'user', content });
+    } else {
+      this.messages.push({ role: 'user', content: text });
+    }
 
     // P4：以当前用户输入为 query 做记忆召回 + 技能描述，注入 system 动态块末尾
     // （近因效应让模型优先看到记忆；一次 chat 只召回一次，避免循环内重复 IO）
     const system = buildSystemPrompt({
-      memory: recallMemories(userText),
+      memory: recallMemories(text),
       skills: buildSkillDescriptions(),
     });
 

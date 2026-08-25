@@ -48,7 +48,7 @@ export function SlashMenu({
 
   return (
     <Box flexDirection="column" marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1}>
-      {filtered.slice(0, 8).map((item, i) => {
+      {filtered.slice(0, 12).map((item, i) => {
         const active = i === clampIndex(idx, filtered.length);
         return (
           <Text key={item.name} color={active ? 'cyan' : undefined} bold={active}>

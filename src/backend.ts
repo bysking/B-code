@@ -145,13 +145,29 @@ export function toOpenAIMessages(messages: MessageParam[]): any[] {
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       });
     } else {
-      // user 消息的块：tool_result
+      // user 消息：遍历所有块（text / image / tool_result）
+      const contentParts: any[] = [];
+      const toolResults: any[] = [];
       for (const b of m.content) {
-        const tr = b as Anthropic.ToolResultBlockParam;
-        if (tr.type === 'tool_result') {
-          out.push({ role: 'tool', tool_call_id: tr.tool_use_id, content: String(tr.content) });
+        if (b.type === 'tool_result') {
+          const tr = b as Anthropic.ToolResultBlockParam;
+          toolResults.push({ role: 'tool', tool_call_id: tr.tool_use_id, content: String(tr.content) });
+        } else if (b.type === 'image') {
+          // Anthropic ImageBlockParam → OpenAI image_url content part
+          const img = b as { type: 'image'; source: { type: string; media_type?: string; data?: string; url?: string } };
+          const src = img.source;
+          if (src.type === 'base64' && src.data && src.media_type) {
+            contentParts.push({ type: 'image_url', image_url: { url: `data:${src.media_type};base64,${src.data}` } });
+          } else if (src.type === 'url' && src.url) {
+            contentParts.push({ type: 'image_url', image_url: { url: src.url } });
+          }
+        } else if (b.type === 'text') {
+          contentParts.push(b);
         }
       }
+      // 先推 content 块（text + image 在同一 user 消息中），再推 tool_result
+      if (contentParts.length > 0) out.push({ role: 'user', content: contentParts });
+      out.push(...toolResults);
     }
   }
   return out;

@@ -17,12 +17,14 @@ export function SimpleTextInput({
   onSubmit,
   focus = true,
   placeholder,
+  onPaste,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   focus?: boolean;
   placeholder?: string;
+  onPaste?: () => string | null;
 }) {
   const [cursor, setCursor] = useState(value.length);
 
@@ -50,6 +52,18 @@ export function SimpleTextInput({
       if (cursor > 0) {
         onChange(value.slice(0, cursor - 1) + value.slice(cursor));
         setCursor(cursor - 1);
+      }
+      return;
+    }
+
+    // Ctrl+V / Cmd+V：粘贴检测（图片 → [image #N] 占位符；文本 → 直接插入）
+    if ((key.ctrl && input === 'v') || (key.meta && input === 'v')) {
+      if (onPaste) {
+        const pasteText = onPaste();
+        if (pasteText) {
+          onChange(value.slice(0, cursor) + pasteText + value.slice(cursor));
+          setCursor(cursor + pasteText.length);
+        }
       }
       return;
     }
@@ -100,11 +114,13 @@ export function InputBox({
   onChange,
   onSubmit,
   disabled,
+  onPaste,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   disabled: boolean;
+  onPaste?: () => string | null;
 }) {
   return (
     <Box>
@@ -115,6 +131,7 @@ export function InputBox({
         value={value}
         onChange={onChange}
         onSubmit={onSubmit}
+        onPaste={onPaste}
         focus={!disabled}
         placeholder={disabled ? '……' : undefined}
       />

@@ -12,6 +12,7 @@ export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
   { name: 'default', description: '切换回默认模式' },
   { name: 'skills', description: '列出可用技能' },
   { name: 'mcp', description: '列出已配置的 MCP server' },
+  { name: 'image', description: '发送剪贴板中的图片' },
   { name: 'exit', description: '退出 b-code' },
 ];
 

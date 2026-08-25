@@ -116,8 +116,22 @@ export function recentTurns(messages: MessageParam[], maxRounds = 5): ResumeTurn
   for (let i = begin; i < messages.length; i++) {
     const m = messages[i]!;
     if (m.role === 'user') {
-      if (typeof m.content === 'string') out.push({ role: 'user', text: m.content, tools: [] });
-      // tool_result 块：不是对话轮，跳过
+      if (typeof m.content === 'string') {
+        out.push({ role: 'user', text: m.content, tools: [] });
+      } else {
+        // content 数组：提取 text + 标记 image
+        const textBlocks: string[] = [];
+        let hasImage = false;
+        for (const b of Array.isArray(m.content) ? m.content : []) {
+          if (b.type === 'text' && b.text) textBlocks.push(b.text);
+          else if (b.type === 'image') hasImage = true;
+        }
+        const text = textBlocks.join('');
+        if (text || hasImage) {
+          out.push({ role: 'user', text: hasImage ? `[图片] ${text}` : text, tools: [] });
+        }
+        // 纯 tool_result 的消息：不是对话轮，跳过
+      }
     } else if (m.role === 'assistant') {
       const text: string[] = [];
       const tools: string[] = [];

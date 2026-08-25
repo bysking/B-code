@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useInput } from 'ink';
 import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
 import type { Mode } from '../permissions.js';
+import type { ClipboardImage } from '../utils/clipboard.js';
+import { readClipboardImage, readClipboardText } from '../utils/clipboard.js';
 
 /** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
 function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
@@ -33,7 +35,7 @@ export function App({
   initialOutput,
 }: {
   ctrl: AppController;
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void;
   onInterrupt: () => void;
   onExit: () => void;
   onSetMode: (mode: Mode) => void;
@@ -58,6 +60,8 @@ export function App({
   // 输入历史：提交过的提示词，用于上下键导航（最新在前）
   const inputHistory = useRef<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1); // -1 = 当前输入，≥0 为历史索引
+  // 粘贴的图片数据：[image #N] 占位符 → N-1 索引
+  const imagesRef = useRef<ClipboardImage[]>([]);
 
   useInput((_input, key) => {
     // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
@@ -142,6 +146,19 @@ export function App({
     else if (ctrl.slashOpen) ctrl.closeSlash();
   };
 
+  // Ctrl+V / Cmd+V 粘贴：读取剪贴板，图片 → 存图片 + 放 [image #N] 占位符；文本 → 直接返回文本
+  // 同步执行（readClipboardImage 内部使用 execSync，不阻塞 UI）
+  const handlePaste = (): string | null => {
+    const clipboardImage = readClipboardImage();
+    if (clipboardImage) {
+      const idx = imagesRef.current.length + 1; // 1-indexed，用户友好
+      imagesRef.current.push(clipboardImage);
+      return `[image #${idx}]`;
+    }
+    // 剪贴板无图片：尝试读取文本
+    return readClipboardText();
+  };
+
   // Tab 补全：把候选命令名写回输入框（可继续输入参数），保持菜单打开
   const handleComplete = (item: SlashItem) => {
     const completed = buildSlash(input, item.name);
@@ -153,13 +170,34 @@ export function App({
   const handleSubmit = (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    // 记入输入历史（去重紧邻重复）
+
+    // 解析 [image #N] 占位符，提取对应的图片数据
+    const images = imagesRef.current;
+    const usedImages: ClipboardImage[] = [];
+    const regex = /\[image #(\d+)\]/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(trimmed)) !== null) {
+      const idx = parseInt(match[1] ?? '', 10) - 1;
+      if (idx >= 0 && idx < images.length) {
+        usedImages.push(images[idx]!);
+      }
+    }
+    // 清理占位符后的纯文本
+    const cleanText = trimmed.replace(/\[image #\d+\]/g, '').trim();
+
+    // 记入输入历史（去重紧邻重复，保存原始输入含占位符）
     const hist = inputHistory.current;
     if (hist[hist.length - 1] !== trimmed) hist.push(trimmed);
     setHistoryIdx(-1);
     setInput('');
+    imagesRef.current = []; // 清空本次已消费的图片
     ctrl.closeSlash();
-    onSubmit(trimmed);
+
+    if (usedImages.length > 0) {
+      onSubmit({ text: cleanText, images: usedImages });
+    } else {
+      onSubmit(trimmed); // 纯文本，行为不变
+    }
   };
 
   return (
@@ -224,6 +262,7 @@ export function App({
           value={input}
           onChange={handleChange}
           onSubmit={handleSubmit}
+          onPaste={handlePaste}
           disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
         />
         <ModeBar mode={ctrl.mode} />
