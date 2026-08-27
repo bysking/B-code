@@ -15,6 +15,7 @@ export interface TtyMount {
   instance: Instance;
 }
 
+/** 挂载UI入口 */
 export function mountTtyApp(
   ctrl: AppController,
   hooks: {

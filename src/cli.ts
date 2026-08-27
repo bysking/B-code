@@ -310,11 +310,16 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           .filter((s) => s.userInvocable)
           .map((s) => `/${s.name}: ${s.description}`)
           .join('\n');
+
+        // todo 同步等待读取配置，然后 ctrl 推送到 UI渲染
         console.log(`\n${skills ? `Available skills:\n${skills}` : '(no skills)'}\n`);
         return;
       }
       if (trimmed === '/mcp') {
-        console.log(`\n${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`);
+        // todo 同步等待读取配置，然后 ctrl 推送到 UI渲染
+        console.log(
+          `\n${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`,
+        );
         return;
       }
       if (trimmed.startsWith('/remember ')) {
@@ -339,6 +344,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       await saveSession(agent.history(), sessionId);
 
       if (agent.interruptedByUser) {
+        // 这里中断失效 todo
         ctrl.pushOutput('(interrupted — 可以输入新指令或继续)');
       }
 
@@ -370,20 +376,36 @@ function printResumeHint(sessionId: string): void {
 }
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  /**  参数解析
+   * 是否恢复会话：resume、session
+     权限模式：plan、yolo、auto
+     自动目标：goal
+     循环执行：loop
+     用户指令：instruction 
+  */
   const { resume, plan, yolo, auto, goal, loop, session, instruction } = parseCliArgs(argv);
+
+  /** 同时判断是否是普通 REPL：也就是没有一次性指令、目标或循环参数时，才进入交互式多轮模式。 */
   const replMode = !instruction && !goal && !(loop > 0);
   const sessionId = newSessionId(); // 本次会话 id（退出时打印恢复命令用）
 
-  // TTY 交互路径：ink 声明式渲染（思考/工具块/markdown/选择/斜杠菜单）。
+  // 如果输入输出都是真实终端，就交给 runTtyCli，TTY 交互路径：ink 声明式渲染（思考/工具块/markdown/选择/斜杠菜单）。
   // 非 TTY（管道/CI/脚本）走下方 readline 分支，语义保持不变。
   if (process.stdout.isTTY && process.stdin.isTTY) {
     await runTtyCli({ resume, plan, yolo, auto, goal, loop, session, instruction }, sessionId);
-    return;
+    return; // 在这里直接结束，不再执行下面的非 TTY 逻辑。
   }
 
+  /** 命令行输入接口 */
   let rl: readline.Interface | null = null;
+
+  /** 等待权限确认的回调 */
   let awaitingAnswer: ((ok: boolean) => void) | null = null;
+
+  /** Agent 是否正在执行任务 */
   let busy = false;
+
+  /** 输入流是否已经关闭 */
   let closing = false;
 
   /** 待答优先：确认框只吃 y/n；返回 true 表示消费了该行 */
@@ -415,6 +437,20 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
 
   /** 延迟创建共享 readline（REPL 一上来就建；one-shot 等首次 confirm 才建） */
   const getRl = (): readline.Interface => {
+    /**
+     * 普通 REPL 中会立即调用它；one-shot 模式则只有真正需要权限确认时才创建。
+     * 每收到一行输入，会依次处理：
+     *  是否是权限确认答案
+        空输入
+        exit / quit
+        /clear
+        /plan、/yolo、/default、/auto
+        /skills
+        /mcp
+        /remember
+        技能调用
+        普通聊天请求
+     */
     const existing = currentRl();
     if (existing) return existing;
     const created = readline.createInterface({
