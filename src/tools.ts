@@ -312,17 +312,37 @@ function runShellTool(input: { command: string }, ctx?: RuntimeContext): Promise
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
 
-    const timer = setTimeout(() => {
+    // 统一终止：SIGTERM → 1s 后 SIGKILL 兜底（超时与用户中断共用）
+    const killChild = () => {
       child.kill('SIGTERM');
-      // 给进程收尾时间，仍不退则强杀；timer 不拖住进程退出
       setTimeout(() => child.kill('SIGKILL'), 1000).unref();
+    };
+
+    const timer = setTimeout(() => {
+      killChild();
       finish(`(timed out after ${SHELL_TIMEOUT_MS / 1000}s; process killed)\n${out.trim()}`);
     }, SHELL_TIMEOUT_MS);
     timer.unref();
 
+    // 硬中断：用户取消（Esc）→ 立即终止子进程，结果带"已中断"标记
+    const signal = ctx?.signal;
+    const onAbort = () => {
+      killChild();
+      finish(`(interrupted by user; process killed)\n${out.trim()}`);
+    };
+    if (signal) {
+      if (signal.aborted) {
+        killChild();
+        clearTimeout(timer);
+        return finish('(interrupted by user; process killed)');
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     child.on('error', (err) => finish(`Error: ${err.message}`));
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       const body = out.trim();
       finish(code === 0 ? body || '(no output)' : body || `(exit ${code})`);
     });

@@ -85,3 +85,32 @@ test('对抗性审查角色：自定义 system（CRITIC_SYSTEM）注入首轮调
   assert.ok(systemText.includes('adversarial reviewer'), '应使用 Plan critic 人设');
   assert.ok(!systemText.includes('explore sub-agent'), '不应是默认 explore 人设');
 });
+
+test('硬中断：父级 signal 透传给子 Agent 的模型调用；abort 后不再发起新一轮', async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+
+  const ac = new AbortController();
+  let calls = 0;
+  const callModel = async (input: ModelInput): Promise<ModelOutput> => {
+    calls++;
+    assert.equal(input.signal, ac.signal, '子 Agent 模型调用收到父级取消信号');
+    if (calls === 1) {
+      // 模拟调用耗时；期间父级取消 → 工具执行后的循环边界应停
+      await new Promise((r) => setTimeout(r, 30));
+      return {
+        content: [{ type: 'tool_use', id: 's-1', name: 'read_file', input: { file_path: filePath } }],
+      };
+    }
+    return { content: [{ type: 'text', text: 'should not reach' }] };
+  };
+
+  const ctx: RuntimeContext = { callModel, model: 'm', setMode: () => {}, signal: ac.signal };
+  const pending = runSubAgent('explore', ctx, registry);
+  await new Promise((r) => setTimeout(r, 10));
+  ac.abort(); // 父级取消
+  const result = await pending;
+
+  assert.equal(calls, 1, 'abort 后不再发起第二轮模型调用');
+  assert.ok(result.includes('interrupted'), '返回中断标记而非继续执行');
+});

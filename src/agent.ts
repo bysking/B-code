@@ -188,10 +188,26 @@ export class Agent {
   // ── 用户中断（Esc）──────────────────────────────────────
   private interrupted = false;
   private lastInterrupted = false;
+  /** 当前 chat 的取消控制器：硬中断时 abort（在飞模型请求/可取消工具立即终止） */
+  private abortController: AbortController | null = null;
 
-  /** 请求中断当前 chat：在循环边界生效（等当前模型/工具步骤落袋后停，不再发起新一轮） */
+  /** 请求中断当前 chat：硬中断——立即取消在飞的模型请求与可取消工具（如 run_shell），
+   * 同时置边界标记，保证当前步骤落袋后不再发起新一轮 */
   interrupt(): void {
     this.interrupted = true;
+    this.abortController?.abort();
+  }
+
+  /** chat 结束清理：释放 ctx.signal 与控制器（各出口统一调用） */
+  private cleanupAbort(): void {
+    this.ctx.signal = undefined;
+    this.abortController = null;
+  }
+
+  /** AbortError / abort reason → 用户取消：不作为普通接口错误上抛 */
+  private isAbortError(err: unknown): boolean {
+    if (this.abortController?.signal.aborted) return true;
+    return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
   }
 
   /** 最近一次 chat 是否因用户中断而（提前）结束 */
@@ -255,6 +271,9 @@ export class Agent {
   /** 处理一次用户输入，可能包含多轮工具调用 */
   async chat(userText: string | { text: string; images?: ClipboardImage[] }): Promise<void> {
     this.lastInterrupted = false;
+    // 硬中断：本次 chat 的取消控制器（模型请求/可取消工具共享同一 signal）
+    this.abortController = new AbortController();
+    this.ctx.signal = this.abortController.signal;
 
     // 构建消息内容：纯文本 → content 字符串；带图片 → content 数组（text + image blocks）
     const text = typeof userText === 'string' ? userText : userText.text;
@@ -280,11 +299,12 @@ export class Agent {
     });
 
     while (true) {
-      // 用户中断（Esc）：等当前步骤落袋后在此停住，不发起新一轮（软中断）
+      // 用户中断（Esc）：等当前步骤落袋后在此停住，不发起新一轮（软中断兜底）
       if (this.interrupted) {
         this.interrupted = false;
         this.lastInterrupted = true;
         this.events?.({ type: 'stream_end' });
+        this.cleanupAbort();
         break;
       }
 
@@ -313,6 +333,8 @@ export class Agent {
           // P5：tools 由注册表生成（plan 模式放开 deferred 的 plan 工具）
           tools,
           messages: this.messages,
+          // 硬中断：用户取消时透传，后端中止在飞请求与流式读取
+          signal: this.abortController?.signal,
           // 流式文本直接进 UI；busy 行保持（不在此 stop），调用结束统一清理
           onText: (delta) => this.print(delta),
           // 思考块增量 → thinking 事件（UI 以灰色斜体展示）；spinner 不动
@@ -321,6 +343,14 @@ export class Agent {
       } catch (err) {
         this.spinner.stop();
         this.events?.({ type: 'stream_end' });
+        // 用户取消（Esc）：不作为普通接口错误上抛，按中断收尾
+        if (this.isAbortError(err)) {
+          this.interrupted = false;
+          this.lastInterrupted = true;
+          this.cleanupAbort();
+          return;
+        }
+        this.cleanupAbort();
         throw err;
       }
       // 真实 token 用量：落 turn 元信息 + 回填 busy 行（清空前瞬间显示真实值）
@@ -343,6 +373,7 @@ export class Agent {
           this.lastInterrupted = true;
           this.events?.({ type: 'stream_end' });
         }
+        this.cleanupAbort();
         break;
       }
 

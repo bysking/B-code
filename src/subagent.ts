@@ -53,11 +53,15 @@ export async function runSubAgent(
   const tools = registry.toolsSchema().filter((t) => registry.resolve(t.name)?.mode === 'read');
 
   while (true) {
+    // 硬中断：父级取消（Esc）→ 子 Agent 立即停止，不再发起模型调用
+    if (subCtx.signal?.aborted) return '(sub-agent interrupted by user)';
     const reply = await subCtx.callModel({
       model: subCtx.model,
       system: [{ type: 'text', text: system }],
       tools,
       messages,
+      // 透传取消信号：在飞的模型请求随父级中断一起终止
+      ...(subCtx.signal ? { signal: subCtx.signal } : {}),
     });
     messages.push({ role: 'assistant', content: reply.content });
 

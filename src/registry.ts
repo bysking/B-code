@@ -41,6 +41,8 @@ export interface RuntimeContext {
   fileStore?: FileStore;
   /** 工具执行期间的实时日志回调（run_shell/MCP 等长任务逐行转发；无则忽略） */
   onToolOutput?(line: string): void;
+  /** 硬中断信号：用户取消时 abort——支持取消的工具（如 run_shell）监听它立即终止 */
+  signal?: AbortSignal;
 }
 
 export interface MountPoint {

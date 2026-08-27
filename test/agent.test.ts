@@ -284,6 +284,60 @@ test('interrupt：Esc 软中断在循环边界生效，不再发起新的模型�
   assert.equal(agent.history().length, 2, 'user + 一次 assistant 回复');
 });
 
+test('硬中断：interrupt() 立即 abort 模型请求的 signal，取消不上抛为接口错误', async () => {
+  let calls = 0;
+  const fn = async (input: ModelInput): Promise<ModelOutput> => {
+    calls++;
+    assert.ok(input.signal, '模型调用收到取消信号');
+    // 模拟真实后端：等待期间被 abort → 抛 AbortError
+    return new Promise<ModelOutput>((_resolve, reject) => {
+      const sig = input.signal!;
+      const onAbort = () => {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      if (sig.aborted) return onAbort();
+      sig.addEventListener('abort', onAbort, { once: true });
+    });
+  };
+  const agent = new Agent({ callModel: fn, print: () => {} });
+  const p = agent.chat('go');
+  await new Promise((r) => setTimeout(r, 10));
+  agent.interrupt(); // Esc → abort 在飞请求
+  await p; // 不应抛出
+
+  assert.equal(agent.interruptedByUser, true, '标记为用户中断');
+  assert.equal(calls, 1, '取消后不再发起第二轮模型调用');
+});
+
+test('硬中断：shell 工具执行中被取消——子进程立即终止，结果带中断标记', async () => {
+  let step = 0;
+  const fn = async (_input: ModelInput): Promise<ModelOutput> => {
+    step++;
+    if (step === 1) {
+      return {
+        content: [{ type: 'tool_use', id: 'tu-shell', name: 'run_shell', input: { command: 'sleep 30' } }],
+      };
+    }
+    return { content: [{ type: 'text', text: 'done' }] };
+  };
+  const agent = new Agent({ callModel: fn, print: () => {}, mode: 'bypass' });
+  const start = Date.now();
+  const p = agent.chat('run long command');
+  await new Promise((r) => setTimeout(r, 300)); // 等 shell 起来
+  agent.interrupt(); // Esc → SIGTERM 子进程
+  await p;
+
+  assert.ok(Date.now() - start < 10_000, '远早于 sleep 30s：子进程被真正终止');
+  assert.equal(agent.interruptedByUser, true);
+  assert.equal(step, 1, '中断后不再发起第二轮模型调用');
+  // 中断标记落进喂回的 tool_result
+  const fedBack = agent.history()[agent.history().length - 1]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as { content: string };
+  assert.ok(String(result.content).includes('interrupted'), '工具结果带中断标记');
+});
+
 test('spinner 生命周期：模型期 thinking、工具期 running，start/stop 配平', async () => {
   const { fn } = makeScriptedBackend([1, -1], filePath);
   const events: string[] = [];

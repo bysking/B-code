@@ -39,3 +39,4 @@ BadRequestError: 400 {"error":{"message":"unexpected `messages.1.content.0: tool
    动想查看历史消息，就会突然跳到最顶部，滚动条看起来位置被重置了一样，请修复
 10. 优化技能目录查找，支持扁平和目录方式
 11. 用户点击 esc 需要停止模型循环，等待用户输入，然后将用户输入作为一个高优先级任务 todo
+12. `bcode "读取 package.json"` 一次性处理模式，需要等待结果返回后才能关闭 todo

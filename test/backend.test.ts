@@ -166,6 +166,41 @@ test('callModel SSE 流式：tool_calls 分片按 index 合并为完整参数', 
   }
 });
 
+test('硬中断：SSE 流式读取中被 abort → 立即终止并抛取消错误', async () => {
+  // 独立 server：发一块后长时间挂起（不发 [DONE]），模拟在飞流
+  const hangServer = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+    // 故意不结束：靠客户端 abort 打断
+  });
+  await new Promise<void>((r) => hangServer.listen(0, '127.0.0.1', r));
+  const addr = hangServer.address();
+  const hangUrl = `http://127.0.0.1:${addr && typeof addr === 'object' ? addr.port : 0}/v1`;
+
+  const saved = process.env.OPENAI_BASE_URL;
+  process.env.OPENAI_BASE_URL = hangUrl;
+  const ac = new AbortController();
+  try {
+    const start = Date.now();
+    const pending = callModel({
+      model: 'mock-model',
+      system: [{ type: 'text', text: 'sys' }],
+      tools: [],
+      messages: [{ role: 'user', content: 'go' }],
+      signal: ac.signal,
+    });
+    await new Promise((r) => setTimeout(r, 50)); // 让流进入读取态
+    ac.abort(); // 用户取消
+    await assert.rejects(pending, () => true, 'abort 后请求应以取消错误结束');
+    assert.ok(Date.now() - start < 5_000, 'abort 后迅速终止，而非挂到空闲超时');
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = saved;
+    hangServer.closeAllConnections?.();
+    await new Promise((r) => hangServer.close(r));
+  }
+});
+
 const sampleTool = {
   name: 'read_file',
   description: 'Read a file',
@@ -236,7 +271,11 @@ test('toOpenAIMessages：image 块（base64）→ image_url 格式', () => {
         { type: 'text' as const, text: '描述这张图片' },
         {
           type: 'image' as const,
-          source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ' },
+          source: {
+            type: 'base64' as const,
+            media_type: 'image/png' as const,
+            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+          },
         },
       ],
     },

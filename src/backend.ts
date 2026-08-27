@@ -58,6 +58,8 @@ export interface ModelInput {
   onText?: (delta: string) => void;
   /** 思考块增量回调（extended thinking）；供应商不回 thinking 时不触发 */
   onThinking?: (delta: string) => void;
+  /** 硬中断：用户取消时 abort——在飞请求/流式读取立即终止（抛 AbortError） */
+  signal?: AbortSignal;
 }
 
 export interface ModelOutput {
@@ -154,10 +156,16 @@ export function toOpenAIMessages(messages: MessageParam[]): any[] {
           toolResults.push({ role: 'tool', tool_call_id: tr.tool_use_id, content: String(tr.content) });
         } else if (b.type === 'image') {
           // Anthropic ImageBlockParam → OpenAI image_url content part
-          const img = b as { type: 'image'; source: { type: string; media_type?: string; data?: string; url?: string } };
+          const img = b as {
+            type: 'image';
+            source: { type: string; media_type?: string; data?: string; url?: string };
+          };
           const src = img.source;
           if (src.type === 'base64' && src.data && src.media_type) {
-            contentParts.push({ type: 'image_url', image_url: { url: `data:${src.media_type};base64,${src.data}` } });
+            contentParts.push({
+              type: 'image_url',
+              image_url: { url: `data:${src.media_type};base64,${src.data}` },
+            });
           } else if (src.type === 'url' && src.url) {
             contentParts.push({ type: 'image_url', image_url: { url: src.url } });
           }
@@ -244,25 +252,40 @@ export const IDLE_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 })();
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new Error('Aborted'));
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(signal!.reason ?? new Error('Aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
-/** 幂等重试：5xx/429 与网络错误指数退避重试，4xx 客户端错误直接原样返回 */
+/** 幂等重试：5xx/429 与网络错误指数退避重试，4xx 客户端错误直接原样返回。
+ * signal 已 abort → 立即抛 AbortError；退避等待期间也响应取消。 */
 async function fetchWithRetry(
   url: string,
   init: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Awaited<ReturnType<typeof proxiedFetch>>> {
   for (let attempt = 0; ; attempt++) {
+    if (signal?.aborted) throw signal.reason ?? new Error('Aborted');
     try {
-      const resp = await proxiedFetch(url, init);
+      const resp = await proxiedFetch(url, { ...init, ...(signal ? { signal } : {}) });
       const retryable = resp.status >= 500 || resp.status === 429;
       if (resp.ok || !retryable || attempt >= OPENAI_MAX_RETRIES) return resp;
       await resp.body?.cancel(); // 释放连接以便重试
     } catch (err) {
+      if (signal?.aborted) throw signal.reason ?? new Error('Aborted');
       if (attempt >= OPENAI_MAX_RETRIES) throw err;
     }
-    await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt); // 800ms → 1600ms 指数退避
+    await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt, signal); // 800ms → 1600ms 指数退避
   }
 }
 
@@ -341,6 +364,7 @@ function feedSSELine(ctx: OpenAIStreamCtx, line: string): void {
 async function streamOpenAISSE(
   resp: Awaited<ReturnType<typeof undiciFetch>>,
   onText?: (delta: string) => void,
+  signal?: AbortSignal,
 ): Promise<ModelOutput> {
   const ctx: OpenAIStreamCtx = { content: '', toolMap: new Map(), onText };
   const reader = resp.body!.getReader();
@@ -348,6 +372,7 @@ async function streamOpenAISSE(
   let buffer = '';
   let idleTimer: NodeJS.Timeout | null = null;
   let timedOut = false;
+  let aborted = false;
 
   const armIdle = () => {
     if (idleTimer) clearTimeout(idleTimer);
@@ -357,10 +382,21 @@ async function streamOpenAISSE(
     }, IDLE_TIMEOUT_MS);
   };
 
+  // 硬中断：用户 abort → 取消 reader，read() 立即返回，下方抛 AbortError
+  const onAbort = () => {
+    aborted = true;
+    reader.cancel().catch(() => {});
+  };
+  if (signal) {
+    if (signal.aborted) throw signal.reason ?? new Error('Aborted');
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+
   try {
     armIdle();
     for (;;) {
       const { done, value } = await reader.read();
+      if (aborted) throw signal?.reason ?? new Error('Aborted');
       if (timedOut) throw new Error(`stream idle timeout after ${IDLE_TIMEOUT_MS}ms`);
       if (done) break;
       armIdle(); // 有数据到达 → 重置空闲计时
@@ -374,6 +410,7 @@ async function streamOpenAISSE(
     if (buffer.trim()) feedSSELine(ctx, buffer); // 流结束的最后一截
   } finally {
     if (idleTimer) clearTimeout(idleTimer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   // 非流式降级服务可能发出普通 JSON 行而非 SSE：data: 前缀缺失 → 空输出。
@@ -387,21 +424,25 @@ export class OpenAIBackend implements ModelBackend {
 
   async call(input: ModelInput): Promise<ModelOutput> {
     const systemText = flattenSystemBlocks(input.system);
-    const resp = await fetchWithRetry(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    const resp = await fetchWithRetry(
+      `${process.env.OPENAI_BASE_URL}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: input.model,
+          messages: [{ role: 'system', content: systemText }, ...toOpenAIMessages(input.messages)],
+          tools: toOpenAITools(input.tools),
+          stream: true,
+          // 流式末尾回传 usage 块（不支持的兼容服务会忽略该字段，优雅降级）
+          stream_options: { include_usage: true },
+        }),
       },
-      body: JSON.stringify({
-        model: input.model,
-        messages: [{ role: 'system', content: systemText }, ...toOpenAIMessages(input.messages)],
-        tools: toOpenAITools(input.tools),
-        stream: true,
-        // 流式末尾回传 usage 块（不支持的兼容服务会忽略该字段，优雅降级）
-        stream_options: { include_usage: true },
-      }),
-    });
+      input.signal,
+    );
     if (!resp.ok) {
       throw new Error(`OpenAI API ${resp.status}: ${await resp.text()}`);
     }
@@ -412,7 +453,7 @@ export class OpenAIBackend implements ModelBackend {
       return fromOpenAIResponse(JSON.parse(await resp.text()));
     }
     // 真·流式：reader 边收边回调，onText 随数据到达即时触发
-    return streamOpenAISSE(resp, input.onText);
+    return streamOpenAISSE(resp, input.onText, input.signal);
   }
 }
 
@@ -440,17 +481,21 @@ export class AnthropicBackend implements ModelBackend {
     const thinkingBudget = Number(process.env.B_CODE_THINKING ?? '');
     // B_CODE_MAX_TOKENS：输出上限可配（默认 4096；无效值回退默认）
     const maxTokens = Number(process.env.B_CODE_MAX_TOKENS ?? '4096');
-    const stream = this.client.messages.stream({
-      model: input.model,
-      max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
-      system: input.system,
-      // 前缀缓存断点：tools 尾部 + 最后一条消息（0.1× 缓存命中计费的关键）
-      tools: withToolCacheBreakpoint(input.tools),
-      messages: withMessageCacheBreakpoint(input.messages),
-      ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
-        ? { thinking: { type: 'enabled' as const, budget_tokens: thinkingBudget } }
-        : {}),
-    });
+    const stream = this.client.messages.stream(
+      {
+        model: input.model,
+        max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
+        system: input.system,
+        // 前缀缓存断点：tools 尾部 + 最后一条消息（0.1× 缓存命中计费的关键）
+        tools: withToolCacheBreakpoint(input.tools),
+        messages: withMessageCacheBreakpoint(input.messages),
+        ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
+          ? { thinking: { type: 'enabled' as const, budget_tokens: thinkingBudget } }
+          : {}),
+      },
+      // 硬中断：用户取消时透传 AbortSignal，SDK 中止在飞请求与流式读取
+      input.signal ? { signal: input.signal } : undefined,
+    );
     if (input.onText) {
       stream.on('text', (text) => input.onText!(text));
     }

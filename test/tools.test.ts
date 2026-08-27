@@ -188,6 +188,28 @@ test('run_shell 实时日志：逐块经 ctx.onToolOutput 转发', async () => {
   assert.ok(chunks.join('').includes('realtime'), 'onToolOutput 收到增量');
 });
 
+test('run_shell 硬中断：ctx.signal abort → 子进程立即终止，结果带中断标记', async () => {
+  const ac = new AbortController();
+  const rctx = { ...ctx, signal: ac.signal } as RuntimeContext;
+  const mp = registry.resolve('run_shell')!;
+  const start = Date.now();
+  const pending = Promise.resolve(mp.handler({ command: 'sleep 30' }, rctx) as string);
+  await new Promise((r) => setTimeout(r, 200)); // 等子进程起来
+  ac.abort(); // 用户取消
+  const out = await pending;
+  assert.ok(Date.now() - start < 10_000, '远早于 sleep 30s：进程被真正杀掉');
+  assert.ok(out.includes('interrupted'), `结果带中断标记，实际：${out}`);
+});
+
+test('run_shell 硬中断：signal 已 abort 时调用 → 立即返回中断标记', async () => {
+  const ac = new AbortController();
+  ac.abort();
+  const rctx = { ...ctx, signal: ac.signal } as RuntimeContext;
+  const mp = registry.resolve('run_shell')!;
+  const out = await Promise.resolve(mp.handler({ command: 'sleep 30' }, rctx) as string);
+  assert.ok(out.includes('interrupted'));
+});
+
 // ── 编辑点 diff ───────────────────────────────────────────────
 
 test('snippetDiff：定位替换点，输出上下文 + 删除/新增行', () => {
