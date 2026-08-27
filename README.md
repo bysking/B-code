@@ -106,7 +106,9 @@ rm -rf / git push / git reset --hard / sudo / mkfs
 
 ## 技能（Skills）
 
-把常用提示词包装成 `/name 参数` 命令。技能文件 = frontmatter + 正文：
+把常用提示词包装成 `/name 参数` 命令。技能支持两种形态，技能名 = 文件名 / 目录名：
+
+**平铺文件** `{name}.md` —— 单文件即技能：
 
 ```markdown
 ---
@@ -118,8 +120,28 @@ user-invocable: true
 按以下规范提交：$ARGUMENTS
 ```
 
+**技能目录** `{name}/SKILL.md` —— 对齐 Claude 生态，目录名即技能名，描述与正文读目录下的 `SKILL.md`（或小写 `skill.md`），目录里的其他文件（reference、模板等）作为技能资源：
+
+```
+.claude/skills/
+├── commit.md                      # 平铺形态
+└── changelog-generator/
+    ├── SKILL.md                   # 目录形态：描述 + 正文
+    └── templates/                 # 技能资源，不参与解析
+```
+
+两种形态的差异：
+
+| | 平铺文件 | 技能目录 |
+|---|---|---|
+| 技能名 | 文件名（去 `.md`） | 目录名 |
+| `user-invocable` | 需显式写 `true` | 默认可调用，写 `false` 关闭 |
+| 同名冲突 | 同目录内平铺优先 | — |
+
 正文里的 `$ARGUMENTS` 会被替换为调用时传入的参数。技能调用优先于普通对话：
 `/commit 修复登录 bug` → 命中 `commit` 技能并替换参数。
+
+frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行、`|` 保留换行），与 Claude 生态 SKILL.md 兼容。
 
 **搜索链（越靠前优先级越高，同名技能前者生效）：**
 

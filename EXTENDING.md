@@ -88,6 +88,10 @@ export class VectorMemory implements Memory {
 
 ## 4. 加一个技能（零代码）
 
+两种形态，技能名 = 文件名 / 目录名：
+
+**平铺文件**（需显式 `user-invocable: true`）：
+
 ```markdown
 .claude/skills/my-skill.md:
 ---
@@ -98,8 +102,14 @@ user-invocable: true
 技能正文…… 用户请求: $ARGUMENTS
 ```
 
+**技能目录**（对齐 Claude 生态，默认可调用）：
+
+```
+.claude/skills/my-skill/SKILL.md   # 描述 + 正文；目录名即技能名，其余文件作资源
+```
+
 搜索链：项目 `.claude/skills` > `$B_CODE_SKILLS_DIR` > `$B_CODE_HOME/skills` > `~/.claude/skills`。
-写文件即生效，`/my-skill 参数` 即用。
+同名技能前者生效（同目录内平铺文件优先于同名目录）。写文件即生效，`/my-skill 参数` 即用。
 
 ## 5. 完成后必跑
 

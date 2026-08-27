@@ -120,3 +120,89 @@ test('项目级仍高于 env 层（同名技能项目覆盖）', async () => {
     delete process.env[SKILLS_DIR_ENV];
   }
 });
+
+// ── 目录形态技能（Claude 生态 {name}/SKILL.md）──────────────────
+
+test('目录形态：{name}/SKILL.md 可发现且默认 user-invocable', async () => {
+  const skillDir = join(proj, '.claude', 'skills', 'changelog-gen');
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, 'SKILL.md'),
+    '---\nname: changelog-gen\ndescription: 生成变更日志\n---\nGenerate the changelog: $ARGUMENTS\n',
+  );
+  const skills = discoverSkills(proj);
+  const found = skills.find((s) => s.name === 'changelog-gen');
+  assert.ok(found, '目录形态技能可发现');
+  assert.equal(found?.userInvocable, true, '目录形态默认可调用');
+  assert.ok(found?.description.includes('变更日志'));
+});
+
+test('目录形态：小写 skill.md 也可用；user-invocable: false 可关闭', async () => {
+  const skillDir = join(proj, '.claude', 'skills', 'lowercase-skill');
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, 'skill.md'),
+    '---\nname: lowercase-skill\ndescription: desc\nuser-invocable: false\n---\nLOWER BODY\n',
+  );
+  const skills = discoverSkills(proj);
+  const found = skills.find((s) => s.name === 'lowercase-skill');
+  assert.ok(found, 'skill.md（小写）被发现');
+  assert.equal(found?.userInvocable, false, '显式 false 关闭');
+  assert.equal(resolveSkill('/lowercase-skill', proj), 'LOWER BODY', '正文可解析');
+});
+
+test('目录形态：resolveSkill 命中 SKILL.md 并替换 $ARGUMENTS', async () => {
+  assert.equal(resolveSkill('/changelog-gen v1.0', proj), 'Generate the changelog: v1.0');
+});
+
+test('目录形态：无 SKILL.md 的目录不算技能；目录带辅助文件不受影响', async () => {
+  await mkdir(join(proj, '.claude', 'skills', 'no-doc'), { recursive: true });
+  await writeFile(join(proj, '.claude', 'skills', 'no-doc', 'README.md'), 'not a skill\n');
+  const withAssets = join(proj, '.claude', 'skills', 'with-assets');
+  await mkdir(withAssets, { recursive: true });
+  await writeFile(
+    join(withAssets, 'SKILL.md'),
+    '---\nname: with-assets\ndescription: has assets\n---\nASSET BODY\n',
+  );
+  await writeFile(join(withAssets, 'template.txt'), 'asset\n');
+  const skills = discoverSkills(proj);
+  assert.ok(!skills.some((s) => s.name === 'no-doc'), '无 SKILL.md 的目录被忽略');
+  assert.ok(
+    skills.some((s) => s.name === 'with-assets'),
+    '带辅助文件的目录正常',
+  );
+  assert.equal(resolveSkill('/with-assets', proj), 'ASSET BODY');
+});
+
+test('同名冲突：同目录内平铺文件优先于目录；跨目录高优先级生效', async () => {
+  // 同目录：proj 里同时放 dup-form.md 和 dup-form/SKILL.md → 平铺生效
+  await mkdir(join(proj, '.claude', 'skills', 'dup-form'), { recursive: true });
+  await writeFile(
+    join(proj, '.claude', 'skills', 'dup-form', 'SKILL.md'),
+    '---\nname: dup-form\ndescription: nested\n---\nNESTED\n',
+  );
+  await writeFile(
+    join(proj, '.claude', 'skills', 'dup-form.md'),
+    '---\nname: dup-form\ndescription: flat\nuser-invocable: true\n---\nFLAT\n',
+  );
+  assert.equal(resolveSkill('/dup-form', proj), 'FLAT', '同目录平铺优先');
+
+  // 跨目录：用户级目录形态与项目级平铺同名 → 项目级（更高优先级）生效
+  await mkdir(join(home, '.claude', 'skills', 'proj-wins'), { recursive: true });
+  await writeFile(
+    join(home, '.claude', 'skills', 'proj-wins', 'SKILL.md'),
+    '---\nname: proj-wins\ndescription: user nested\n---\nUSER NESTED\n',
+  );
+  await mkdir(join(proj, '.claude', 'skills', 'proj-wins'), { recursive: true });
+  await writeFile(
+    join(proj, '.claude', 'skills', 'proj-wins', 'SKILL.md'),
+    '---\nname: proj-wins\ndescription: project nested\n---\nPROJECT NESTED\n',
+  );
+  assert.equal(resolveSkill('/proj-wins', proj), 'PROJECT NESTED', '项目级目录形态覆盖用户级');
+});
+
+test('resolveSkill：路径穿越与隐藏名不命中技能', async () => {
+  assert.equal(resolveSkill('/..', proj), null);
+  assert.equal(resolveSkill('/a/b', proj), null);
+  assert.equal(resolveSkill('/.hidden', proj), null);
+});

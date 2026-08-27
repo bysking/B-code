@@ -7,6 +7,8 @@
  * 正文...
  *
  * 故意保持极简（不支持嵌套/列表/引号）——给 LLM 写的文件不需要完整 YAML。
+ * 但支持块标量多行值（> / >- / | / |-）：Claude 生态的 SKILL.md 描述常用
+ * `description: >-` 折叠多行写法，不解析会得到字面 ">-"。
  */
 
 export interface Frontmatter {
@@ -31,17 +33,51 @@ export function parseFrontmatter(content: string): Frontmatter {
 
   // 解析 key: value 对（value 去掉首尾引号）
   const meta: Record<string, string> = {};
-  for (let i = 1; i < endIdx; i++) {
+  let i = 1;
+  while (i < endIdx) {
     const line = lines[i];
-    if (!line) continue;
+    if (!line || !line.trim()) {
+      i++;
+      continue;
+    }
     const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
+    if (colonIdx === -1) {
+      i++;
+      continue;
+    }
     const key = line.slice(0, colonIdx).trim();
-    const value = line
-      .slice(colonIdx + 1)
-      .trim()
-      .replace(/^["']|["']$/g, '');
-    if (key) meta[key] = value;
+    const rawValue = line.slice(colonIdx + 1).trim();
+    if (!key) {
+      i++;
+      continue;
+    }
+
+    // 块标量（>、>-、|、|- 等）：后续比 key 行更深缩进的行都归属该 key
+    if (/^[>|][+-]?$/.test(rawValue)) {
+      const keyIndent = line.length - line.trimStart().length;
+      const folded = rawValue[0] === '>';
+      const buf: string[] = [];
+      i++;
+      while (i < endIdx) {
+        const l = lines[i] ?? '';
+        if (l.trim() === '') {
+          buf.push('');
+          i++;
+          continue;
+        }
+        if (l.length - l.trimStart().length <= keyIndent) break;
+        buf.push(l.trimStart());
+        i++;
+      }
+      while (buf.length > 0 && buf[0] === '') buf.shift();
+      while (buf.length > 0 && buf[buf.length - 1] === '') buf.pop();
+      // 折叠（>）拼成一行；字面（|）保留换行
+      meta[key] = folded ? buf.join(' ').replace(/\s+/g, ' ').trim() : buf.join('\n');
+      continue; // i 已指向块外下一行
+    }
+
+    meta[key] = rawValue.replace(/^["']|["']$/g, '');
+    i++;
   }
 
   const body = lines

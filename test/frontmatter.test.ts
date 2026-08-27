@@ -37,3 +37,35 @@ test('formatFrontmatter → parseFrontmatter 往返', () => {
   assert.equal(meta.description, 'b c');
   assert.equal(body, 'content here');
 });
+
+test('块标量 >-：多行折叠成一行（SKILL.md 的 description 常用写法）', () => {
+  const raw =
+    '---\nname: changelog\ndescription: >-\n  用于初始化、生成或更新 CHANGELOG.md\n  文件的技能。当用户提到 changelog 时使用。\nuser-invocable: true\n---\nbody here\n';
+  const { meta, body } = parseFrontmatter(raw);
+  assert.equal(meta.name, 'changelog');
+  assert.equal(
+    meta.description,
+    '用于初始化、生成或更新 CHANGELOG.md 文件的技能。当用户提到 changelog 时使用。',
+  );
+  assert.equal(meta['user-invocable'], 'true', '块标量后的下一个 key 正常解析');
+  assert.equal(body, 'body here');
+});
+
+test('块标量 |：保留换行', () => {
+  const raw = '---\ndescription: |\n  line one\n  line two\n---\nbody\n';
+  const { meta } = parseFrontmatter(raw);
+  assert.equal(meta.description, 'line one\nline two');
+});
+
+test('块标量后跟下一个 key 正常解析', () => {
+  const raw = '---\ndescription: >\n  folded text\nother: plain\n---\nb\n';
+  const { meta } = parseFrontmatter(raw);
+  assert.equal(meta.description, 'folded text');
+  assert.equal(meta.other, 'plain');
+});
+
+test('块标量值里含空行：折叠时空行折成空格', () => {
+  const raw = '---\ndescription: >-\n  first para\n\n  second para\n---\nbody\n';
+  const { meta } = parseFrontmatter(raw);
+  assert.equal(meta.description, 'first para second para');
+});
