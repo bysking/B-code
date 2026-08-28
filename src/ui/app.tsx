@@ -242,7 +242,9 @@ export function App({
         <SlashMenu
           query={ctrl.slashQuery}
           items={ctrl.slashItems}
-          onPick={(item) => handleSubmit(`/${item.name}`)}
+          onPick={(item) => {
+            handleSubmit(`/${item.name}`);
+          }}
           onComplete={handleComplete}
           onClose={() => ctrl.closeSlash()}
         />

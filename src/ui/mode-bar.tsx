@@ -18,11 +18,11 @@ export function ModeBar({ mode }: { mode: Mode }) {
   const meta = MODE_META[mode] ?? MODE_META.default;
   return (
     <Box>
-      <Text dimColor>── </Text>
+      <Text dimColor>当前权限审批模式（Shift+Tab 切换）：── </Text>
       <Text color={meta.color} bold>
         {meta.label}
       </Text>
-      <Text dimColor> ── Shift+Tab 切换</Text>
+      <Text dimColor> ── </Text>
     </Box>
   );
 }
