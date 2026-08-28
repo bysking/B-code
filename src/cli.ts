@@ -203,7 +203,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   });
 
   // 绿色欢迎文案
-  process.stderr.write('\x1b[32m🚀 您的AI编程助手，B Code 已就绪\x1b[0m\n\n');
+  process.stderr.write(
+    '\x1b[32m🚀 每一个伟大的背后，都来源于一次勇敢的尝试。您的AI编程助手，B Code 已就绪\x1b[0m\n\n',
+  );
 
   await agent.initMcp();
 
