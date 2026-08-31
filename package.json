@@ -1,6 +1,6 @@
 {
   "name": "@bysking/b-code",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里",
   "type": "module",
   "main": "dist/cli.mjs",
@@ -26,7 +26,7 @@
     "type": "git",
     "url": "git+https://github.com/bysking/b-code.git"
   },
-  "homepage": "https://github.com/bysking/vv-switch#readme",
+  "homepage": "https://github.com/bysking/b-code#readme",
   "keywords": [
     "bcode",
     "coding-agent",
