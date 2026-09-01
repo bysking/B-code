@@ -52,6 +52,29 @@ export function answerText(v: string | string[] | undefined): string {
   return v ?? '';
 }
 
+/**
+ * 导航回到某步时的高亮起点：
+ *  已选单选 → 高亮对应选项；自定义答案 → 高亮特殊项（"✎ 自定义"）；
+ *  多选 → 高亮最后一个勾选项；未选 → 回到 0。
+ */
+function defaultIdxFor(
+  target: number,
+  opts: WizardStepOption[],
+  multi: boolean,
+  answers: Record<number, string | string[]>,
+): number {
+  const v = answers[target];
+  if (v == null) return 0;
+  if (Array.isArray(v)) {
+    const last = v[v.length - 1];
+    if (last == null) return 0;
+    const i = opts.findIndex((o) => o.label === last);
+    return i >= 0 ? i : 0;
+  }
+  const i = opts.findIndex((o) => o.label === v);
+  return i >= 0 ? i : opts.length; // 自定义答案不在选项里 → 高亮特殊项
+}
+
 export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (value: string) => void }) {
   const steps = ask.steps;
   /** 分步多选：每步可勾选多个选项（Enter/空格切换），特殊项为"完成本步" */
@@ -89,6 +112,18 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
 
   const pickIdx = (i: number, len: number) => (len <= 0 ? 0 : (i + len) % len);
 
+  /** 前进到下一步/Review：下一步恢复其高亮；进入 Review 则高亮 Submit（第一项） */
+  const advanceTo = (next: Record<number, string | string[]>) => {
+    const target = step + 1;
+    if (target >= steps.length) {
+      setStep(steps.length);
+      setIdx(0);
+    } else {
+      setStep(target);
+      setIdx(defaultIdxFor(target, steps[target]?.options ?? [], multi, next));
+    }
+  };
+
   useInput(
     (_input, key) => {
       if (key.escape) {
@@ -103,17 +138,18 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
         return;
       }
       if (key.leftArrow || _input === 'h') {
-        setStep((s) => Math.max(0, s - 1));
-        setIdx(0);
+        const target = Math.max(0, step - 1);
+        setStep(target);
+        // 回到已答步骤时，高亮恢复为该步上次选中/输入的那一项（未答则回 0）
+        setIdx(defaultIdxFor(target, steps[target]?.options ?? [], multi, answers));
         return;
       }
       if (key.rightArrow || key.tab || _input === 'l') {
         // 前进：未到 Review 先到下一步／Review；Review 里 → 回最后一步
-        setStep((s) => {
-          if (s + 1 > steps.length) return s;
-          setIdx(0);
-          return s + 1;
-        });
+        if (step + 1 > steps.length) return;
+        const target = step + 1;
+        setStep(target);
+        setIdx(defaultIdxFor(target, steps[target]?.options ?? [], multi, answers));
         return;
       }
       if (key.return) {
@@ -133,19 +169,21 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
           } else {
             const next = { ...answers, [step]: opt.label };
             setAnswers(next);
-            // 自动前进到下一步/Review
-            setStep((s) => (step + 1 >= steps.length ? steps.length : s + 1));
-            setIdx(0);
+            // 自动前进到下一步/Review（下一步已有答案则恢复其高亮）
+            advanceTo(next);
           }
         } else if (idx === itemLen) {
           if (multi) {
             // 特殊项"完成本步"：进入下一步/Review
-            setStep((s) => (step + 1 >= steps.length ? steps.length : s + 1));
-            setIdx(0);
+            advanceTo(answers);
           } else {
-            // 选中"自定义"：光标落入该项右侧内联输入框
+            // 选中"自定义"：光标落入该项右侧内联输入框。
+            // 回填该步上次输入的自定义答案（若是自定义而非某选项），支持继续编辑
             setTyping(true);
-            setDraft('');
+            const prev = answers[step];
+            const opts = steps[step]?.options ?? [];
+            const isCustomPrev = typeof prev === 'string' && !opts.some((o) => o.label === prev);
+            setDraft(isCustomPrev ? prev : '');
           }
         }
         return;
@@ -176,13 +214,11 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
 
   const commitTyped = () => {
     const text = draft.trim();
-    // 自定义：记录为本步答案并前进
+    // 自定义：记录为本步答案并前进（下一步已有答案则恢复其高亮）
     const next = { ...answers, [step]: text || '(自定义)' };
     setAnswers(next);
     setTyping(false);
-    if (step + 1 >= steps.length) setStep(steps.length);
-    else setStep((s) => s + 1);
-    setIdx(0);
+    advanceTo(next);
   };
 
   const itemLen = steps[step]?.options.length ?? 0;

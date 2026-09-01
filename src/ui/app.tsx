@@ -192,6 +192,7 @@ export function App({
     if (hist[hist.length - 1] !== trimmed) hist.push(trimmed);
     setHistoryIdx(-1);
     setInput('');
+    setInputNonce((n) => n + 1); // 重挂 TextInput 让光标回到末尾
     imagesRef.current = []; // 清空本次已消费的图片
     ctrl.closeSlash();
 

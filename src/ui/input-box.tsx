@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 
 /**
@@ -30,16 +30,9 @@ export function SimpleTextInput({
   slashOpen?: boolean;
 }) {
   const [cursor, setCursor] = useState(value.length);
-
-  // 外部 value 变化时 cursor 同步到末尾
-  const prevValueLen = useRef(value.length);
-  useEffect(() => {
-    if (value.length !== prevValueLen.current) {
-      prevValueLen.current = value.length;
-      // 外部 setInput("") 或 Tab 补全 · 光标回到末尾
-      setCursor(value.length);
-    }
-  }, [value]);
+  // 光标位置由内部维护：插入/删除/左右移动都在此处更新，不随 value 长度变化重置。
+  // 外部需要重置光标的路径（历史导航、Tab 补全、提交清空）统一通过 App 层
+  // 递增 inputNonce 强制重挂组件（key={inputNonce}），重挂后 useState(value.length) 即回到末尾。
 
   useInput((input, key) => {
     if (!focus) return;
