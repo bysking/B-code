@@ -88,3 +88,15 @@ test('loadClaudeMd：email 与 scoped 包名等 @ 不误伤（原样保留）', 
   assert.ok(out.includes('test@example.com'));
   assert.ok(out.includes('@babel/core'));
 });
+
+test('loadClaudeMd：同一目录同时读取 CLAUDE.md 与 AGENTS.md，CLAUDE.md 在前', async () => {
+  await writeFile(join(dir, 'CLAUDE.md'), 'claude rules\n');
+  await writeFile(join(dir, 'AGENTS.md'), 'agents rules\n@agents-inc.md\n');
+  await writeFile(join(dir, 'agents-inc.md'), 'agents extra\n');
+  const out = loadClaudeMd(dir);
+  assert.ok(out.includes('claude rules'));
+  assert.ok(out.includes('agents rules'));
+  assert.ok(out.includes('agents extra'));
+  // 分目录层级合并：CLAUDE.md（本层）出现在 AGENTS.md（同层）之前
+  assert.ok(out.indexOf('claude rules') < out.indexOf('agents rules'));
+});

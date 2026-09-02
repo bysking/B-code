@@ -96,8 +96,8 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
     // 不在 git 仓库
   }
 
-  const claudeMd = loadClaudeMd(cwd);
-  if (claudeMd) parts.push(`\n# Project Instructions\n${claudeMd}`);
+  const projectInstructions = loadClaudeMd(cwd);
+  if (projectInstructions) parts.push(`\n# Project Instructions\n${projectInstructions}`);
 
   // 插入段：记忆召回 / 技能描述（由调用方算好传入）
   for (const section of [sections.skills, sections.memory]) {
@@ -110,8 +110,8 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
 const MAX_INCLUDE_DEPTH = 5;
 
 /**
- * CLAUDE.md 向上查找合并；支持 @include 指令，@ 引用允许出现在文本任意位置：
- *   @./relative / @~/home / @/absolute / @sub/file.md
+ * 项目指令文件（CLAUDE.md + AGENTS.md）向上查找合并；支持 @include 指令，
+ * @ 引用允许出现在文本任意位置：@./relative / @~/home / @/absolute / @sub/file.md
  * 引用 = @ 后跟非空白的完整 token；路径不存在（或非文件）时原样保留（可选引用）。
  * 嵌套最深 5 层防循环引用。
  */
@@ -120,9 +120,12 @@ export function loadClaudeMd(startDir: string = process.cwd()): string {
   let dir = resolve(startDir);
 
   for (;;) {
-    const file = join(dir, 'CLAUDE.md');
-    if (existsSync(file)) {
-      parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, [])}\n</file>`);
+    // 每个目录层级同时读取 CLAUDE.md 与 AGENTS.md，两套工具约定的指令文件都注入
+    for (const name of ['CLAUDE.md', 'AGENTS.md'] as const) {
+      const file = join(dir, name);
+      if (existsSync(file)) {
+        parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, [])}\n</file>`);
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) break; // 到根目录
