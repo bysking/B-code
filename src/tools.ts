@@ -138,7 +138,8 @@ async function editFileTool(
     // 工具已知最终内容 → 直接更新 store（标 fresh）
     const st = await stat(path);
     putSnapshot(ctx.fileStore, path, updated, st.mtimeMs, st.size, contentHash(Buffer.from(updated)));
-    // 编辑前后 diff：让模型与用户（Ctrl+O 回看）直观看到改了什么
+    // 编辑前后 diff：让模型与用户（Ctrl+O 回看）直观看到改了什么。
+    // 返回给模型的必须是纯文本（ANSI 会污染上下文）——颜色的着色统一交给 UI 层做
     const diff = snippetDiff(content, input.old_string, newString);
     return `Successfully edited ${input.file_path}\n\nDiff:\n${diff}`;
   } catch (err) {

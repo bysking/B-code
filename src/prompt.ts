@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -110,19 +110,19 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
 const MAX_INCLUDE_DEPTH = 5;
 
 /**
- * CLAUDE.md 向上查找合并；支持 @include 指令：
- *   @./relative / @~/home / @/absolute
+ * CLAUDE.md 向上查找合并；支持 @include 指令，@ 引用允许出现在文本任意位置：
+ *   @./relative / @~/home / @/absolute / @sub/file.md
+ * 引用 = @ 后跟非空白的完整 token；路径不存在（或非文件）时原样保留（可选引用）。
  * 嵌套最深 5 层防循环引用。
  */
 export function loadClaudeMd(startDir: string = process.cwd()): string {
   const parts: string[] = [];
   let dir = resolve(startDir);
-  const visited = new Set<string>();
 
   for (;;) {
     const file = join(dir, 'CLAUDE.md');
-    if (existsSync(file) && !visited.has(file)) {
-      parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, visited)}\n</file>`);
+    if (existsSync(file)) {
+      parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, [])}\n</file>`);
     }
     const parent = dirname(dir);
     if (parent === dir) break; // 到根目录
@@ -131,19 +131,35 @@ export function loadClaudeMd(startDir: string = process.cwd()): string {
   return parts.join('\n');
 }
 
-function resolveIncludes(file: string, depth: number, visited: Set<string>): string {
+/** chain = 当前包含链上的祖先文件（循环检测只看链，同一文件可在文档多处引用） */
+function resolveIncludes(file: string, depth: number, chain: string[]): string {
   if (depth > MAX_INCLUDE_DEPTH) return `<!-- include too deep: ${file} -->`;
-  visited.add(file);
 
-  let content = readFileSync(file, 'utf-8');
-  content = content.replace(/^@(.+)$/gm, (_, raw: string) => {
-    const p = raw.trim();
+  const content = readFileSync(file, 'utf-8');
+  // @ 引用允许出现在任意位置：@ 后跟一个 token（非空白序列），行首/行中/句尾皆可。
+  // token 边界分两类：CJK 闭合标点（，。等，路径中不会出现）在任意位置截断并保留余文，
+  // 兼容无空格中文正文（详见 @x.md，以及……）；ASCII 标点（. , ) 等）可能是路径的
+  // 一部分（如 .md），只剥尾部。
+  // 兜底语义（可选引用）：路径不存在或不是文件时原样保留原 token——
+  // 同一份 CLAUDE.md 可跨环境复用，也不会误伤 email（test@example.com）或包名（@babel/core）。
+  return content.replace(/@([^\s]+)/g, (_, raw: string) => {
+    const cjkCut = raw.search(/[，。；：！？）」』》】、]/);
+    const head = cjkCut === -1 ? raw : raw.slice(0, cjkCut);
+    const tail = cjkCut === -1 ? '' : raw.slice(cjkCut);
+    const asciiTrail = head.match(/[.,;:!?)\]}>]+$/)?.[0] ?? '';
+    const p = head.slice(0, head.length - asciiTrail.length);
+    if (p === '') return `@${raw}`; // 首字符就是标点：不是路径形态，保留原样
     const resolved = p.startsWith('~') ? join(homedir(), p.slice(1)) : resolve(join(dirname(file), p));
-    if (!existsSync(resolved)) return `<!-- not found: ${p} -->`;
-    if (visited.has(resolved)) return `<!-- circular include: ${p} -->`;
-    return resolveIncludes(resolved, depth + 1, visited);
+    let st;
+    try {
+      st = statSync(resolved);
+    } catch {
+      return `@${raw}`; // 不存在：保留原 token
+    }
+    if (!st.isFile()) return `@${raw}`; // 目录等非文件：不展开
+    if (resolved === file || chain.includes(resolved)) return `<!-- circular include: ${p} -->`;
+    return resolveIncludes(resolved, depth + 1, [...chain, file]).trim() + asciiTrail + tail;
   });
-  return content;
 }
 
 /** 供 Agent 直接取纯文本（未来 OpenAI 边界也用得到） */
