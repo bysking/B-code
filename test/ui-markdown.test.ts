@@ -4,11 +4,14 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import { Markdown } from '../src/ui/markdown-view.js';
 
+/** 剥离 ANSI 色码：FORCE_COLOR 环境下渲染输出带颜色，断言只看纯文本 */
+const stripAnsi = (out: string): string => out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+
 function renderMd(text: string): string {
   const frame = render(React.createElement(Markdown, { text }));
   const out = frame.lastFrame() ?? '';
   frame.cleanup();
-  return out;
+  return stripAnsi(out);
 }
 
 test('表格：GFM 表格渲染为对齐表格（cli-table3 边框）', () => {

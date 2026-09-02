@@ -26,6 +26,36 @@ function renderApp(
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 剥离 ANSI 色码：FORCE_COLOR 环境下渲染输出带颜色，断言只看纯文本 */
+const stripAnsi = (out: string): string => out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+const frameText = (frame: { lastFrame: () => string | undefined }): string =>
+  stripAnsi(frame.lastFrame() ?? '');
+
+/**
+ * 等待 frame 渲染出包含 needle 的内容（轮询代替固定睡眠：
+ * ink 渲染提交在微任务/帧边界后，固定 wait 在高负载下可能读到上一帧）
+ */
+async function waitForFrame(
+  frame: { lastFrame: () => string | undefined },
+  needle: string,
+  label: string,
+  timeoutMs = 2000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const out = frameText(frame);
+    if (out.includes(needle)) return out;
+    if (Date.now() > deadline) throw new Error(`waitForFrame 超时（${label}）：\n${out}`);
+    await wait(10);
+  }
+}
+
+/** 写一段按键序列后等 ink 处理完（stdin 是同步 emit，等一帧让 React 提交渲染） */
+const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
+  frame.stdin.write(keys);
+  await wait(20);
+};
+
 test('渲染：用户消息 + assistant markdown 流式文本', async () => {
   const ctrl = new AppController();
   const frame = renderApp(ctrl);
@@ -270,20 +300,19 @@ test('回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可�
   const p = ctrl.askWizard('选方案?', [
     { title: '方案', question: '用哪个?', options: [{ label: 'React', value: 'react' }] },
   ]);
-  await wait(30);
-  // 移到自定义项进入输入态，Esc"返回选项"
-  frame.stdin.write('\x1b[B');
-  await wait(15);
-  frame.stdin.write('\r');
-  await wait(30);
-  assert.ok((frame.lastFrame() ?? '').includes('输入你的答案'), '进入输入态');
-  frame.stdin.write('\x1b');
-  await wait(30);
+  await waitForFrame(frame, '用哪个?', '向导渲染');
+
+  // ↓ 移到自定义项 → Enter 进入输入态，Esc"返回选项"
+  await press(frame, '\x1b[B');
+  await press(frame, '\r');
+  await waitForFrame(frame, '输入你的答案', '进入输入态');
+
+  await press(frame, '\x1b');
   assert.equal(interrupted, 0, '输入态按 Esc 返回选项不应触发软中断');
   assert.ok(ctrl.askWizardState, '向导保持打开');
-  // Ctrl+C 取消向导
-  frame.stdin.write('\x03');
-  await wait(30);
+
+  // Ctrl+C 取消向导（App 层拦截 → resolveAskWizard('__cancel__')）
+  await press(frame, '\x03');
   assert.equal(ctrl.askWizardState, null, 'Ctrl+C 应取消向导');
   assert.equal(await p, '__cancel__');
   frame.cleanup();

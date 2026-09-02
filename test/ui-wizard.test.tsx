@@ -10,6 +10,36 @@ import type { ModelInput, ModelOutput } from '../src/backend.js';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 剥离 ANSI 色码：FORCE_COLOR 环境下渲染输出带颜色，断言只看纯文本 */
+const stripAnsi = (out: string): string => out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+const frameText = (frame: { lastFrame: () => string | undefined }): string =>
+  stripAnsi(frame.lastFrame() ?? '');
+
+/**
+ * 等待 frame 渲染出包含 needle 的内容（轮询代替固定睡眠：
+ * ink 渲染提交在微任务/帧边界后，固定 wait 在高负载下可能读到上一帧）
+ */
+async function waitForFrame(
+  frame: { lastFrame: () => string | undefined },
+  needle: string,
+  label: string,
+  timeoutMs = 2000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const out = frameText(frame);
+    if (out.includes(needle)) return out;
+    if (Date.now() > deadline) throw new Error(`waitForFrame 超时（${label}）：\n${out}`);
+    await wait(10);
+  }
+}
+
+/** 写一段按键序列后等 ink 处理完（stdin 是同步 emit，等一帧让 React 提交渲染） */
+const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
+  frame.stdin.write(keys);
+  await wait(20);
+};
+
 function createApp(ctrl: AppController) {
   return React.createElement(App, {
     ctrl,
@@ -107,24 +137,25 @@ test('交互：选中自定义 → 行内输入 → 回车作为该步答案 →
       ],
     },
   ]);
-  await wait(30);
-  // ↓↓ 移到自定义项并 Enter 进入输入态
-  frame.stdin.write('[B');
-  await wait(10);
-  frame.stdin.write('[B');
-  await wait(10);
-  frame.stdin.write('\r');
-  await wait(20);
-  const entered = frame.lastFrame() ?? '';
-  assert.ok(entered.includes('输入你的答案'), '特殊项右侧出现内联输入框');
-  // 普通键入 + 回车提交自定义答案
-  frame.stdin.write('我自己的方案');
-  await wait(20);
-  frame.stdin.write('\r');
-  await wait(30);
-  // 单步 → 已到 Review，Enter 提交
-  frame.stdin.write('\r');
+  await waitForFrame(frame, '用哪个?', '向导渲染');
+
+  // ↓↓ 移到自定义项（导航范围 = 2 选项 + 自定义）并 Enter 进入输入态
+  await press(frame, '\x1b[B');
+  await press(frame, '\x1b[B');
+  await press(frame, '\r');
+  await waitForFrame(frame, '输入你的答案', '特殊项右侧出现内联输入框');
+
+  // 普通键入（TextInput 回显）+ 回车提交自定义答案
+  await press(frame, '我自己的方案');
+  await waitForFrame(frame, '我自己的方案', '输入回显');
+
+  // 提交该步答案 → 单步向导直接到 Review → 回车确认 Submit answers
+  await press(frame, '\r');
+  await waitForFrame(frame, 'Review your answers', '进入 Review 汇总');
+  await press(frame, '\r');
+
   assert.equal(await p, '方案: 我自己的方案');
+  assert.equal(ctrl.askWizardState, null);
   frame.cleanup();
 });
 
