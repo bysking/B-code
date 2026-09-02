@@ -14,6 +14,7 @@ import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
 import type { SpinnerLike } from './ui.js';
 import type { Mode } from './permissions.js';
 import { readClipboardImage, type ClipboardImage } from './utils/clipboard.js';
+import { checkForUpdate } from './version-check.js';
 
 /**
  * 聊天输入封装：自动检测剪贴板图片，如果存在则与文本一起发送给模型。
@@ -271,6 +272,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     initialOutput,
   );
   unmount = unmountApp;
+
+  // 版本升级检查：异步执行不阻塞启动，检查到远程 npm 有新版时在底部提示升级命令
+  void checkForUpdate().then((info) => ctrl.setUpdateInfo(info));
 
   async function handle(input: string | { text: string; images?: ClipboardImage[] }) {
     if (running) return;

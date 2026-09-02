@@ -271,7 +271,7 @@ export function App({
           disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
           slashOpen={ctrl.slashOpen}
         />
-        <ModeBar mode={ctrl.mode} />
+        <ModeBar mode={ctrl.mode} updateInfo={ctrl.updateInfo} />
       </Box>
     </Box>
   );

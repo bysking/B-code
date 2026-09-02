@@ -183,6 +183,8 @@ export class AppController {
   askTextState: { question: string } | null = null;
   /** 当前模式（plan / auto / bypass / default），UI 底部展示 */
   mode: Mode = 'default';
+  /** 版本升级提示（启动异步检查填充；null = 无更新/检查中/已最新） */
+  updateInfo: { current: string; latest: string } | null = null;
 
   private askTextResolver: ((value: string | null) => void) | null = null;
 
@@ -537,6 +539,12 @@ export class AppController {
   /** Ctrl+O：切换工具输出面板（force 可指定开/关） */
   toggleOutputPanel(force?: boolean) {
     this.outputPanel = force ?? !this.outputPanel;
+    this.bump();
+  }
+
+  /** 设置版本升级提示（启动异步检查完成回填；触发底部 ModeBar 重渲染） */
+  setUpdateInfo(info: { current: string; latest: string } | null) {
+    this.updateInfo = info;
     this.bump();
   }
 

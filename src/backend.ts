@@ -32,7 +32,7 @@ type ProxiedFetch = (
   init?: Record<string, unknown>,
 ) => Promise<Awaited<ReturnType<typeof undiciFetch>>>;
 
-const proxiedFetch: ProxiedFetch = (input, init) =>
+export const proxiedFetch: ProxiedFetch = (input, init) =>
   undiciFetch(input as never, { ...init, dispatcher: proxyAgent } as never);
 
 /**
