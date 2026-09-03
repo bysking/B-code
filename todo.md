@@ -41,3 +41,4 @@ BadRequestError: 400 {"error":{"message":"unexpected `messages.1.content.0: tool
 11. 用户点击 esc 需要停止模型循环，等待用户输入，然后将用户输入作为一个高优先级任务
 12. `bcode "读取 package.json"` 一次性处理模式，需要等待结果返回后才能关闭
 13. bcode 在输入位置，用户需要支持能键盘左右切换鼠标光标然后输入,现在移动光标后继续输入，会自动跳到最后的位置
+14. /clear之后，输入内容，页面会跳动

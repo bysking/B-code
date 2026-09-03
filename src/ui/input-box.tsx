@@ -37,6 +37,13 @@ export function SimpleTextInput({
   useInput((input, key) => {
     if (!focus) return;
 
+    // Meta+Enter：插入换行（多行输入）
+    if (key.meta && key.return) {
+      onChange(value.slice(0, cursor) + '\n' + value.slice(cursor));
+      setCursor(cursor + 1);
+      return;
+    }
+
     // Enter：提交（slash 菜单打开时交给 SlashMenu 处理，避免双发）
     if (key.return && !slashOpen) {
       onSubmit(value);
