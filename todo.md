@@ -45,3 +45,4 @@ BadRequestError: 400 {"error":{"message":"unexpected `messages.1.content.0: tool
 15. markdown渲染要支持 Mermaid 语法 【todo】
 16. ok 要支持hooks（UserPromptSubmit / PreToolUse / PostToolUse，settings.json hooks 配置）
 17. 文件写入权限被拦截的情况下，会无限等待(thinking) todo
+18. 新增的几个指令，输出的时候，控制台都不显示，参考skills, mcp的方案 todo
