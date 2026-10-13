@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Static, Text, useInput } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
@@ -207,23 +207,15 @@ export function App({
   return (
     <Box flexDirection="column">
       <Box flexDirection="column" flexGrow={1}>
-        {/* 固定输出行走 <Static>：只追加不重渲染，避免 (resumed…)/(done) 及 /skills、/mcp
-            等大段输出撑大 live 区触发 Ink 的 overflow 整屏清屏（连 scrollback 一起清）。 */}
-        <Static
-          items={[
-            ...(initialOutput ?? []).map((l, i) => ({ k: `i${i}`, text: l })),
-            ...ctrl.output.map((l, i) => ({ k: `o${i}`, text: l })),
-          ]}
-        >
-          {({ k, text }) => (
-            <Text key={k} dimColor>
-              {text}
-            </Text>
-          )}
-        </Static>
+        {/* 固定输出行（initialOutput + ctrl.output）与消息流共用同一个 <Static>：
+            ink 7 只认最后一个挂载的 <Static>（root.staticNode 是单指针，后来的覆盖先前的），
+            且在 live 区会跳过所有 static 节点——挂两个 <Static> 会让先前那个的内容凭空消失。
+            MessageList 内部把 output 与 turn 按 id 统一排序进同一个 <Static>，见其注释。 */}
         <MessageList
           key={ctrl.resetEpoch}
           turns={ctrl.turns}
+          output={ctrl.output}
+          initialOutput={initialOutput}
           busy={ctrl.busy}
           busySince={ctrl.busySince}
           busyThinking={ctrl.busyThinking}

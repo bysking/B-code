@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Static, Text } from 'ink';
-import type { ToolCallDisplay, Turn } from './controller.js';
+import type { OutputLine, ToolCallDisplay, Turn } from './controller.js';
 import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
 import { Markdown } from './markdown-view.js';
 
@@ -152,11 +152,17 @@ function isCommittable(turn: Turn, isLast: boolean, busy: string | null): boolea
   return true;
 }
 
-/** <Static> 条目：整 turn（未分段）| 流式期提交的片段 | 分段 turn 落定后的余量收尾 */
+/** <Static> 条目：整 turn（未分段）| 流式期提交的片段 | 分段 turn 落定后的余量收尾 | 固定输出行 */
 type StaticEntry =
   | { kind: 'turn'; key: string; turn: Turn }
   | { kind: 'chunk'; key: string; text: string; thinking: boolean; firstOfTurn: boolean }
-  | { kind: 'rest'; key: string; turn: Turn };
+  | { kind: 'rest'; key: string; turn: Turn }
+  | { kind: 'output'; key: string; text: string };
+
+/** 一条输出行的渲染（dimColor 灰字，与消息流区分） */
+function OutputView({ text }: { text: string }) {
+  return <Text dimColor>{text}</Text>;
+}
 
 function hasChunks(t: Turn): boolean {
   return t.chunks.length > 0 || t.thinkingChunks.length > 0;
@@ -173,24 +179,59 @@ function hasChunks(t: Turn): boolean {
  */
 export function MessageList({
   turns,
+  output,
+  initialOutput,
   busy,
   busySince,
   busyThinking,
   busyInputTokens,
 }: {
   turns: Turn[];
+  output: OutputLine[];
+  initialOutput?: string[];
   busy: string | null;
   busySince: number | null;
   busyThinking: boolean;
   busyInputTokens: number;
 }) {
-  // 组装 <Static> 条目：按 turns 顺序，已提交片段（chunks）总是先入 Static；
-  // 落定 turn 追加整 turn / rest 收尾条目；未落定的留在 live 区。
-  // 注意条目数组每次都是新建的：ctrl.turns 是原地 push 的可变数组，若引用不变，
+  // 组装 <Static> 条目：output 行与 turn 共用同一 id 序列 → 统一按 id 升序合并，
+  // 输出行落在它发生的那一刻（例如 (mode → plan) 出现在切换前后的两条消息之间）。
+  // （initialOutput 是启动期输出，无 id，恒排在最前。）
+  //
+  // 注意 entries 数组每次都是新建的：ctrl.turns 是原地 push 的可变数组，若引用不变，
   // Ink <Static> 的 useMemo(items.slice(index), [items, index]) 会命中缓存导致新条目不渲染。
   const entries: StaticEntry[] = [];
   const live: Turn[] = [];
-  turns.forEach((t, i) => {
+  const liveOutput: OutputLine[] = [];
+
+  // 输出行：能提交的进 entries（按 id 与 turn 交织），未落定的留在 live 区底部。
+  // 这里的"落定"与 turn 判据无关——输出行一经 push 即定稿，唯一约束是保持时序：
+  // 若某输出行 id 小于仍处 live 的 turn，则它也留在 live（否则会显示在历史之后）。
+  const outputById = [...output].sort((a, b) => a.id - b.id);
+
+  const isCommittableTurn = (t: Turn, i: number) => isCommittable(t, i === turns.length - 1, busy);
+
+  // 标记每个 turn 是否可提交，并找出 live 区最小 id（输出行需 ≥ 它才能进 Static）
+  const committable = turns.map((t, i) => isCommittableTurn(t, i));
+  const firstLiveTurnId = turns.findIndex((_, i) => !committable[i]);
+  const liveBoundary = firstLiveTurnId === -1 ? Infinity : turns[firstLiveTurnId]!.id;
+
+  type SeqItem =
+    | { id: number; kind: 'output'; text: string }
+    | { id: number; kind: 'turn'; turn: Turn; index: number };
+  const seq: SeqItem[] = [];
+  for (const o of outputById) seq.push({ id: o.id, kind: 'output', text: o.text });
+  turns.forEach((t, i) => seq.push({ id: t.id, kind: 'turn', turn: t, index: i }));
+  seq.sort((a, b) => a.id - b.id);
+
+  for (const it of seq) {
+    if (it.kind === 'output') {
+      if (it.id < liveBoundary) entries.push({ kind: 'output', key: `o${it.id}`, text: it.text });
+      else liveOutput.push({ id: it.id, text: it.text });
+      continue;
+    }
+    const t = it.turn;
+    // 已提交片段（chunks）无论 turn 是否落定都要进 Static（流式中已提交的前缀不再重渲染）
     let firstOfTurn = true;
     const pushChunk = (text: string, thinking: boolean, idx: number) => {
       entries.push({
@@ -204,26 +245,47 @@ export function MessageList({
     };
     t.thinkingChunks.forEach((c, ci) => pushChunk(c, true, ci));
     t.chunks.forEach((c, ci) => pushChunk(c, false, ci));
-    if (isCommittable(t, i === turns.length - 1, busy)) {
-      entries.push(
-        firstOfTurn
-          ? { kind: 'turn', key: `t${t.id}`, turn: t }
-          : { kind: 'rest', key: `t${t.id}-r`, turn: t },
-      );
-    } else {
+
+    if (!committable[it.index]) {
       live.push(t);
+      continue;
     }
-  });
+    // 落定：余量作 rest 收尾（chunks 已先入 Static）；未分段则整 turn 一条
+    entries.push(
+      firstOfTurn
+        ? { kind: 'turn', key: `t${t.id}`, turn: t }
+        : { kind: 'rest', key: `t${t.id}-r`, turn: t },
+    );
+  }
+
+  // initialOutput（启动期输出）恒排在最前
+  const leading: StaticEntry[] = (initialOutput ?? []).map((text, i) => ({
+    kind: 'output',
+    key: `i${i}`,
+    text,
+  }));
+  const staticEntries = [...leading, ...entries];
+
+  // live 区：仍在途的输出行与未落定的 turn 也须按 id 排序，保证底部时序正确
+  type LiveItem =
+    | { id: number; kind: 'output'; text: string }
+    | { id: number; kind: 'turn'; turn: Turn };
+  const liveItems: LiveItem[] = [
+    ...liveOutput.map((o) => ({ id: o.id, kind: 'output' as const, text: o.text })),
+    ...live.map((t) => ({ id: t.id, kind: 'turn' as const, turn: t })),
+  ].sort((a, b) => a.id - b.id);
 
   return (
     <Box flexDirection="column" flexGrow={1}>
-      <Static items={entries}>
+      <Static items={staticEntries}>
         {(e) => {
           switch (e.kind) {
             case 'turn':
               return <TurnView key={e.key} turn={e.turn} />;
             case 'rest':
               return <TurnRemainder key={e.key} turn={e.turn} />;
+            case 'output':
+              return <OutputView key={e.key} text={e.text} />;
             case 'chunk':
               return (
                 <Box key={e.key} flexDirection="column">
@@ -241,8 +303,14 @@ export function MessageList({
         }}
       </Static>
       <Box flexDirection="column">
-        {live.map((t) =>
-          hasChunks(t) ? <TurnRemainder key={t.id} turn={t} /> : <TurnView key={t.id} turn={t} />,
+        {liveItems.map((it) =>
+          it.kind === 'output' ? (
+            <OutputView key={`lo${it.id}`} text={it.text} />
+          ) : hasChunks(it.turn) ? (
+            <TurnRemainder key={it.turn.id} turn={it.turn} />
+          ) : (
+            <TurnView key={it.turn.id} turn={it.turn} />
+          ),
         )}
         {busy && busySince !== null ? (
           <Box marginTop={1}>

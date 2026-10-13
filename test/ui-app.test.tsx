@@ -203,6 +203,37 @@ test('渲染：斜杠菜单打开显示候选', async () => {
   frame.cleanup();
 });
 
+test('回归：ctrl.pushOutput 的固定输出行必须真实渲染（曾被第二个 <Static> 吞掉）', async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  // ink 7 的 root.staticNode 是单指针：挂两个 <Static> 时后挂载的 MessageList 会覆盖
+  // app 层的输出行 <Static>，且 live 区会跳过所有 static 节点 → pushOutput 内容凭空消失。
+  // 修复后输出行与消息流共用同一个 <Static>，此处断言它确实渲染出来。
+  ctrl.pushOutput('(mode → plan)');
+  await waitForFrame(frame, '(mode → plan)', 'pushOutput 渲染');
+  frame.cleanup();
+});
+
+test('回归：pushOutput 输出行与消息流按时序交织（不挤在最前/最后）', async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.pushUser('第一条');
+  ctrl.streamText('回复一');
+  ctrl.finishStream();
+  ctrl.pushOutput('(middle marker)');
+  ctrl.pushUser('第二条');
+  ctrl.streamText('回复二');
+  ctrl.finishStream();
+  await waitForFrame(frame, '回复二', '第二轮渲染');
+  const out = stripAnsi(frame.lastFrame() ?? '');
+  const iFirst = out.indexOf('第一条');
+  const iMarker = out.indexOf('(middle marker)');
+  const iSecond = out.indexOf('第二条');
+  assert.ok(iFirst >= 0 && iMarker >= 0 && iSecond >= 0, '三者都渲染');
+  assert.ok(iFirst < iMarker && iMarker < iSecond, '输出行落在它发生的那一刻（两条消息之间）');
+  frame.cleanup();
+});
+
 test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async () => {
   const ctrl = new AppController();
   const frame = renderApp(ctrl);

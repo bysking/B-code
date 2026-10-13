@@ -155,10 +155,16 @@ function prettyInput(input: unknown): string {
   return s.length > 80 ? s.slice(0, 77) + '…' : s;
 }
 
+/** 固定输出行：id 与 Turn.id 共用同一自增序列，供 MessageList 按时序合并进同一个 <Static> */
+export interface OutputLine {
+  id: number;
+  text: string;
+}
+
 export class AppController {
   turns: Turn[] = [];
   /** 固定输出行：(resumed…) / (done) / 告警等 */
-  output: string[] = [];
+  output: OutputLine[] = [];
   /** 顶部 busy/thinking 文案（null = 空闲） */
   busy: string | null = null;
   /** busy 开始时间戳（elapsed 计算基准；null = 空闲） */
@@ -214,7 +220,9 @@ export class AppController {
 
   // ── 输出与消息流 ────────────────────────────────────────────
   pushOutput(line: string) {
-    this.output.push(line);
+    // id 与 turn 共用序列：MessageList 把 output 与 turn 统一按 id 排序进同一个 <Static>，
+    // 保证输出行插在它发生的那一时点（而非永远堆在最前/最后）。
+    this.output.push({ id: ++this.nextUserTurnId, text: line });
     this.bump();
   }
 
