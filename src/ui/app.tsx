@@ -16,6 +16,7 @@ import { SlashMenu } from './slash-menu.js';
 import { InputBox } from './input-box.js';
 import { OutputPanel } from './output-panel.js';
 import { TaskPanel } from './task-panel.js';
+import { TodoPanel } from './todo-panel.js';
 import { AskInput } from './ask-input.js';
 import { ModeBar } from './mode-bar.js';
 import { buildSlash } from './slash.js';
@@ -221,6 +222,7 @@ export function App({
           )}
         </Static>
         <MessageList
+          key={ctrl.resetEpoch}
           turns={ctrl.turns}
           busy={ctrl.busy}
           busySince={ctrl.busySince}
@@ -254,6 +256,8 @@ export function App({
       {ctrl.outputPanel ? <OutputPanel tools={allToolOutputs(ctrl)} /> : null}
 
       {ctrl.task ? <TaskPanel task={ctrl.task} /> : null}
+
+      <TodoPanel todos={ctrl.todos} />
 
       {quitArmed ? (
         <Box>

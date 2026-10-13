@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCliArgs, choiceAsWizard, groupsAsWizard } from '../src/cli.js';
+import { parseCliArgs, choiceAsWizard, groupsAsWizard, finalAssistantText } from '../src/cli.js';
 
 const base = {
   resume: false,
@@ -10,6 +10,7 @@ const base = {
   goal: '',
   loop: 0,
   session: '',
+  outputFormat: 'text' as const,
   instruction: '',
 };
 
@@ -61,6 +62,37 @@ test('parseCliArgs：--loop 解析秒数，非法值归 0', () => {
     instruction: 'watch it',
   });
   assert.equal(parseCliArgs(['--loop', 'abc']).loop, 0);
+});
+
+test('parseCliArgs：--output-format json 解析（缺省 text，非法值回落 text）', () => {
+  assert.equal(parseCliArgs(['--output-format', 'json', 'do it']).outputFormat, 'json');
+  assert.equal(parseCliArgs(['--output-format', 'json', 'do it']).instruction, 'do it');
+  assert.equal(parseCliArgs(['do it']).outputFormat, 'text');
+  assert.equal(parseCliArgs(['--output-format', 'xml', 'do it']).outputFormat, 'text');
+});
+
+test('finalAssistantText：取最后一条含文本的 assistant 消息', () => {
+  const messages = [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: [{ type: 'text', text: '第一次' }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'r' }] },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: '最终' },
+        { type: 'text', text: '答案' },
+      ],
+    },
+  ] as unknown as Parameters<typeof finalAssistantText>[0];
+  assert.equal(finalAssistantText(messages), '最终答案');
+});
+
+test('finalAssistantText：无文本回复 → 空串（跳过 tool_use-only 轮）', () => {
+  const messages = [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'read_file', input: {} }] },
+  ] as unknown as Parameters<typeof finalAssistantText>[0];
+  assert.equal(finalAssistantText(messages), '');
 });
 
 // ── 模型选择统一为 Wizard 的适配 ─────────────────────────────

@@ -31,6 +31,31 @@ rl.on('line', (line) => {
 });
 `;
 
+/**
+ * 假 MCP server（带资源）：tools/list 一个工具 + resources/list + resources/read。
+ * 验证资源以只读工具形态暴露。
+ */
+const FAKE_RESOURCE_SERVER = `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const m = JSON.parse(line);
+  let out;
+  if (m.method === 'initialize') {
+    out = { jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: { resources: {} }, serverInfo: { name: 'res', version: '1' } } };
+  } else if (m.method === 'tools/list') {
+    out = { jsonrpc: '2.0', id: m.id, result: { tools: [] } };
+  } else if (m.method === 'resources/list') {
+    out = { jsonrpc: '2.0', id: m.id, result: { resources: [{ uri: 'file:///notes.md', name: 'notes', description: '项目笔记' }] } };
+  } else if (m.method === 'resources/read') {
+    out = { jsonrpc: '2.0', id: m.id, result: { contents: [{ uri: m.params.uri, text: 'resource body for ' + m.params.uri }] } };
+  } else {
+    out = { jsonrpc: '2.0', id: m.id, result: {} };
+  }
+  process.stdout.write(JSON.stringify(out) + '\\n');
+});
+`;
+
 let dir: string;
 const savedMcpEnv = process.env[MCP_CONFIG_ENV];
 
@@ -86,6 +111,51 @@ test('loadMcpServers：server 连不上只警告不阻塞', async () => {
   const registry = new Registry();
   await loadMcpServers(registry); // 不抛
   assert.equal(registry.resolve('mcp__dead__x'), undefined);
+});
+
+test('MCP 资源：resources/list + read 以只读工具暴露', async () => {
+  const conn = await connectMcp(process.execPath, ['-e', FAKE_RESOURCE_SERVER]);
+  try {
+    assert.equal(conn.resources.length, 1);
+    assert.equal(conn.resources[0]?.uri, 'file:///notes.md');
+    const body = await conn.readResource('file:///notes.md');
+    assert.equal(body, 'resource body for file:///notes.md');
+  } finally {
+    conn.close();
+  }
+});
+
+test('loadMcpServers：资源注册为 mcp__server__read_resource（read 模式）', async () => {
+  const cfg = join(dir, 'res-mcp.json');
+  await writeFile(
+    cfg,
+    JSON.stringify({
+      mcpServers: { res: { command: process.execPath, args: ['-e', FAKE_RESOURCE_SERVER] } },
+    }),
+  );
+  process.env[MCP_CONFIG_ENV] = cfg;
+
+  const registry = new Registry();
+  await loadMcpServers(registry);
+  const mp = registry.resolve('mcp__res__read_resource');
+  assert.ok(mp, '资源工具已注册');
+  assert.equal(mp?.mode, 'read', '资源只读：plan 模式放行、免确认');
+  assert.ok(mp?.description.includes('file:///notes.md'), '描述含资源目录');
+  const out = await mp?.handler({ uri: 'file:///notes.md' }, {} as RuntimeContext);
+  assert.ok(String(out).includes('resource body'), '可按 uri 读取');
+});
+
+test('loadMcpServers：server 不支持 resources → 优雅降级（不注册资源工具）', async () => {
+  const cfg = join(dir, 'nores-mcp.json');
+  await writeFile(
+    cfg,
+    JSON.stringify({ mcpServers: { plain: { command: process.execPath, args: ['-e', FAKE_SERVER] } } }),
+  );
+  process.env[MCP_CONFIG_ENV] = cfg;
+  const registry = new Registry();
+  await loadMcpServers(registry);
+  assert.ok(registry.resolve('mcp__plain__echo'), '工具仍正常注册');
+  assert.equal(registry.resolve('mcp__plain__read_resource'), undefined, '无资源则不注册');
 });
 
 test('connectMcp：server 立即退出 → 请求 reject 而非挂死', async () => {

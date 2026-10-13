@@ -22,18 +22,35 @@ export const rulePermission: PermissionPolicy = {
   check: checkPermission,
 };
 
-/** 危险命令正则：命中即 deny（连 --yolo 也拦不住） */
+/**
+ * 危险命令正则：命中即 deny（连 --yolo 也拦不住）。
+ *
+ * 误杀防线：`kill`/`dd`/`shutdown` 这类短词必须匹配到**命令边界**——命令串
+ * 以它开头，或出现在 `;` `&` `|` 之后（`kill -9 1`、`ls; kill 2`），
+ * 否则 `npm run kill-port`、`add`、`dd-utils` 会被误伤。
+ * 命令边界见 CMD_START（行首或语句分隔符后的空白）。
+ */
+const CMD_START = String.raw`(?:^|[;&|]\s*)`;
+
 export const DANGEROUS_PATTERNS: RegExp[] = [
   /\brm\s+-rf\b/, // 递归删除
-  /\bgit\s+push\b/, // 推送代码
   /\bgit\s+reset\s+--hard\b/, // 硬重置
   /\bsudo\b/, // 提权
   /\bmkfs\b/, // 格式化磁盘
   />\s*\/dev\//, // 写入设备
-  /\bdd\s/, // 磁盘操作
-  /\bkill\b/, // 杀进程
-  /\breboot\b/, // 重启
-  /\bshutdown\b/, // 关机
+  new RegExp(`${CMD_START}dd\\s`), // 磁盘操作：dd 必须是命令名
+  new RegExp(`${CMD_START}kill\\b`), // 杀进程：排除 kill-port 之类
+  new RegExp(`${CMD_START}reboot\\b`), // 重启
+  new RegExp(`${CMD_START}shutdown\\b`), // 关机
+];
+
+/**
+ * 敏感命令：默认需确认，但**可经用户授权持久化免问**（与 DANGEROUS 的区别）。
+ * 例：git push —— 团队协作高频操作，一刀切 deny 会让工具没法用；
+ * 改为一律确认，用户确认一次即可写入持久化白名单。
+ */
+export const SENSITIVE_PATTERNS: RegExp[] = [
+  /\bgit\s+push\b/, // 推送代码（会改动远端）
 ];
 
 export function checkPermission(mp: MountPoint, input: Record<string, any>, mode: Mode): Permission {
@@ -53,13 +70,60 @@ export function checkPermission(mp: MountPoint, input: Record<string, any>, mode
   // ③ 只读操作放行
   if (mp.mode === 'read') return 'allow';
 
-  // ④ fail-closed：write/shell/external/未声明 mode → 需要确认
+  // ④ 敏感命令（如 git push）：一律确认——用户确认后可经持久化白名单免问
+  if (mp.mode === 'shell' && SENSITIVE_PATTERNS.some((re) => re.test(String(input.command ?? '')))) {
+    return 'confirm';
+  }
+
+  // ⑤ fail-closed：write/shell/external/未声明 mode → 需要确认
   return 'confirm';
 }
 
 /** 会话级白名单键：shell 用命令内容做键（同命令不再问），其他按工具名 */
 export function allowlistKey(mp: MountPoint, input: Record<string, any>): string {
   return mp.mode === 'shell' ? `shell:${String(input.command ?? '')}` : mp.name;
+}
+
+// ── 持久化白名单：把"本会话记住"升级为"记住不再问" ──────────────────
+
+/**
+ * 持久化白名单存储键：比会话键更**具体**，避免"永久放行整个工具"过宽。
+ *   shell   → `shell:<命令>`（同 git push origin main 整串）
+ *   文件类  → `<工具名>:<file_path>`（按文件，不按内容——内容每次都会变）
+ *   其余    → 工具名
+ *
+ * 刻意不用 JSON.stringify：对象键顺序会因模型每次下发的参数顺序不同而抖动，
+ * 且 undefined 键会被丢掉，导致同一逻辑调用产生不同键、白名单永远不命中。
+ */
+export function persistedKey(mp: MountPoint, input: Record<string, any>): string {
+  if (mp.mode === 'shell') return `shell:${String(input.command ?? '')}`;
+  const path = input.file_path;
+  return typeof path === 'string' && path ? `${mp.name}:${path}` : mp.name;
+}
+
+/** 持久化白名单的读写契约（agent 用 settings.json 实现：{permissions:{allow:[...]}}） */
+export interface AllowlistStore {
+  load(): string[];
+  save(keys: string[]): void;
+}
+
+/** 启动时载入持久化白名单到会话集合（失败静默：读不到就当空） */
+export function loadAllowlist(store: AllowlistStore, into: Set<string>): void {
+  try {
+    for (const k of store.load()) into.add(k);
+  } catch {
+    // 读取失败不阻断启动
+  }
+}
+
+/** 把某次授权写入持久化白名单（去重后落盘；失败静默，不影响本次放行） */
+export function persistAllowlist(store: AllowlistStore, key: string): void {
+  try {
+    const keys = store.load();
+    if (!keys.includes(key)) store.save([...keys, key]);
+  } catch {
+    // 持久化失败不影响本会话放行
+  }
 }
 
 // ── 放行决策（P7 策略化的落地：agent.chat 里的权限分支收拢到此）────────
@@ -102,17 +166,23 @@ export async function decideExecution(
   if (permission === 'deny') {
     return { allow: false, reason: `Denied: ${mp.name} was blocked by the permission system.` };
   }
+  // 敏感命令（如 git push）：跳过分类型器，一律人工确认（auto 模式下也不自动放行）
+  const sensitive =
+    mp.mode === 'shell' && SENSITIVE_PATTERNS.some((re) => re.test(String(input.command ?? '')));
   // ② Auto Mode：写/编辑/shell 先过分类器（分类器代替人工确认框）
-  if (ctx.mode === 'auto' && (mp.mode === 'write' || mp.mode === 'shell')) {
+  if (!sensitive && ctx.mode === 'auto' && (mp.mode === 'write' || mp.mode === 'shell')) {
     const verdict = await ctx.classify(mp.name, input);
     return verdict.allow
       ? { allow: true }
       : { allow: false, reason: `Blocked by auto-mode monitor: ${verdict.reason}` };
   }
-  // ③ confirm：白名单命中直接放行，否则问用户（bypass 跳过）
-  if (permission === 'confirm' && ctx.mode !== 'bypass') {
+  // ③ confirm：白名单命中直接放行，否则问用户（bypass 跳过；敏感命令连 bypass 也要问）
+  if (permission === 'confirm' && (ctx.mode !== 'bypass' || sensitive)) {
     const key = allowlistKey(mp, input);
-    if (ctx.allowlist.has(key)) return { allow: true };
+    // 会话键（粗粒度）或持久化键（更具体）任一命中即免问
+    if (ctx.allowlist.has(key) || ctx.allowlist.has(persistedKey(mp, input))) {
+      return { allow: true };
+    }
     const label = mp.mode === 'shell' ? String(input.command ?? '') : mp.name;
     const ok = await ctx.askUser(`Allow ${label}? (y/n)`);
     if (ok) return { allow: true, remember: true };

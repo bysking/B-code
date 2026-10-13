@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   applySettings,
+  createSettingsAllowlistStore,
   ensureDataDirs,
   loadSettings,
+  saveSettings,
   settingsPath,
   SETTINGS_FILE_ENV,
 } from '../src/config.js';
@@ -85,4 +87,43 @@ test('ensureDataDirs：启动创建默认目录树（幂等）', () => {
     assert.ok(existsSync(join(home, sub)), `${sub} 目录已创建`);
   }
   ensureDataDirs(home); // 再次调用不抛
+});
+
+// ── 持久化白名单的 settings.json 存储 ────────────────────────────
+
+test('saveSettings：写入 JSON（重建目录 + 缩进）', async () => {
+  const file = join(home, 'nested', 'settings.json');
+  saveSettings({ model: 'm1' }, file);
+  assert.equal(loadSettings(file).model, 'm1');
+});
+
+test('createSettingsAllowlistStore：写 allow 不丢其余配置字段', async () => {
+  const file = join(home, 'perm-settings.json');
+  await writeFile(file, JSON.stringify({ provider: 'openai', apiKey: 'SECRET', model: 'gpt' }), 'utf-8');
+  const store = createSettingsAllowlistStore(file);
+
+  assert.deepEqual(store.load(), [], '初始无白名单');
+
+  store.save(['write_file:/a', 'shell:git push origin main']);
+  // 重新读盘：原有字段保留，permissions.allow 写入
+  const after = loadSettings(file);
+  assert.equal(after.apiKey, 'SECRET', 'apiKey 未被抹掉');
+  assert.equal(after.model, 'gpt', 'model 未被抹掉');
+  assert.deepEqual(after.permissions?.allow, ['write_file:/a', 'shell:git push origin main']);
+  assert.deepEqual(store.load(), ['write_file:/a', 'shell:git push origin main'], '可回读');
+});
+
+test('createSettingsAllowlistStore：损坏文件 → 空白名单，不抛', async () => {
+  const file = join(home, 'broken-settings.json');
+  await writeFile(file, '{ not json', 'utf-8');
+  const store = createSettingsAllowlistStore(file);
+  assert.deepEqual(store.load(), []);
+  assert.doesNotThrow(() => store.save(['x'])); // 覆盖坏文件
+  assert.deepEqual(store.load(), ['x']);
+});
+
+test('createSettingsAllowlistStore：非字符串项被过滤（防手改坏数据）', async () => {
+  const file = join(home, 'weird-settings.json');
+  await writeFile(file, JSON.stringify({ permissions: { allow: ['ok', 42, null, 'also-ok'] } }), 'utf-8');
+  assert.deepEqual(createSettingsAllowlistStore(file).load(), ['ok', 'also-ok']);
 });

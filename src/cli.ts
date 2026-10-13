@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { Agent } from './agent.js';
 import type { Registry } from './registry.js';
 import { clearSessionFile, loadSession, saveSession } from './session.js';
@@ -8,6 +9,10 @@ import { closeAllMcpConnections } from './mcp.js';
 import { formatMcpList, resolveMcpConfigs } from './mcp-config.js';
 import { AppController } from './ui/controller.js';
 import type { WizardStep } from './ui/controller.js';
+import { createSettingsAllowlistStore, loadSettings } from './config.js';
+import { formatCost } from './cost.js';
+import { renderTodos } from './todo.js';
+import { loadHooks } from './hooks.js';
 import { mountTtyApp } from './ui/render.js';
 import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
 import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
@@ -55,6 +60,8 @@ export interface CliArgs {
   loop: number;
   /** --session <id>：恢复指定会话 */
   session: string;
+  /** --output-format text|json（json = 结构化结果，供 CI/脚本消费；强制 headless） */
+  outputFormat: 'text' | 'json';
   instruction: string;
 }
 
@@ -64,6 +71,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
   let goal = '';
   let loop = 0;
   let session = '';
+  let outputFormat: 'text' | 'json' = 'text';
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
@@ -78,6 +86,9 @@ export function parseCliArgs(argv: string[]): CliArgs {
       i++;
     } else if (a === '--session') {
       session = argv[i + 1] ?? '';
+      i++;
+    } else if (a === '--output-format') {
+      outputFormat = argv[i + 1] === 'json' ? 'json' : 'text';
       i++;
     } else {
       rest.push(a);
@@ -95,6 +106,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     goal,
     loop,
     session,
+    outputFormat,
     instruction,
   };
 }
@@ -109,6 +121,28 @@ const CONFIRM_OPTIONS = [
   { label: '本轮会话自动审批通过', value: 'allow_all' },
   { label: 'No', value: 'no' },
 ];
+
+/** /help 文本：命令 + 快捷键（TTY / 非 TTY 共用） */
+const HELP_TEXT = [
+  '命令:',
+  '  /clear           清空对话历史',
+  '  /help            显示本帮助',
+  '  /cost            本次会话 token 用量与估算成本',
+  '  /model [名]      查看/切换模型',
+  '  /compact         立即压缩上下文',
+  '  /rewind          回退本次会话的文件改动',
+  '  /todos           查看任务清单',
+  '  /plan /auto /yolo /default   切换权限模式',
+  '  /skills /mcp     列出技能 / MCP server',
+  '  /remember <事实> 保存长期记忆',
+  '  exit | quit      退出',
+  '快捷键:',
+  '  Esc              硬中断当前对话（取消在飞请求/终止 shell）',
+  '  Ctrl+O           工具输出面板',
+  '  Shift+Tab        循环切换模式',
+  '  ↑ / ↓            输入历史导航',
+  '  Ctrl+V           粘贴图片/文本',
+].join('\n');
 
 /** choice → 单步向导（模型驱动选择统一为 Wizard 的适配） */
 export function choiceAsWizard(
@@ -154,6 +188,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
 
   const agent = new Agent({
     mode: initialMode(args),
+    allowlistStore: createSettingsAllowlistStore(), // "记住不再问"跨会话生效（写 settings.json）
+    hooks: loadHooks(loadSettings()), // 生命周期钩子（settings.json hooks）
+    onTodos: (todos) => ctrl.setTodos(todos), // 模型自管待办 → 底部清单视图
     print: (t) => ctrl.streamText(t),
     askUser: async (question) => {
       if (autoApprove) return true;
@@ -209,6 +246,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   );
 
   await agent.initMcp();
+
+  // 启动即回填已载入的待办清单（跨会话存续的进度视图）
+  ctrl.setTodos(agent.todoList());
 
   // 斜杠菜单候选：内置命令 + user-invocable 技能
   ctrl.setSlashItems([
@@ -317,15 +357,60 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           .map((s) => `/${s.name}: ${s.description}`)
           .join('\n');
 
-        // todo 同步等待读取配置，然后 ctrl 推送到 UI渲染
-        console.log(`\n${skills ? `Available skills:\n${skills}` : '(no skills)'}\n`);
+        // 走 ctrl.pushOutput（而非 console.log 直写 stdout）——直写会与 Ink 的
+        // live 帧抢占同一片终端区域，导致输出错位/被覆盖。
+        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : '(no skills)');
         return;
       }
       if (trimmed === '/mcp') {
-        // todo 同步等待读取配置，然后 ctrl 推送到 UI渲染
-        console.log(
-          `\n${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`,
-        );
+        ctrl.pushOutput(formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)));
+        return;
+      }
+      if (trimmed === '/help') {
+        ctrl.pushOutput(HELP_TEXT);
+        return;
+      }
+      if (trimmed === '/cost') {
+        ctrl.pushOutput(formatCost(agent.usageTotals()));
+        return;
+      }
+      if (trimmed === '/todos') {
+        ctrl.pushOutput(`任务清单:\n${renderTodos(agent.todoList())}`);
+        return;
+      }
+      if (trimmed === '/model' || trimmed.startsWith('/model ')) {
+        const arg = trimmed.slice('/model'.length).trim();
+        if (!arg) {
+          ctrl.pushOutput(`当前模型: ${agent.model}`);
+        } else {
+          agent.setModel(arg);
+          ctrl.pushOutput(`(model → ${arg})`);
+        }
+        return;
+      }
+      if (trimmed === '/compact') {
+        const did = await agent.compactNow();
+        ctrl.pushOutput(did ? '(上下文已压缩)' : '(上下文较短，无需压缩)');
+        return;
+      }
+      if (trimmed === '/rewind') {
+        const n = agent.checkpointCount();
+        if (n === 0) {
+          ctrl.pushOutput('(没有可回退的文件改动)');
+          return;
+        }
+        // 破坏性操作：先确认（Esc/No = 取消）
+        const ok = await ctrl.ask(`回退 ${n} 个文件的改动？该操作会还原文件内容。`, [
+          { label: 'No', value: 'no' },
+          { label: 'Yes', value: 'yes' },
+        ]);
+        if (ok !== 'yes') {
+          ctrl.pushOutput('(已取消回退)');
+          return;
+        }
+        const { restored, deleted } = agent.rewind();
+        const lines = [...restored.map((p) => `  还原 ${p}`), ...deleted.map((p) => `  删除 ${p}`)];
+        ctrl.pushOutput(`(已回退 ${restored.length + deleted.length} 个文件)\n${lines.join('\n')}`);
         return;
       }
       if (trimmed.startsWith('/remember ')) {
@@ -381,6 +466,67 @@ function printResumeHint(sessionId: string): void {
   process.stdout.write(`\n想恢复本次会话，执行:\n  bcode --resume --session ${sessionId}\n`);
 }
 
+/** 从会话历史取最后一条 assistant 文本（JSON 输出用；工具轮次不算） */
+export function finalAssistantText(messages: MessageParam[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== 'assistant' || typeof m.content === 'string') continue;
+    const text = (m.content as Array<{ type: string; text?: string }>)
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('');
+    if (text) return text;
+  }
+  return '';
+}
+
+/**
+ * JSON 一次性模式（--output-format json）：headless 执行一条指令，
+ * 把结果（最终文本 + 工具调用 + 用量）序列化为单个 JSON 对象打到 stdout。
+ * 供 CI/脚本消费——不渲染 UI、不做 TTY 分流。
+ */
+async function runJsonOnce(args: CliArgs, sessionId: string): Promise<void> {
+  const tools: { name: string; input: unknown; output?: string }[] = [];
+  const agent = new Agent({
+    mode: initialMode(args),
+    hooks: loadHooks(loadSettings()), // 生命周期钩子
+    print: () => {}, // 丢弃流式文本（结果从 history 取，避免中间态混入）
+    askUser: async () => false, // headless：无法确认 → fail-closed
+    events: (ev) => {
+      if (ev.type === 'tool_start') tools.push({ name: ev.name, input: ev.input });
+      else if (ev.type === 'tool_end') {
+        // 匹配最近的同名且无 output 的记录（并行 read 也能对上）
+        const slot = [...tools].reverse().find((t) => t.name === ev.name && t.output === undefined);
+        if (slot) slot.output = ev.output;
+      }
+    },
+  });
+  await agent.initMcp();
+
+  const instruction = resolveSkill(args.instruction) ?? args.instruction;
+  let error: string | null = null;
+  try {
+    await agent.chat(instruction);
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+  await saveSession(agent.history(), sessionId);
+  closeAllMcpConnections();
+
+  const payload = {
+    success: error === null,
+    session_id: sessionId,
+    model: agent.model,
+    instruction,
+    result: finalAssistantText(agent.history()),
+    tools,
+    usage: agent.usageTotals(),
+    error,
+  };
+  process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+  process.exit(error === null ? 0 : 1);
+}
+
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   /**  参数解析
    * 是否恢复会话：resume、session
@@ -389,16 +535,26 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
      循环执行：loop
      用户指令：instruction 
   */
-  const { resume, plan, yolo, auto, goal, loop, session, instruction } = parseCliArgs(argv);
+  const { resume, plan, yolo, auto, goal, loop, session, instruction, outputFormat } = parseCliArgs(argv);
 
   /** 同时判断是否是普通 REPL：也就是没有一次性指令、目标或循环参数时，才进入交互式多轮模式。 */
   const replMode = !instruction && !goal && !(loop > 0);
   const sessionId = newSessionId(); // 本次会话 id（退出时打印恢复命令用）
 
+  // --output-format json：headless 结构化输出（供 CI/脚本消费），不进入 TTY/REPL 分流。
+  // 仅对一次性指令模式生效；无指令时忽略该标志。
+  if (outputFormat === 'json' && instruction) {
+    await runJsonOnce(
+      { resume, plan, yolo, auto, goal, loop, session, outputFormat, instruction },
+      sessionId,
+    );
+    return;
+  }
+
   // 如果输入输出都是真实终端，就交给 runTtyCli，TTY 交互路径：ink 声明式渲染（思考/工具块/markdown/选择/斜杠菜单）。
   // 非 TTY（管道/CI/脚本）走下方 readline 分支，语义保持不变。
   if (process.stdout.isTTY && process.stdin.isTTY) {
-    await runTtyCli({ resume, plan, yolo, auto, goal, loop, session, instruction }, sessionId);
+    await runTtyCli({ resume, plan, yolo, auto, goal, loop, session, outputFormat, instruction }, sessionId);
     return; // 在这里直接结束，不再执行下面的非 TTY 逻辑。
   }
 
@@ -506,6 +662,52 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         created.prompt();
         return;
       }
+      if (input === '/help') {
+        process.stdout.write(`${HELP_TEXT}\n`);
+        created.prompt();
+        return;
+      }
+      if (input === '/cost') {
+        process.stdout.write(`${formatCost(agent.usageTotals())}\n`);
+        created.prompt();
+        return;
+      }
+      if (input === '/todos') {
+        process.stdout.write(`任务清单:\n${renderTodos(agent.todoList())}\n`);
+        created.prompt();
+        return;
+      }
+      if (input === '/model' || input.startsWith('/model ')) {
+        const arg = input.slice('/model'.length).trim();
+        if (!arg) process.stdout.write(`当前模型: ${agent.model}\n`);
+        else {
+          agent.setModel(arg);
+          process.stdout.write(`(model → ${arg})\n`);
+        }
+        created.prompt();
+        return;
+      }
+      if (input === '/compact') {
+        const did = await agent.compactNow();
+        process.stdout.write(`${did ? '(上下文已压缩)' : '(上下文较短，无需压缩)'}\n`);
+        created.prompt();
+        return;
+      }
+      if (input === '/rewind') {
+        const n = agent.checkpointCount();
+        if (n === 0) {
+          process.stdout.write('(没有可回退的文件改动)\n');
+        } else {
+          const { restored, deleted } = agent.rewind();
+          process.stdout.write(
+            `(已回退 ${restored.length + deleted.length} 个文件)\n` +
+              [...restored.map((p) => `  还原 ${p}`), ...deleted.map((p) => `  删除 ${p}`)].join('\n') +
+              '\n',
+          );
+        }
+        created.prompt();
+        return;
+      }
       if (input.startsWith('/remember ')) {
         const fact = input.slice('/remember '.length).trim();
         const name = fact.split(/\W+/).filter(Boolean).slice(0, 4).join('_').toLowerCase() || 'fact';
@@ -568,6 +770,8 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
 
   const agent = new Agent({
     mode: initialMode({ plan, yolo, auto }),
+    allowlistStore: createSettingsAllowlistStore(), // 非 TTY 路径同样持久化白名单
+    hooks: loadHooks(loadSettings()), // 生命周期钩子
     askUser: (question) =>
       new Promise<boolean>((resolve) => {
         process.stdout.write(`  ${question} `);

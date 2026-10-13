@@ -25,8 +25,8 @@ test('slashBaseName：/name 参数 形态取基础名', () => {
 test('filterSlash：前后缀不区分大小写，空查询全量', () => {
   assert.equal(filterSlash('', items).length, items.length);
   assert.deepEqual(
-    filterSlash('/co', items).map((i) => i.name),
-    ['commit', 'code-review'],
+    filterSlash('/code', items).map((i) => i.name),
+    ['code-review'],
   );
   assert.deepEqual(
     filterSlash('/cle', items).map((i) => i.name),

@@ -41,6 +41,8 @@ export interface RuntimeContext {
   fileStore?: FileStore;
   /** 工具执行期间的实时日志回调（run_shell/MCP 等长任务逐行转发；无则忽略） */
   onToolOutput?(line: string): void;
+  /** 结构化待办变更回调（todo_write 写入后触发；UI 据此更新任务清单视图） */
+  onTodos?(todos: import('./todo.js').TodoItem[]): void;
   /** 硬中断信号：用户取消时 abort——支持取消的工具（如 run_shell）监听它立即终止 */
   signal?: AbortSignal;
 }

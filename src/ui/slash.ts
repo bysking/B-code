@@ -7,6 +7,12 @@ import type { SlashItem } from './controller.js';
 
 export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
   { name: 'clear', description: '清空当前对话历史' },
+  { name: 'help', description: '显示帮助（命令与快捷键）' },
+  { name: 'cost', description: '显示本次会话 token 用量与估算成本' },
+  { name: 'model', description: '查看或切换当前模型（/model <名字>）' },
+  { name: 'compact', description: '立即压缩上下文（摘要旧消息）' },
+  { name: 'rewind', description: '回退本次会话已改动的文件（检查点还原）' },
+  { name: 'todos', description: '查看当前任务清单' },
   { name: 'plan', description: '切换 plan（只读）模式' },
   { name: 'yolo', description: '切换 bypass 模式' },
   { name: 'auto', description: '切换 auto 模式（分类器管控写/shell）' },
@@ -47,4 +53,15 @@ export function buildSlash(_line: string, itemName: string): string {
 /** Esc / 无匹配时给出安全行为 */
 export function defaultPick(items: SlashItem[]): SlashItem | null {
   return items[0] ?? null;
+}
+
+/**
+ * 可见窗口：菜单最多展示 max 项，窗口随选中项滚动（保证 active 始终可见）。
+ * 返回 [start, end) 切片区间；列表不足 max 时返回全量。
+ */
+export function slashWindow(idx: number, length: number, max: number): [number, number] {
+  if (length <= max) return [0, length];
+  const half = Math.floor(max / 2);
+  const start = Math.max(0, Math.min(idx - half, length - max));
+  return [start, start + max];
 }

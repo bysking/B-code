@@ -119,3 +119,12 @@ pnpm dev "冒烟指令"                    # 端到端
 ```
 
 > **写完 EXTENDING.md 本身暴露了一个事实**：加能力最贵的不再是代码，而是"描述清楚干什么 + 权限 mode 想清楚"——这两样写对了，其余全是模板。
+
+## 6. 零代码扩展点（不改内核）
+
+除了写代码加工具，以下能力可直接由配置启用：
+
+- **MCP**：`.claude/mcp.json` 加 server → 启动前缀注册 `mcp__server__tool`；server 若提供 resources，会自动聚合为只读工具 `mcp__server__read_resource`
+- **技能**：`.claude/skills/` 放文件/目录 → `/name` 即用
+- **Hooks**：`settings.json` 的 `hooks` 字段挂外部命令（UserPromptSubmit / PreToolUse / PostToolUse），协议对齐 Claude Code（事件 JSON 走 stdin，退出码 2 拦截）
+- **权限白名单**：确认框选"记住不再问"→ 授权写入 `settings.json` 的 `permissions.allow`

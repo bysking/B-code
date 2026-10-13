@@ -4,8 +4,13 @@ import {
   allowlistKey,
   checkPermission,
   DANGEROUS_PATTERNS,
+  SENSITIVE_PATTERNS,
   decideExecution,
+  loadAllowlist,
+  persistAllowlist,
+  persistedKey,
   type ExecutionContext,
+  type AllowlistStore,
 } from '../src/permissions.js';
 import type { MountPoint } from '../src/registry.js';
 
@@ -18,23 +23,23 @@ function mp(name: string, mode: MountPoint['mode'] = 'external'): MountPoint {
 function execCtx(
   overrides: Partial<{
     mode: ExecutionContext['mode'];
+    allowlist: Set<string>;
     classify: (name: string, input: Record<string, any>) => Promise<{ allow: boolean; reason: string }>;
     askUser: (q: string) => Promise<boolean>;
   }> = {},
 ): ExecutionContext {
   return {
     mode: overrides.mode ?? 'default',
-    allowlist: new Set<string>(),
+    allowlist: overrides.allowlist ?? new Set<string>(),
     classify: overrides.classify ?? (async () => ({ allow: true, reason: '' })),
     askUser: overrides.askUser ?? (async () => true),
   };
 }
 
-test('危险命令在三种模式下都被 deny（含 --yolo）', () => {
+test('危险命令在任何模式下都被 deny（含 --yolo）', () => {
   const shell = mp('run_shell', 'shell');
   const dangerous = [
     'rm -rf /tmp/x',
-    'git push origin main',
     'git reset --hard HEAD',
     'sudo apt install x',
     'dd if=/dev/zero of=/dev/sda',
@@ -48,6 +53,40 @@ test('危险命令在三种模式下都被 deny（含 --yolo）', () => {
       assert.equal(checkPermission(shell, { command: cmd }, mode), 'deny', `${mode} 下应 deny: ${cmd}`);
     }
   }
+});
+
+test('误杀防线：kill-port / add / dd-utils 等合法命令不被 deny', () => {
+  const shell = mp('run_shell', 'shell');
+  const benign = [
+    'npm run kill-port',
+    'git add .', // 含 "dd" 但不是 dd 命令
+    'pkill -f node', // 注意：未列入危险词（无 boundary kill）
+    'ls dd-utils',
+    'prettier --check src',
+  ];
+  for (const cmd of benign) {
+    assert.notEqual(
+      checkPermission(shell, { command: cmd }, 'default'),
+      'deny',
+      `不应 deny 合法命令: ${cmd}`,
+    );
+  }
+});
+
+test('命令边界：kill/reboot 出现在语句分隔符后仍被 deny', () => {
+  const shell = mp('run_shell', 'shell');
+  assert.equal(checkPermission(shell, { command: 'echo hi; kill -9 1' }, 'default'), 'deny');
+  assert.equal(checkPermission(shell, { command: 'true && reboot' }, 'default'), 'deny');
+  assert.equal(checkPermission(shell, { command: 'a | shutdown now' }, 'default'), 'deny');
+});
+
+test('敏感命令 git push：default/auto 需确认，plan deny，bypass 也需确认（不再一刀切）', () => {
+  const shell = mp('run_shell', 'shell');
+  const cmd = { command: 'git push origin main' };
+  assert.equal(checkPermission(shell, cmd, 'default'), 'confirm', '默认需确认（可授权免问）');
+  assert.equal(checkPermission(shell, cmd, 'auto'), 'confirm', 'auto 下也需人工确认，不走分类器');
+  assert.equal(checkPermission(shell, cmd, 'plan'), 'deny', 'plan 只读契约仍 deny 非 read');
+  assert.equal(checkPermission(shell, cmd, 'bypass'), 'confirm', 'bypass 下敏感命令仍要确认');
 });
 
 test('plan 模式：write/shell/external 全拦，read 放行', () => {
@@ -90,11 +129,104 @@ test('allowlistKey：shell 用命令内容，其他按工具名', () => {
 });
 
 test('危险模式表非空且含核心条目（守卫误删）', () => {
-  assert.ok(DANGEROUS_PATTERNS.length >= 10);
+  assert.ok(DANGEROUS_PATTERNS.length >= 8);
   const first = DANGEROUS_PATTERNS[0];
   assert.ok(first);
   assert.equal(first.source, '\\brm\\s+-rf\\b');
   assert.ok(DANGEROUS_PATTERNS.some((re) => re.source.includes('sudo')));
+  // git push 已移出"无条件 deny"表，进入可授权的敏感表
+  assert.ok(!DANGEROUS_PATTERNS.some((re) => re.source.includes('git\\s+push')));
+  assert.ok(SENSITIVE_PATTERNS.some((re) => re.source.includes('git\\s+push')));
+});
+
+// ── 持久化白名单（settings.json permissions.allow 的键与读写契约）────────
+
+test('persistedKey：按工具/文件/命令取值，内容不影响键（避免永不失配）', () => {
+  // 文件类：按 file_path，不按 content（内容每次都变，含它会永不命中）
+  const a = persistedKey(mp('write_file', 'write'), { file_path: '/x', content: 'hi' });
+  const b = persistedKey(mp('write_file', 'write'), { file_path: '/x', content: 'different content' });
+  assert.equal(a, b, '同文件不同内容 → 同键');
+  assert.equal(a, 'write_file:/x');
+  assert.notEqual(a, persistedKey(mp('write_file', 'write'), { file_path: '/y' }));
+  // shell：按命令整串
+  assert.equal(
+    persistedKey(mp('run_shell', 'shell'), { command: 'git push origin main' }),
+    'shell:git push origin main',
+  );
+  // 无 file_path：退回工具名（如自定义 external 工具）
+  assert.equal(persistedKey(mp('mcp__x__thing', 'external'), {}), 'mcp__x__thing');
+});
+
+test('loadAllowlist / persistAllowlist：载入 + 去重写回（真实存储确定性）', () => {
+  let stored: string[] = ['write_file:/a'];
+  const store: AllowlistStore = {
+    load: () => [...stored],
+    save: (keys) => {
+      stored = keys;
+    },
+  };
+  const set = new Set<string>();
+  loadAllowlist(store, set);
+  assert.ok(set.has('write_file:/a'), '启动载入持久化白名单');
+
+  persistAllowlist(store, 'shell:git push origin main');
+  persistAllowlist(store, 'shell:git push origin main'); // 重复写去重
+  assert.deepEqual(stored.sort(), ['shell:git push origin main', 'write_file:/a'].sort());
+
+  const set2 = new Set<string>();
+  loadAllowlist(store, set2);
+  assert.equal(set2.size, 2);
+});
+
+test('loadAllowlist：store 抛错时静默（不阻断启动）', () => {
+  const bad: AllowlistStore = {
+    load: () => {
+      throw new Error('disk on fire');
+    },
+    save: () => {},
+  };
+  const set = new Set<string>();
+  assert.doesNotThrow(() => loadAllowlist(bad, set));
+  assert.equal(set.size, 0);
+});
+
+test('decideExecution：持久化键命中 → 敏感命令免问直接放行', async () => {
+  const allowlist = new Set<string>();
+  allowlist.add(persistedKey(mp('run_shell', 'shell'), { command: 'git push origin main' }));
+  const d = await decideExecution(
+    mp('run_shell', 'shell'),
+    { command: 'git push origin main' },
+    execCtx({ allowlist, askUser: async () => false }),
+  );
+  assert.equal(d.allow, true, '持久化白名单命中 → 不再问用户');
+});
+
+test('decideExecution：敏感命令在 bypass 下仍需确认（不被 skip）', async () => {
+  let asks = 0;
+  const d = await decideExecution(
+    mp('run_shell', 'shell'),
+    { command: 'git push' },
+    execCtx({ mode: 'bypass', askUser: async () => (asks++, false) }),
+  );
+  assert.equal(asks, 1, 'bypass 下敏感命令仍触发确认');
+  assert.equal(d.allow, false, '用户拒绝 → 拦截');
+});
+
+test('decideExecution：敏感命令在 auto 下不走分类器，走人工确认', async () => {
+  let classified = 0;
+  let asked = 0;
+  const d = await decideExecution(
+    mp('run_shell', 'shell'),
+    { command: 'git push origin main' },
+    execCtx({
+      mode: 'auto',
+      classify: async () => (classified++, { allow: true, reason: '' }),
+      askUser: async () => (asked++, true),
+    }),
+  );
+  assert.equal(classified, 0, '敏感命令跳过 auto 分类器');
+  assert.equal(asked, 1, '改走人工确认');
+  assert.equal(d.allow, true);
 });
 
 // ── decideExecution：完整裁决链（策略化后 agent 的唯一权限入口）────────

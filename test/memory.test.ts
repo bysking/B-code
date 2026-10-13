@@ -72,3 +72,16 @@ test('英文召回不受影响（回归）', () => {
   const recalled = recallMemories('postgres server', 3, cwd1);
   assert.ok(recalled.includes('postgres db'));
 });
+
+test('噪声过滤：2 字符纯 ASCII 词不参与打分（避免 is/at/ok 刷分）', () => {
+  // 记忆 body 含孤立 "is"（噪声词），查询里 "is" 也不应把它召出来
+  saveMemory('noise probe', 'noise', 'project', 'is', cwd2);
+  const recalled = recallMemories('is', 3, cwd2);
+  assert.equal(recalled, '', '纯噪声词查询不召回任何记忆');
+});
+
+test('噪声过滤不误伤：有信号词时正常召回', () => {
+  saveMemory('deploy target', 'deploy', 'project', 'is prod', cwd2);
+  const recalled = recallMemories('is deploy target', 3, cwd2);
+  assert.ok(recalled.includes('deploy target'), '过滤掉 is 后仍靠 deploy/target 命中');
+});

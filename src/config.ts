@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { basePath } from './utils/paths.js';
 import { log } from './utils/log.js';
+import type { AllowlistStore } from './permissions.js';
 
 /**
  * 全局配置（对齐 Claude Code 的 ~/.claude/settings.json）：
@@ -25,6 +26,10 @@ export interface Settings {
   baseUrl?: string;
   model?: string;
   env?: Record<string, string>;
+  /** 权限：持久化白名单（用户确认"记住不再问"的授权键） */
+  permissions?: { allow?: string[] };
+  /** 生命周期钩子（UserPromptSubmit / PreToolUse / PostToolUse） */
+  hooks?: Record<string, { matcher?: string; command: string; timeoutMs?: number }[]>;
 }
 
 export function settingsPath(): string {
@@ -39,6 +44,46 @@ export function loadSettings(file: string = settingsPath()): Settings {
     return raw && typeof raw === 'object' ? (raw as Settings) : {};
   } catch (err) {
     log.warn(`settings parse failed: ${file}`, (err as Error).message);
+    return {};
+  }
+}
+
+/**
+ * 覆盖写入配置文件（重建目录 + 2 空格缩进）。
+ * 用于持久化白名单等运行时写入；失败抛错，由调用方决定是否静默（缺省 store 静默）。
+ */
+export function saveSettings(settings: Settings, file: string = settingsPath()): void {
+  const dir = dirname(file);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+}
+
+/**
+ * settings.json 支撑的持久化白名单存储（PermissionStore 的默认实现）。
+ * 读取保留其余配置字段；写入只覆盖 permissions.allow，避免抹掉用户的 provider/apiKey 等。
+ */
+export function createSettingsAllowlistStore(file: string = settingsPath()): AllowlistStore {
+  return {
+    load: () => {
+      const s: { permissions?: { allow?: unknown } } & Record<string, unknown> = readJsonObject(file);
+      const allow = s.permissions?.allow;
+      return Array.isArray(allow) ? allow.filter((k): k is string => typeof k === 'string') : [];
+    },
+    save: (keys) => {
+      const s: Record<string, unknown> = readJsonObject(file);
+      s.permissions = { ...(s.permissions as object | undefined), allow: keys };
+      saveSettings(s as Settings, file);
+    },
+  };
+}
+
+/** 读 settings.json 为原始对象（保留未知字段；缺失/损坏 → {}） */
+function readJsonObject(file: string): Record<string, unknown> {
+  if (!existsSync(file)) return {};
+  try {
+    const raw: unknown = JSON.parse(readFileSync(file, 'utf-8'));
+    return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  } catch {
     return {};
   }
 }

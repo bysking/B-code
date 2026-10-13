@@ -1,9 +1,10 @@
 import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import type { Registry, RuntimeContext } from './registry.js';
 import { cacheable, contentHash, filePointer, type FileStore } from './file-store.js';
+import { GitIgnore } from './ignore.js';
 
 /**
  * 内置工具加载器（builtin-loader）：把 6 个核心工具注册进统一注册表。
@@ -14,15 +15,37 @@ import { cacheable, contentHash, filePointer, type FileStore } from './file-stor
 /** 跳过这些目录，避免递归爆炸（node_modules / .git 对模型无意义） */
 const IGNORED_DIRS = new Set(['node_modules', '.git', '.b-code']);
 
-/** glob → RegExp（双星跨目录，单星匹配单段内任意字符） */
+/**
+ * glob → RegExp（单遍编译）。
+ *   单个星号      —— 匹配单段内任意字符（不跨 /）
+ *   星号加斜杠    —— 匹配零个或多个目录段（globstar 语义，根级文件也算命中）
+ *   结尾双星号    —— 跨目录任意
+ *   问号          —— 单个非 / 字符
+ */
 function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // 其他正则元字符转义
-    .replace(/\*\*/g, '@@GLOBSTAR@@')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/@@GLOBSTAR@@/g, '.*');
-  return new RegExp(`^${escaped}$`);
+  const esc = (c: string): string => c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  let out = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === '*') {
+      if (pattern[i + 1] === '*') {
+        i++; // 吃掉第二个 *
+        if (pattern[i + 1] === '/') {
+          i++; // 吃掉 /
+          out += '(?:.*/)?'; // **/ = 零个或多个目录段（含零个 → 匹配根级）
+        } else {
+          out += '.*'; // 末尾 **：跨目录任意
+        }
+      } else {
+        out += '[^/]*'; // 单 * 不跨 /
+      }
+    } else if (c === '?') {
+      out += '[^/]';
+    } else {
+      out += esc(c);
+    }
+  }
+  return new RegExp(`^${out}$`);
 }
 
 /**
@@ -147,22 +170,42 @@ async function editFileTool(
   }
 }
 
+/** 读某目录下的 .gitignore 并入栈（无则不改动）；返回需回退的规则数（离开目录时 pop） */
+function enterDirGitignore(gi: GitIgnore, dir: string, base: string): number {
+  try {
+    return gi.push(relative(base, dir).replace(/\\/g, '/'), readFileSync(join(dir, '.gitignore'), 'utf-8'));
+  } catch {
+    return 0; // 无 .gitignore / 不可读
+  }
+}
+
 async function listFilesTool(input: { pattern?: string; path?: string }): Promise<string> {
   const base = resolve(input.path ?? '.');
   const re = globToRegExp(input.pattern ?? '**/*');
   const found: string[] = [];
+  const gi = new GitIgnore();
 
   const walk = async (dir: string) => {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (IGNORED_DIRS.has(entry.name)) continue;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (found.length < 200) await walk(full);
-      } else if (re.test(relative(base, full))) {
-        found.push(relative(base, full));
-        if (found.length >= 200) return;
+    const rules = enterDirGitignore(gi, dir, base); // 本目录 .gitignore 入栈（作用域 = 整个子树）
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        const full = join(dir, entry.name);
+        const rel = relative(base, full).replace(/\\/g, '/');
+        if (entry.isDirectory()) {
+          if (gi.ignoring(rel, true)) continue; // .gitignore 忽略的目录整棵跳过
+          if (found.length < 200) await walk(full);
+        } else {
+          if (gi.ignoring(rel, false)) continue;
+          if (re.test(rel)) {
+            found.push(rel);
+            if (found.length >= 200) return;
+          }
+        }
       }
+    } finally {
+      gi.pop(rules); // 离开目录：回退规则，兄弟目录互不影响
     }
   };
 
@@ -184,29 +227,38 @@ async function grepSearchTool(input: { pattern: string; path?: string }): Promis
   }
 
   const hits: string[] = [];
+  const gi = new GitIgnore();
   const walk = async (dir: string) => {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (hits.length >= 200) return;
-      if (IGNORED_DIRS.has(entry.name)) continue;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(full);
-        continue;
-      }
-      if (statSync(full).size > 1024 * 1024) continue; // 跳过大文件/二进制
-      try {
-        const text = await readFile(full, 'utf-8');
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length && hits.length < 200; i++) {
-          const line = lines[i];
-          if (line && re.test(line)) {
-            hits.push(`${relative(base, full)}:${i + 1}: ${line.trim().slice(0, 200)}`);
-          }
+    const rules = enterDirGitignore(gi, dir, base);
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (hits.length >= 200) return;
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        const full = join(dir, entry.name);
+        const rel = relative(base, full).replace(/\\/g, '/');
+        if (entry.isDirectory()) {
+          if (gi.ignoring(rel, true)) continue; // .gitignore 忽略的目录整棵跳过
+          await walk(full);
+          continue;
         }
-      } catch {
-        // 二进制或不可读文件，跳过
+        if (gi.ignoring(rel, false)) continue;
+        if (statSync(full).size > 1024 * 1024) continue; // 跳过大文件/二进制
+        try {
+          const text = await readFile(full, 'utf-8');
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length && hits.length < 200; i++) {
+            const line = lines[i];
+            if (line && re.test(line)) {
+              hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 200)}`);
+            }
+          }
+        } catch {
+          // 二进制或不可读文件，跳过
+        }
       }
+    } finally {
+      gi.pop(rules);
     }
   };
 
@@ -424,7 +476,8 @@ export function registerBuiltinTools(registry: Registry): void {
 
   registry.register({
     name: 'list_files',
-    description: "List files matching a glob pattern (e.g. '**/*.ts').",
+    description:
+      "List files matching a glob pattern (e.g. '**/*.ts'). Respects .gitignore and skips node_modules/.git.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -440,7 +493,9 @@ export function registerBuiltinTools(registry: Registry): void {
 
   registry.register({
     name: 'grep_search',
-    description: 'Search for a regex pattern in files. Returns matching lines with paths and line numbers.',
+    description:
+      'Search for a regex pattern in files. Returns matching lines with paths and line numbers. ' +
+      'Respects .gitignore (ignored files/dirs are skipped) and skips node_modules/.git.',
     inputSchema: {
       type: 'object',
       properties: {

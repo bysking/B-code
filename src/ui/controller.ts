@@ -179,12 +179,20 @@ export class AppController {
   outputPanel = false;
   /** 底部固定任务面板：模型返回的一批工具调用；null = 无活动任务 */
   task: TaskPanelState | null = null;
+  /** 模型自管待办清单（todo_write 更新；空数组 = 无） */
+  todos: { content: string; status: 'pending' | 'in_progress' | 'completed' }[] = [];
   /** 文本输入提问（askText）：null = 无 */
   askTextState: { question: string } | null = null;
   /** 当前模式（plan / auto / bypass / default），UI 底部展示 */
   mode: Mode = 'default';
   /** 版本升级提示（启动异步检查填充；null = 无更新/检查中/已最新） */
   updateInfo: { current: string; latest: string } | null = null;
+  /**
+   * /clear 重置计数器：App 用它作 <Static>/<MessageList> 的 React key。
+   * clearAll 后自增 → 整棵消息流 remount，丢弃 <Static> 内部"已打印"索引，
+   * 避免清空瞬间 live 区高度骤变 + 旧内容残留导致的页面跳动。
+   */
+  resetEpoch = 0;
 
   private askTextResolver: ((value: string | null) => void) | null = null;
 
@@ -210,7 +218,7 @@ export class AppController {
     this.bump();
   }
 
-  /** /clear：重置对话与固定输出行 */
+  /** /clear：重置对话与固定输出行（resetEpoch 自增 → 消息流 remount，防跳动） */
   clearAll() {
     this.turns = [];
     this.output = [];
@@ -219,6 +227,8 @@ export class AppController {
     this.busyThinking = false;
     this.busyInputTokens = 0;
     this.task = null;
+    this.todos = [];
+    this.resetEpoch++;
     this.bump();
   }
 
@@ -539,6 +549,12 @@ export class AppController {
   /** Ctrl+O：切换工具输出面板（force 可指定开/关） */
   toggleOutputPanel(force?: boolean) {
     this.outputPanel = force ?? !this.outputPanel;
+    this.bump();
+  }
+
+  /** 设置模型自管待办（Agent.onTodos 接线；UI 底部清单视图） */
+  setTodos(todos: { content: string; status: 'pending' | 'in_progress' | 'completed' }[]) {
+    this.todos = todos;
     this.bump();
   }
 

@@ -4,6 +4,8 @@
 
 在终端里用自然语言下达任务：读代码、改文件、跑命令、写计划，全程可见工具调用与权限审批。
 
+> 版本变更见 [CHANGELOG.md](./CHANGELOG.md)。
+
 ```
 npm i -g @bysking/b-code    # 全局安装
 # 或
@@ -54,6 +56,22 @@ bcode
 | `bcode --auto "指令"`        | Auto 模式：用分类器代替确认框                       |
 | `bcode --goal <条件> "指令"` | Auto 追目标：无人值守循环，直到条件达成             |
 | `bcode --loop <秒> "指令"`   | 定时重投：每隔 N 秒重复执行指令（Ctrl-C 停止）      |
+| `bcode --output-format json "指令"` | headless 输出结构化 JSON（结果/工具/用量），供 CI/脚本消费 |
+
+`--output-format json` 示例输出：
+
+```json
+{
+  "success": true,
+  "session_id": "20260903-101500-ab",
+  "model": "claude-sonnet-4-5-20250929",
+  "instruction": "读取 package.json",
+  "result": "该文件定义了……",
+  "tools": [{ "name": "read_file", "input": { "file_path": "package.json" }, "output": "…" }],
+  "usage": { "input_tokens": 1200, "output_tokens": 340, "calls": 2 },
+  "error": null
+}
+```
 
 退出时会打印恢复命令，例如：
 
@@ -66,12 +84,18 @@ bcode
 
 TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、权限确认、斜杠菜单均为声明式 UI。
 
-**斜杠命令（输入 `/` 可唤起补全菜单）：**
+**斜杠命令（输入 `/` 可唤起补全菜单，菜单超长时随选中项滚动）：**
 
 
 | 命令               | 说明                                         |
 | -------------------- | ---------------------------------------------- |
 | `/clear`           | 清空当前对话历史（并重置"本轮自动审批"标记） |
+| `/help`            | 显示命令与快捷键帮助                         |
+| `/cost`            | 本次会话 token 用量与估算成本                |
+| `/model [名字]`    | 查看 / 运行时切换模型                        |
+| `/compact`         | 立即压缩上下文（摘要旧消息）                 |
+| `/rewind`          | 回退本次会话已改动的文件（检查点还原）       |
+| `/todos`           | 查看模型自管的任务清单                       |
 | `/plan`            | 切换 Plan（只读）模式                        |
 | `/yolo`            | 切换 Bypass 模式                             |
 | `/auto`            | 切换 Auto 模式（分类器管控写/shell）         |
@@ -106,9 +130,17 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 以下危险命令直接 deny（连 `--yolo` 也绕不过）：
 
 ```
-rm -rf / git push / git reset --hard / sudo / mkfs
-> /dev/ 设备写入 / dd / kill / reboot / shutdown
+rm -rf / git reset --hard / sudo / mkfs
+> /dev/ 设备写入 / dd（命令名）/ kill（命令名）/ reboot / shutdown
 ```
+
+> `kill`/`dd` 等短词按**命令边界**匹配（命令串开头或 `;` `&` `|` 之后），
+> 因此 `npm run kill-port`、`git add .`、`ls dd-utils` 这类合法命令不会被误杀。
+
+**敏感命令**（如 `git push`）默认需确认，但可授权后**持久化免问**：在确认框选择
+批准（Yes / 本轮会话自动审批通过）后，该次授权写入 `{B_CODE_HOME}/settings.json` 的
+`permissions.allow`，下次启动依然生效（无需重复批准）。持久化键按语义取值——
+shell 按命令整串、文件类按 `工具:路径`（不按内容），避免"一次批准 = 永久放行整个工具"。
 
 ## 技能（Skills）
 
@@ -188,6 +220,49 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 
 `mode: "read"` 声明该 server 所有工具按只读放行（免确认）；缺省 fail-closed → 需要确认。
 
+**资源（resources）**：server 若声明 `resources` 能力并返回资源列表，b-code 会把它们聚合为一个只读工具
+`mcp__<server>__read_resource`（参数 `uri`），模型可按 URI 读取 `resources/read` 的内容；
+不支持资源的 server 自动跳过，不影响工具发现。
+
+## 任务清单（TodoWrite）
+
+模型可调用 `todo_write` 工具维护一份**结构化任务清单**（`pending` / `in_progress` / `completed`），
+多步任务里据此自我跟踪进度；底部固定面板展示清单与完成度（如 `任务清单 2/5`），跨会话存续。
+
+- 存储：`{B_CODE_HOME}/projects/{sha256(cwd)前16}/todo.json`（按项目隔离）
+- 查看：`/todos`；该工具只写自身数据目录，**免权限确认**
+
+> 与工具调用面板（"正在跑什么"）不同，这份清单描述**"要做什么、做到哪了"**。
+
+## 回退（/rewind）
+
+`write_file` / `edit_file` 执行前会自动记录文件前像（检查点），`/rewind` 按逆序还原，
+把工程恢复到本次会话改动前（新建的文件会被删除）。回退是**破坏性操作**，会先经确认框确认。
+
+## 生命周期钩子（Hooks）
+
+在 `settings.json` 的 `hooks` 字段配置外部命令，在关键节点自动执行（协议对齐 Claude Code）：
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "command": "node ./hooks/lint-prompt.mjs" }],
+    "PreToolUse": [{ "matcher": "^write_|^edit_", "command": "node ./hooks/guard.mjs", "timeoutMs": 10000 }],
+    "PostToolUse": [{ "matcher": "^run_shell$", "command": "node ./hooks/notify.mjs" }]
+  }
+}
+```
+
+| 事件 | 时机 | 可否拦截 |
+|------|------|----------|
+| `UserPromptSubmit` | 用户提交、发给模型之前 | ⚠️ 退出码 2 → 原因作为 `[hook notice]` 追加进 prompt |
+| `PreToolUse` | 工具执行前（权限通过后） | ✅ 退出码 2 或 stdout 输出 `{"decision":"block","reason":"…"}` → 拦截 |
+| `PostToolUse` | 工具执行后 | – stdout 作为 `[PostToolUse hook]` 追加到结果 |
+
+- 事件 JSON 经 **stdin** 传入，`hook_event_name` 区分事件；环境变量 `B_CODE_HOOK_EVENT` 同样可用
+- `matcher` 为工具名正则（仅 Pre/PostToolUse 有意义；缺省匹配全部）
+- 命令超时（缺省 60s）、异常、非 2 非 0 退出码一律 **fail-open**（不阻断主流程）
+
 ## 配置
 
 ### settings.json
@@ -204,6 +279,8 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 | `baseUrl`  | 对应 provider 的端点（支持 OpenAI 兼容端点）            |
 | `model`    | 覆盖默认模型名（等价`B_CODE_MODEL`）                    |
 | `env`      | `{ KEY: value }` 注入环境变量                           |
+| `permissions` | `{ "allow": ["…"] }` 持久化白名单（授权"记住不再问"后自动写入） |
+| `hooks`    | 生命周期钩子（见「生命周期钩子」章节）                  |
 
 ### 环境变量
 
@@ -232,9 +309,10 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 {B_CODE_HOME}/
 ├── sessions/     # 会话持久化
 ├── logs/         # 调试日志
-├── projects/     # 跨项目记忆（按项目哈希隔离）
+├── projects/     # 跨项目记忆 + 任务清单（按项目哈希隔离）
 ├── skills/       # 用户级技能
 ├── plans/        # Plan 文件
+├── settings.json # 全局配置（含持久化白名单 / hooks）
 ├── session.json  # 最近一次会话
 └── mcp.json      # 用户级 MCP 配置
 ```

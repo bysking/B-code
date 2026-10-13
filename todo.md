@@ -37,11 +37,11 @@ BadRequestError: 400 {"error":{"message":"unexpected `messages.1.content.0: tool
 8. 执行子agent的时候，允许切换到子agent查看日志，同时也能切换回主agent，同时在多工具调用场景或者多任务执行场景，支持键盘上下选中某一个，然后回车后切换到对应任务查看日志输出
 9. OK 当前bcode工具，在和用户交互过程中，如果日志一边输出到终端，会自动滚动到最新日志，位于最底部，但是如果用户反向滚
    动想查看历史消息，就会突然跳到最顶部，滚动条看起来位置被重置了一样，请修复
-10. 优化技能目录查找，支持扁平和目录方式
+10. ok 优化技能目录查找，支持扁平和目录方式
 11. OK 用户点击 esc 需要停止模型循环，等待用户输入，然后将用户输入作为一个高优先级任务（硬中断：abort 在飞模型请求 + 终止 shell 子进程）
 12. `bcode "读取 package.json"` 一次性处理模式，需要等待结果返回后才能关闭
-13. bcode 在输入位置，用户需要支持能键盘左右切换鼠标光标然后输入,现在移动光标后继续输入，会自动跳到最后的位置
-14. /clear之后，输入内容，页面会跳动
-15. markdown渲染要支持 甘特图（Gantt），通常配合 Mermaid 语法 支持 【todo】
-16.要支持hooks 【todo 重要不紧急】
+13. ok bcode 在输入位置，用户需要支持能键盘左右切换鼠标光标然后输入,现在移动光标后继续输入，会自动跳到最后的位置
+14. ok /clear之后，输入内容，页面会跳动（clearAll 自增 resetEpoch → MessageList remount）
+15. markdown渲染要支持 Mermaid 语法 【todo】
+16. ok 要支持hooks（UserPromptSubmit / PreToolUse / PostToolUse，settings.json hooks 配置）
 17. 文件写入权限被拦截的情况下，会无限等待(thinking) todo

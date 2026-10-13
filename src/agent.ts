@@ -5,6 +5,8 @@ import { callModel, defaultModel, estimateTokens, type ModelInput, type ModelOut
 import type { ClipboardImage } from './utils/clipboard.js';
 import { registerBuiltinTools } from './tools.js';
 import { registerPlanTools } from './plan.js';
+import { registerTodoTool, loadTodos, type TodoItem } from './todo.js';
+import { CheckpointStore, withCheckpoints } from './checkpoint.js';
 import { runSubAgent } from './subagent.js';
 import { FileStore } from './file-store.js';
 import { loadMcpServers } from './mcp.js';
@@ -18,10 +20,19 @@ import {
   contextTokenBudget,
 } from './context.js';
 import { classifyAction, evaluateGoal, renderTranscript } from './autonomy.js';
-import { allowlistKey, decideExecution, type Mode } from './permissions.js';
+import {
+  allowlistKey,
+  decideExecution,
+  loadAllowlist,
+  persistAllowlist,
+  persistedKey,
+  type AllowlistStore,
+  type Mode,
+} from './permissions.js';
 import { recallMemories, registerMemoryTool } from './memory.js';
 import { registerAskUserTool } from './ask-user.js';
 import { buildSkillDescriptions } from './skills.js';
+import { runHooks, type HooksConfig } from './hooks.js';
 import { Spinner, type SpinnerLike } from './ui.js';
 import { dirs } from './utils/paths.js';
 import { log } from './utils/log.js';
@@ -108,12 +119,19 @@ export interface AgentOptions {
   ) => Promise<string>;
   /** 初始模式：default / plan（只读）/ bypass（--yolo）/ auto */
   mode?: Mode;
+  /** 持久化白名单存储（可选）：注入则"记住不再问"跨会话生效；缺省不持久化 */
+  allowlistStore?: AllowlistStore;
+  /** 结构化待办变更回调（UI 更新任务清单视图） */
+  onTodos?: (todos: TodoItem[]) => void;
+  /** Hooks 配置（UserPromptSubmit / PreToolUse / PostToolUse）；缺省无 hook */
+  hooks?: HooksConfig;
 }
 
 export class Agent {
   /** 整个对话的唯一状态：消息数组 */
   private messages: MessageParam[] = [];
-  public readonly model = defaultModel();
+  /** 当前模型（/model 可在运行时切换） */
+  public model = defaultModel();
   /** 模式状态机：default / plan（只读）/ bypass（--yolo） */
   public mode: Mode = 'default';
   private readonly call: (input: ModelInput) => Promise<ModelOutput>;
@@ -123,6 +141,18 @@ export class Agent {
   private readonly events?: (ev: AgentEvent) => void;
   /** 会话级白名单：确认过一次的 shell:<command> / 工具名不再问 */
   private readonly allowlist = new Set<string>();
+  /** 持久化白名单存储（可选注入）：CLI 传 settings.json 实现；缺省 null = 不持久化（测试/内嵌安全） */
+  private readonly allowlistStore?: AllowlistStore;
+  /** 结构化待办（模型自管；启动从项目目录载入，todo_write 更新） */
+  private todos: TodoItem[] = [];
+  /** 累积 token 用量（跨轮次，供 /cost 展示；usage 事件各轮独立，这里求和） */
+  private totalUsage = { input_tokens: 0, output_tokens: 0 };
+  /** 模型调用次数（/cost 展示，估算成本用） */
+  private modelCallCount = 0;
+  /** Hooks 配置（生命周期钩子；缺省空 = 无 hook） */
+  private readonly hooks: HooksConfig;
+  /** 文件检查点（/rewind 回退 write/edit 前的文件内容） */
+  private readonly checkpoints = new CheckpointStore();
   /** 统一注册表（P5 核心）：内置/子Agent/Plan/MCP 全挂这里，循环只认 resolve */
   public readonly registry = new Registry();
   private readonly ctx: RuntimeContext;
@@ -135,6 +165,13 @@ export class Agent {
     this.askUser = opts.askUser ?? (async () => false);
     this.events = opts.events;
     this.mode = opts.mode ?? 'default';
+    this.allowlistStore = opts.allowlistStore;
+    this.hooks = opts.hooks ?? {};
+
+    // 载入持久化白名单（settings.json permissions.allow）→ 上次"记住不再问"的授权本次生效
+    if (this.allowlistStore) loadAllowlist(this.allowlistStore, this.allowlist);
+    // 载入本项目待办清单（跨会话存续）
+    this.todos = loadTodos();
 
     // 能力挂载：内置工具 → Plan 工具 → agent(子 Agent) 工具
     this.ctx = {
@@ -154,6 +191,14 @@ export class Agent {
     registerBuiltinTools(this.registry);
     registerAskUserTool(this.registry);
     registerMemoryTool(this.registry);
+    // 文件检查点接线：write_file / edit_file 执行前记录前像（/rewind 用）
+    withCheckpoints(this.registry, this.checkpoints);
+    registerTodoTool(this.registry, {
+      onTodos: (todos) => {
+        this.todos = todos;
+        opts.onTodos?.(todos);
+      },
+    });
     registerPlanTools(this.registry, {
       plansDir: dirs.plansDir(),
       // review_plan 派独立对抗性审查子 Agent：绑定本会话的 registry + ctx（handler 拿不到 registry）
@@ -183,6 +228,20 @@ export class Agent {
 
   setMode(mode: Mode): void {
     this.mode = mode;
+  }
+
+  /** 运行时切换模型（/model）；同步 ctx.model，子 Agent 等共享方一并生效 */
+  setModel(model: string): void {
+    if (!model.trim()) return;
+    this.model = model.trim();
+    this.ctx.model = this.model;
+  }
+
+  /** 立即压缩上下文（/compact）：把旧消息摘要替换，保留最近若干条；返回是否发生压缩 */
+  async compactNow(): Promise<boolean> {
+    const before = this.messages.length;
+    this.messages = await this.compactIfNeeded();
+    return this.messages.length < before;
   }
 
   // ── 用户中断（Esc）──────────────────────────────────────
@@ -259,6 +318,26 @@ export class Agent {
     return this.messages;
   }
 
+  /** 累积 token 用量 + 调用次数（/cost 展示） */
+  usageTotals(): { input_tokens: number; output_tokens: number; calls: number } {
+    return { ...this.totalUsage, calls: this.modelCallCount };
+  }
+
+  /** 当前待办清单（只读快照；UI / /todos 展示） */
+  todoList(): TodoItem[] {
+    return this.todos;
+  }
+
+  /** 已记录的文件检查点数（/rewind 前可判断有无可回退内容） */
+  checkpointCount(): number {
+    return this.checkpoints.size();
+  }
+
+  /** 回退本次会话已改动的文件（/rewind）：逆序还原到改动前，返回结果供展示 */
+  rewind(): { restored: string[]; deleted: string[] } {
+    return this.checkpoints.rewind();
+  }
+
   /** 恢复历史（--resume 用；调用方负责校验是可序列化的合法消息） */
   loadHistory(messages: MessageParam[]): void {
     this.messages = messages;
@@ -276,8 +355,22 @@ export class Agent {
     this.ctx.signal = this.abortController.signal;
 
     // 构建消息内容：纯文本 → content 字符串；带图片 → content 数组（text + image blocks）
-    const text = typeof userText === 'string' ? userText : userText.text;
+    let text = typeof userText === 'string' ? userText : userText.text;
     const images = typeof userText === 'object' ? userText.images : undefined;
+
+    // UserPromptSubmit hook：发给模型之前。拦截（exit 2）时把原因追加进 prompt，让模型知情；
+    // 放行时 stdout 作为附加上下文一并注入。
+    if (this.hooks.UserPromptSubmit?.length) {
+      const outcome = await runHooks(this.hooks, 'UserPromptSubmit', {
+        cwd: process.cwd(),
+        prompt: text,
+      });
+      if (outcome.blocked) {
+        text = `${text}\n\n[hook notice: ${outcome.reason}]`;
+      } else if (outcome.stdout) {
+        text = `${text}\n\n[hook context]\n${outcome.stdout}`;
+      }
+    }
     if (images && images.length > 0) {
       const content: ContentBlockParam[] = [
         { type: 'text', text },
@@ -357,6 +450,10 @@ export class Agent {
       if (reply.usage) {
         this.events?.({ type: 'usage', usage: reply.usage });
         this.events?.({ type: 'busy_tokens', input_tokens: reply.usage.input_tokens });
+        // 累积会话总量（/cost 展示）；usage 事件各轮独立，这里求和
+        this.totalUsage.input_tokens += reply.usage.input_tokens;
+        this.totalUsage.output_tokens += reply.usage.output_tokens;
+        this.modelCallCount++;
       }
       // 模型纯工具调用（无文本）时 onText 不触发，这里统一停表
       this.spinner.stop();
@@ -424,8 +521,26 @@ export class Agent {
           outputById.set(tu.id, decision.reason ?? 'Denied');
           return;
         }
-        // 确认通过 → 记入会话白名单，同操作不再问
-        if (decision.remember) this.allowlist.add(allowlistKey(mp, input));
+        // 确认通过 → 记入会话白名单（本次立即免问）+ 持久化白名单（下次启动仍免问）
+        if (decision.remember) {
+          this.allowlist.add(allowlistKey(mp, input));
+          if (this.allowlistStore) {
+            persistAllowlist(this.allowlistStore, persistedKey(mp, input));
+          }
+        }
+        // PreToolUse hook：权限通过后、执行前最后一道闸（可拦截）。拦截则结果回给模型。
+        if (this.hooks.PreToolUse?.length) {
+          const outcome = await runHooks(
+            this.hooks,
+            'PreToolUse',
+            { cwd: process.cwd(), tool_name: mp.name, tool_input: input },
+            mp.name,
+          );
+          if (outcome.blocked) {
+            outputById.set(tu.id, `Blocked by PreToolUse hook: ${outcome.reason}`);
+            return;
+          }
+        }
         outputById.set(tu.id, await this.execTool(tu.id, mp, input));
       };
 
@@ -461,24 +576,36 @@ export class Agent {
     // 实时日志接线：长任务（run_shell 等）逐行转发到 print（"⤷" 前缀，与工具提示同通道）
     const prevOnToolOutput = this.ctx.onToolOutput;
     this.ctx.onToolOutput = (line: string) => this.print(`  ⤷ ${line}`);
-    let output: string | undefined;
+    let output: string;
     try {
       const raw = await mp.handler(input, this.ctx);
       // 空输出统一标记：模型看到 "(empty output)" 知道工具执行完毕、只是没产出，
       // 不会误判为"没执行/还在跑"而重复调用
       output = raw == null || String(raw).trim() === '' ? '(empty output)' : String(raw);
-      return truncateResult(output);
     } catch (err) {
       // handler 抛错（如 MCP server 掉线）不炸循环：转为结果喂回模型
       output = `Error: ${mp.name} failed: ${(err as Error).message}`;
-      return output;
     } finally {
       this.ctx.onToolOutput = prevOnToolOutput;
       this.activeTools--;
       if (this.activeTools === 0) this.spinner.stop();
-      // output 随事件透传给 UI（Ctrl+O 面板可回看）
-      this.events?.({ type: 'tool_end', id, name: mp.name, output });
     }
+
+    // PostToolUse hook：工具执行后。stdout 作为附加上下文追加到工具结果（不拦截，仅增强）。
+    if (this.hooks.PostToolUse?.length) {
+      const outcome = await runHooks(
+        this.hooks,
+        'PostToolUse',
+        { cwd: process.cwd(), tool_name: mp.name, tool_input: input, tool_output: output },
+        mp.name,
+      );
+      if (outcome.stdout) output = `${output}\n\n[PostToolUse hook]\n${outcome.stdout}`;
+    }
+
+    // output 随事件透传给 UI（Ctrl+O 面板可回看）；返回给模型的是截断后的结果
+    const truncated = truncateResult(output);
+    this.events?.({ type: 'tool_end', id, name: mp.name, output: truncated });
+    return truncated;
   }
 
   /** 上下文压缩（Tier 4 摘要）：超阈值把旧消息摘要替换，保留最近 KEEP_RECENT 条。

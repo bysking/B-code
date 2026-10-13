@@ -194,11 +194,32 @@ test('渲染：斜杠菜单打开显示候选', async () => {
     ...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS,
     { name: 'commit', description: 'git commit' },
   ]);
-  ctrl.openSlash(''); // 空查询：显示全量候选
+  // 空查询候选超过可视上限，菜单滚动显示；用查询把内置命令与技能都收进窗口
+  ctrl.openSlash('c');
   await wait(30);
   const out = frame.lastFrame() ?? '';
   assert.ok(out.includes('commit'), '斜杠菜单含技能');
   assert.ok(out.includes('/clear'), '斜杠菜单含内置命令');
+  frame.cleanup();
+});
+
+test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async () => {
+  const ctrl = new AppController();
+  const frame = renderApp(ctrl);
+  ctrl.setSlashItems([
+    ...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS,
+    { name: 'zzz-last', description: '最后一项' },
+  ]);
+  ctrl.openSlash('');
+  await wait(30);
+  let out = frame.lastFrame() ?? '';
+  assert.ok(!out.includes('zzz-last'), '初始窗口看不到最后一项');
+  assert.match(out, /\/\d+（↑↓ 滚动）/, '显示滚动位置提示');
+  // 按 ↑（到末尾）后最后一项滚入窗口
+  frame.stdin.write('\x1b[A');
+  await wait(30);
+  out = frame.lastFrame() ?? '';
+  assert.ok(out.includes('zzz-last'), '滚动后选中项可见');
   frame.cleanup();
 });
 

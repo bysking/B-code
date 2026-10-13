@@ -163,6 +163,29 @@ test('list_files 单段 * 不跨目录，双段 ** 跨目录', async () => {
   assert.ok(all.split('\n').includes('sub/b.ts'));
 });
 
+test('globstar **/ 匹配零个目录段：**/*.ts 命中根级文件（回归）', async () => {
+  const g = await isolatedRoot();
+  try {
+    await writeFile(join(g, 'root.ts'), 'x\n');
+    await mkdir(join(g, 'sub'));
+    await mkdir(join(g, 'sub', 'deep'));
+    await writeFile(join(g, 'sub', 'nested.ts'), 'x\n');
+    await writeFile(join(g, 'sub', 'deep', 'x.ts'), 'x\n');
+
+    const lines = (await run('list_files', { pattern: '**/*.ts', path: g })).split('\n').sort();
+    assert.deepEqual(
+      lines,
+      ['root.ts', 'sub/deep/x.ts', 'sub/nested.ts'],
+      '**/*.ts 应同时命中根级与任意深度（此前漏掉根级）',
+    );
+    // 单段 * 仍只匹配根级，不跨目录
+    const single = (await run('list_files', { pattern: '*.ts', path: g })).split('\n').sort();
+    assert.deepEqual(single, ['root.ts']);
+  } finally {
+    await rm(g, { recursive: true, force: true });
+  }
+});
+
 test('grep_search 返回 path:行号:内容 且命中正确行', async () => {
   const out = await run('grep_search', { pattern: 'value = 0', path: dir });
   assert.ok(out.startsWith('a.txt:2:'), `实际输出：${out}`);
@@ -172,6 +195,87 @@ test('grep_search 返回 path:行号:内容 且命中正确行', async () => {
 test('grep_search 非法正则 → 报错而非崩溃', async () => {
   const out = await run('grep_search', { pattern: '([', path: dir });
   assert.ok(out.startsWith('Error'));
+});
+
+// ── .gitignore 尊重（grep_search / list_files）────────────────────
+// 各自独立临时目录：避免污染共享 dir（其上有 exact-match 断言，跨测试顺序脆弱）
+
+/** 建一个隔离临时目录并写入文件树（返回根路径，由 after 递归清理） */
+async function isolatedRoot(): Promise<string> {
+  return mkdtemp(join(tmpdir(), 'b-code-gi-'));
+}
+
+test('grep_search 尊重 .gitignore：忽略目录/文件不被搜索', async () => {
+  const g = await isolatedRoot();
+  try {
+    await writeFile(join(g, '.gitignore'), 'dist/\n*.secret\n');
+    await mkdir(join(g, 'dist'));
+    await writeFile(join(g, 'dist', 'bundle.ts'), 'TARGET_SYMBOL\n');
+    await writeFile(join(g, 'kept.ts'), 'TARGET_SYMBOL\n');
+    await writeFile(join(g, 'x.secret'), 'TARGET_SYMBOL\n');
+
+    const out = await run('grep_search', { pattern: 'TARGET_SYMBOL', path: g });
+    assert.ok(out.includes('kept.ts'), `应搜到未被忽略的文件：${out}`);
+    assert.ok(!out.includes('bundle.ts'), 'dist/ 被忽略，不应搜到');
+    assert.ok(!out.includes('.secret'), '*.secret 被忽略，不应搜到');
+  } finally {
+    await rm(g, { recursive: true, force: true });
+  }
+});
+
+test('list_files 尊重 .gitignore：忽略目录不出现在列表', async () => {
+  const g = await isolatedRoot();
+  try {
+    await writeFile(join(g, '.gitignore'), 'coverage/\n');
+    await mkdir(join(g, 'coverage'));
+    await writeFile(join(g, 'coverage', 'report.ts'), 'x\n');
+    await writeFile(join(g, 'app.ts'), 'x\n');
+
+    const out = await run('list_files', { pattern: '**/*.ts', path: g });
+    const lines = out.split('\n');
+    assert.ok(lines.includes('app.ts'), `应列出未忽略文件：${out}`);
+    assert.ok(!lines.includes('coverage/report.ts'), '被忽略的目录不出现在列表');
+  } finally {
+    await rm(g, { recursive: true, force: true });
+  }
+});
+
+test('.gitignore 取反规则：!keep.gen.ts 从 *.gen.ts 中恢复', async () => {
+  const g = await isolatedRoot();
+  try {
+    await writeFile(join(g, '.gitignore'), '*.gen.ts\n!keep.gen.ts\n');
+    await writeFile(join(g, 'drop.gen.ts'), 'x\n');
+    await writeFile(join(g, 'keep.gen.ts'), 'x\n');
+
+    const out = await run('list_files', { pattern: '**/*.ts', path: g });
+    const lines = out.split('\n');
+    assert.ok(lines.includes('keep.gen.ts'), '取反规则恢复的文件应列出');
+    assert.ok(!lines.includes('drop.gen.ts'), '被忽略的文件不应列出');
+  } finally {
+    await rm(g, { recursive: true, force: true });
+  }
+});
+
+test('子目录 .gitignore 仅在其子树生效（不外溢到根/兄弟目录）', async () => {
+  const g = await isolatedRoot();
+  try {
+    await mkdir(join(g, 'sub'));
+    await mkdir(join(g, 'other'));
+    await mkdir(join(g, 'root'));
+    // sub 内规则忽略同名 shared.ts —— 若作用域外溢，根/兄弟目录的 shared.ts 会被误伤
+    await writeFile(join(g, 'sub', '.gitignore'), 'shared.ts\n');
+    await writeFile(join(g, 'sub', 'shared.ts'), 'x\n');
+    await writeFile(join(g, 'root', 'shared.ts'), 'x\n');
+    await writeFile(join(g, 'other', 'shared.ts'), 'x\n');
+
+    const out = await run('list_files', { pattern: '**/*.ts', path: g });
+    const lines = out.split('\n');
+    assert.ok(!lines.includes('sub/shared.ts'), 'sub 内规则忽略 sub/shared.ts');
+    assert.ok(lines.includes('root/shared.ts'), '根目录下的 shared.ts 不受 sub 规则影响');
+    assert.ok(lines.includes('other/shared.ts'), '兄弟目录 other/shared.ts 不受影响');
+  } finally {
+    await rm(g, { recursive: true, force: true });
+  }
 });
 
 test('run_shell 执行并捕获输出', async () => {

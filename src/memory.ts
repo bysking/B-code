@@ -109,9 +109,10 @@ export function recallMemories(query: string, limit = 3, cwd: string = process.c
   if (!existsSync(dir)) return '';
 
   const queryTokens = tokenize(query.toLowerCase());
-  // 大幅过滤：只留查询中有信息量的词（少于 2 个体征就放弃，避免匹配噪声）
-  const sig = [...queryTokens].filter((t) => !(t.length === 2 && t !== '' && /[a-z]/.test(t.charAt(0))));
-  if (sig.length === 0 && !queryTokens.size) return '';
+  // 噪声过滤：丢掉 2 字符的纯 ASCII 词（is/at/ok…），它们命中率高但信息量低。
+  // 过滤后的 sig 才是实际打分集——若直接用 queryTokens，噪声词会给每条记忆刷分。
+  const sig = [...queryTokens].filter((t) => !(t.length === 2 && /^[a-z]/.test(t)));
+  if (sig.length === 0) return ''; // 无可打分信号 → 不召回（避免噪声匹配）
 
   const scored: { text: string; score: number }[] = [];
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.md'))) {
@@ -120,7 +121,7 @@ export function recallMemories(query: string, limit = 3, cwd: string = process.c
     const words = tokenize(searchText);
 
     let score = 0;
-    for (const t of queryTokens) if (words.has(t)) score++;
+    for (const t of sig) if (words.has(t)) score++;
     if (score > 0) scored.push({ text: `- ${meta.name ?? file}: ${body.slice(0, 300)}`, score });
   }
 

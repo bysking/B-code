@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { SlashItem } from './controller.js';
-import { clampIndex, filterSlash } from './slash.js';
+import { clampIndex, filterSlash, slashWindow } from './slash.js';
+
+/** 菜单最多展示的候选项数（超出滚动；撑超终端行数会触发 Ink 整屏清屏） */
+const MAX_VISIBLE = 12;
 
 /**
  * / 斜杠快捷键提示菜单：输入以 / 开头时弹出，↑↓ 选择，Enter 执行，
@@ -46,10 +49,13 @@ export function SlashMenu({
     );
   }
 
+  const activeIdx = clampIndex(idx, filtered.length);
+  const [start, end] = slashWindow(activeIdx, filtered.length, MAX_VISIBLE);
+
   return (
     <Box flexDirection="column" marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1}>
-      {filtered.slice(0, 12).map((item, i) => {
-        const active = i === clampIndex(idx, filtered.length);
+      {filtered.slice(start, end).map((item, i) => {
+        const active = start + i === activeIdx;
         return (
           <Text key={item.name} color={active ? 'cyan' : undefined} bold={active}>
             {active ? '❯ ' : '  '}/{item.name}
@@ -57,6 +63,11 @@ export function SlashMenu({
           </Text>
         );
       })}
+      {end - start < filtered.length ? (
+        <Text dimColor>
+          … {activeIdx + 1}/{filtered.length}（↑↓ 滚动）
+        </Text>
+      ) : null}
     </Box>
   );
 }

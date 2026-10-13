@@ -20,9 +20,19 @@ export interface McpToolInfo {
   inputSchema: Record<string, unknown>;
 }
 
+/** MCP 资源（resources/list）：以只读工具形态暴露给模型 */
+export interface McpResourceInfo {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
 export interface McpConnection {
   tools: McpToolInfo[];
+  resources: McpResourceInfo[];
   callTool(name: string, args: Record<string, unknown>): Promise<string>;
+  readResource(uri: string): Promise<string>;
   close(): void;
 }
 
@@ -128,7 +138,7 @@ export async function connectMcp(
 
   await request('initialize', {
     protocolVersion: PROTOCOL_VERSION,
-    capabilities: {},
+    capabilities: { resources: {} },
     clientInfo: { name: 'b-code', version: '0.1.0' },
   });
   proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
@@ -140,14 +150,39 @@ export async function connectMcp(
     inputSchema: t.inputSchema ?? { type: 'object', properties: {} },
   }));
 
+  // resources/list 为可选能力：server 未声明/报错时优雅降级为空（不阻断 tools）
+  let resources: McpResourceInfo[] = [];
+  try {
+    const res = await request('resources/list');
+    resources = (res.result?.resources ?? [])
+      .filter((r: any) => r && typeof r.uri === 'string')
+      .map((r: any) => ({
+        uri: r.uri,
+        name: typeof r.name === 'string' && r.name ? r.name : r.uri,
+        description: r.description,
+        mimeType: r.mimeType,
+      }));
+  } catch {
+    resources = []; // 该 server 不支持资源
+  }
+
   const conn: McpConnection = {
     tools,
+    resources,
     async callTool(name, callArgs) {
       const resp = await request('tools/call', { name, arguments: callArgs });
       // MCP 返回 content 块数组；取文本，纯结构化内容 JSON 兜底
       const content = resp.result?.content;
       if (Array.isArray(content)) {
         return content.map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c))).join('\n');
+      }
+      return JSON.stringify(resp.result);
+    },
+    async readResource(uri) {
+      const resp = await request('resources/read', { uri });
+      const contents = resp.result?.contents;
+      if (Array.isArray(contents)) {
+        return contents.map((c: any) => (typeof c.text === 'string' ? c.text : JSON.stringify(c))).join('\n');
       }
       return JSON.stringify(resp.result);
     },
@@ -190,6 +225,29 @@ export async function loadMcpServers(registry: Registry, cwd = process.cwd()): P
           });
         }
         log.info(`mcp connected: ${serverName} (${conn.tools.length} tools)`);
+
+        // 资源以只读工具暴露（mcp__<server>__read_resource）：uri 作为参数，
+        // 模型按需读取 server 提供的文件/数据（resources/read）。
+        if (conn.resources.length > 0) {
+          const catalog = conn.resources
+            .map((r) => `- ${r.uri}${r.description ? ` — ${r.description}` : ''}`)
+            .join('\n');
+          registry.register({
+            name: `mcp__${serverName}__read_resource`,
+            description: `[MCP:${serverName}] Read a resource by URI. Available resources:\n${catalog}`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                uri: { type: 'string', description: 'Resource URI to read' },
+              },
+              required: ['uri'],
+            },
+            kind: 'mcp',
+            mode: 'read', // 只读：plan 模式放行、免确认
+            handler: async (input) => conn.readResource(String(input.uri ?? '')),
+          });
+          log.info(`mcp resources: ${serverName} (${conn.resources.length} resources)`);
+        }
       } catch (err) {
         log.warn(`mcp server failed to connect: ${serverName}`, (err as Error).message);
       }

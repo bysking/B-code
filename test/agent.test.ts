@@ -194,6 +194,117 @@ test('权限 confirm：用户拒绝 → user rejected 喂回，工具不执行',
   await assert.rejects(() => access(join(dir, 'nope.txt')), /ENOENT/, '文件不应被创建');
 });
 
+test('持久化白名单：授权写回 store，下次启动免问（跨会话记忆）', async () => {
+  const target = join(dir, 'persist.txt');
+  const stored: string[] = [];
+  const store = {
+    load: () => [...stored],
+    save: (keys: string[]) => {
+      stored.length = 0;
+      stored.push(...keys);
+    },
+  };
+
+  // 第一次会话：写入需确认，用户同意 → 持久化键落 store
+  const first = makeToolScriptedBackend([
+    { tools: [{ name: 'write_file', input: { file_path: target, content: 'v1' } }] },
+    { text: 'done' },
+  ]);
+  let asks1 = 0;
+  const agent1 = new Agent({
+    callModel: first.fn,
+    print: () => {},
+    allowlistStore: store,
+    askUser: async () => {
+      asks1++;
+      return true;
+    },
+  });
+  await agent1.chat('write');
+  assert.equal(asks1, 1);
+  assert.ok(stored.length >= 1, '授权已持久化');
+
+  // 第二次会话：同一调用命中持久化键 → 不再询问
+  const second = makeToolScriptedBackend([
+    { tools: [{ name: 'write_file', input: { file_path: target, content: 'v2' } }] },
+    { text: 'done' },
+  ]);
+  let asks2 = 0;
+  const agent2 = new Agent({
+    callModel: second.fn,
+    print: () => {},
+    allowlistStore: store, // 复用同一存储 = 模拟同一 settings.json
+    askUser: async () => {
+      asks2++;
+      return true;
+    },
+  });
+  await agent2.chat('write again');
+  assert.equal(asks2, 0, '持久化白名单命中 → 第二次会话不再询问');
+});
+
+test('无 store 时不持久化：仅会话内白名单（测试/内嵌安全）', async () => {
+  const target = join(dir, 'nostore.txt');
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: 'write_file', input: { file_path: target, content: 'a' } }] },
+    { tools: [{ name: 'write_file', input: { file_path: target, content: 'b' } }] },
+    { text: 'done' },
+  ]);
+  let asks = 0;
+  const agent = new Agent({
+    callModel: fn,
+    print: () => {},
+    askUser: async () => {
+      asks++;
+      return true;
+    },
+  });
+  await agent.chat('write twice');
+  assert.equal(asks, 1, '会话内白名单仍生效（第二次免问）');
+});
+
+test('Hooks：PreToolUse 拦截 → 工具不执行，结果回给模型', async () => {
+  const target = join(dir, 'hook-blocked.txt');
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: 'write_file', input: { file_path: target, content: 'x' } }] },
+    { text: 'ok' },
+  ]);
+  const agent = new Agent({
+    callModel: fn,
+    print: () => {},
+    mode: 'bypass', // 跳过权限确认，只验证 hook 层
+    hooks: {
+      PreToolUse: [{ command: `node -e 'process.stderr.write("forbidden"); process.exit(2)'` }],
+    },
+  });
+  await agent.chat('write it');
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as { content: string };
+  assert.ok(result.content.includes('Blocked by PreToolUse hook'), `应被 hook 拦截：${result.content}`);
+  assert.ok(result.content.includes('forbidden'), '原因透传');
+  const { access } = await import('node:fs/promises');
+  await assert.rejects(() => access(target), /ENOENT/, 'hook 拦截 → 文件未创建');
+});
+
+test('Hooks：UserPromptSubmit 拦截 → 原因追加进 prompt', async () => {
+  const seen: string[] = [];
+  const { fn } = makeScriptedBackend([-1], filePath);
+  const agent = new Agent({
+    callModel: async (input) => {
+      const first = input.messages[0]!;
+      seen.push(typeof first.content === 'string' ? first.content : JSON.stringify(first.content));
+      return fn(input);
+    },
+    print: () => {},
+    hooks: {
+      UserPromptSubmit: [{ command: `node -e 'process.stderr.write("nope"); process.exit(2)'` }],
+    },
+  });
+  await agent.chat('do something');
+  assert.ok(seen[0]?.includes('hook notice: nope'), `prompt 应带 hook 提示：${seen[0]}`);
+});
+
 test('空输出兜底：handler 返回空串 → 喂回 (empty output)', async () => {
   const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'noop', input: {} }] }, { text: 'thanks' }]);
   const agent = new Agent({ callModel: fn, print: () => {} });
