@@ -12,7 +12,7 @@
 
 ---
 
-## [Unreleased]
+## [released]
 
 ### Added
 
@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- 优化slash指令打印的显示
 - **子 Agent 无限递归**：`agent` 工具不再出现在子 Agent 的工具面，执行路径同样拦截（fail-closed）。
 - **globstar 语义**：`**/*.ts` 等模式此前漏配根级文件（`**/` 被误编译为"至少一层目录"）。
 - **危险命令误杀**：`kill` / `dd` / `reboot` / `shutdown` 改为按命令边界匹配，
