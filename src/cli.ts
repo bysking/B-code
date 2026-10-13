@@ -357,13 +357,21 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           .map((s) => `/${s.name}: ${s.description}`)
           .join('\n');
 
-        // 走 ctrl.pushOutput（而非 console.log 直写 stdout）——直写会与 Ink 的
-        // live 帧抢占同一片终端区域，导致输出错位/被覆盖。
-        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : '(no skills)');
+        // todo 同步等待读取配置，然后 ctrl 推送到 UI渲染
+        console.log(`\n${skills ? `Available skills:\n${skills}` : '(no skills)'}\n`);
+        return;
+
+        // // 走 ctrl.pushOutput（而非 console.log 直写 stdout）——直写会与 Ink 的
+        // // live 帧抢占同一片终端区域，导致输出错位/被覆盖。
+        // ctrl.pushOutput(skills ? `Available skills:\n${skills}` : '(no skills)');
         return;
       }
       if (trimmed === '/mcp') {
-        ctrl.pushOutput(formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)));
+        // todo 同步等待读取配置，然后 ctrl 推送到 UI渲染
+        console.log(
+          `\n${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`,
+        );
+        // ctrl.pushOutput(formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)));
         return;
       }
       if (trimmed === '/help') {
