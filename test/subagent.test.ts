@@ -86,6 +86,53 @@ test('对抗性审查角色：自定义 system（CRITIC_SYSTEM）注入首轮调
   assert.ok(!systemText.includes('explore sub-agent'), '不应是默认 explore 人设');
 });
 
+test('回归：子 Agent 工具面不含 agent 子 Agent 工具，防无限递归套娃', async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+  // 复刻主 Agent 注册的 agent 工具形态：只读但 kind='subagent'
+  registry.register({
+    name: 'agent',
+    description: 'fork a sub-agent',
+    inputSchema: { type: 'object', properties: { task: { type: 'string' } }, required: ['task'] },
+    mode: 'read',
+    kind: 'subagent',
+    handler: () => 'should never run',
+  });
+
+  const calls: ModelInput[] = [];
+  let step = 0;
+  const callModel = async (input: ModelInput): Promise<ModelOutput> => {
+    calls.push(input);
+    step++;
+    if (step === 1) {
+      return {
+        content: [
+          { type: 'tool_use', id: 's-1', name: 'read_file', input: { file_path: filePath } },
+          // 模型幻觉：调用未在工具面出现的 agent（递归入口）→ 执行路径须拦截
+          { type: 'tool_use', id: 's-2', name: 'agent', input: { task: 'recurse forever' } },
+        ],
+      };
+    }
+    return { content: [{ type: 'text', text: 'done' }] };
+  };
+
+  const ctx: RuntimeContext = { callModel, model: 'm', setMode: () => {} };
+  const result = await runSubAgent('explore', ctx, registry);
+  assert.equal(result, 'done');
+
+  // 工具面：agent 被排除（只读列表里不含它）
+  const toolNames = calls[0]!.tools.map((t) => t.name);
+  assert.ok(!toolNames.includes('agent'), `子 Agent 不应拿到 agent 工具，实际: ${toolNames}`);
+
+  // 执行路径：即便模型幻觉调用 agent，也被拒（fail-closed），绝不递归
+  const results = (
+    calls[1]!.messages[2] as unknown as { content: { tool_use_id: string; content: string }[] }
+  ).content;
+  const agentResult = results.find((r) => r.tool_use_id === 's-2');
+  assert.ok(String(agentResult?.content).includes('read-only'), 'agent 调用被拒而非递归执行');
+  assert.ok(!String(agentResult?.content).includes('should never run'), 'agent handler 未被执行');
+});
+
 test('硬中断：父级 signal 透传给子 Agent 的模型调用；abort 后不再发起新一轮', async () => {
   const registry = new Registry();
   registerBuiltinTools(registry);

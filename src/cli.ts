@@ -350,7 +350,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       await saveSession(agent.history(), sessionId);
 
       if (agent.interruptedByUser) {
-        // 这里中断失效 todo
+        // Esc 硬中断已生效：模型请求/shell 子进程被立即终止，此处仅提示可继续输入
         ctrl.pushOutput('(interrupted — 可以输入新指令或继续)');
       }
 

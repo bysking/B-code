@@ -83,7 +83,13 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 
 **快捷键：**
 
-- `Esc`：软中断当前对话（可继续输入新指令）
+- `Esc`：硬中断当前对话——立即取消在飞的模型请求、终止 `run_shell` 子进程，回到输入等待新指令（可继续输入）
+- `Ctrl+O`：切换工具输出面板（回看本轮全部工具/子 agent 的真实输出）
+- `Shift+Tab`：循环切换模式（default → plan → auto → bypass）
+- `↑` / `↓`：输入历史导航
+- `Ctrl+V` / `Cmd+V`：粘贴图片（存为 `[image #N]`）或文本
+- `Meta+Enter`（Option+Enter）：输入框内换行
+- `Ctrl+C`：第一次提示、2 秒内再按一次退出
 
 非 TTY（管道 / CI / 脚本）下自动退化为 readline 交互，语义保持一致；权限确认只消费 `y/n` 行。
 

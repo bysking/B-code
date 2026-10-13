@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
-import type { Registry, RuntimeContext } from './registry.js';
+import type { MountPoint, Registry, RuntimeContext } from './registry.js';
 import { FileStore } from './file-store.js';
 
 /**
@@ -38,6 +38,17 @@ do NOT rubber-stamp it. Validate mechanism completeness and hunt for holes:
 Be specific: cite the offending step or clause, explain why it breaks, and propose a concrete fix.
 End with a verdict line: APPROVE (sound) or REVISE (list must-fix issues ordered by severity).`;
 
+/**
+ * 子 Agent 工具面是否可用：只读 + 排除 subagent 类工具。
+ *
+ * 必须排除 `agent`（kind:'subagent'、mode:'read'）——否则子 Agent 会拿到
+ * fork 子 Agent 的能力，模型一旦调用即无限递归套娃。不能靠 deferred 修：
+ * deferred 对主 Agent 的 default 模式同样生效，会把 agent 工具从主循环也摘掉。
+ */
+function subagentUsable(mp: MountPoint | undefined): boolean {
+  return mp?.mode === 'read' && mp.kind !== 'subagent';
+}
+
 export async function runSubAgent(
   task: string,
   ctx: RuntimeContext,
@@ -49,8 +60,8 @@ export async function runSubAgent(
   // 其余 ctx 字段浅拷贝共享（callModel/askWizard 等只读）。
   const subCtx: RuntimeContext = { ...ctx, fileStore: new FileStore() };
   const messages: MessageParam[] = [{ role: 'user', content: task }];
-  // 只给只读工具（模式门控，sub-agent 无权限层）
-  const tools = registry.toolsSchema().filter((t) => registry.resolve(t.name)?.mode === 'read');
+  // 只给只读工具，且排除 subagent 工具（防子 Agent 再派子 Agent 的无限递归）
+  const tools = registry.toolsSchema().filter((t) => subagentUsable(registry.resolve(t.name)));
 
   while (true) {
     // 硬中断：父级取消（Esc）→ 子 Agent 立即停止，不再发起模型调用
@@ -76,10 +87,10 @@ export async function runSubAgent(
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
       const mp = registry.resolve(tu.name);
-      const output =
-        mp?.mode === 'read'
-          ? await mp.handler((tu.input ?? {}) as Record<string, any>, subCtx)
-          : `Denied: the sub-agent is read-only.`;
+      // 执行路径同样门控：防模型幻觉调用未在工具面出现的 agent/写工具（无权限层，fail-closed）
+      const output = subagentUsable(mp)
+        ? await mp!.handler((tu.input ?? {}) as Record<string, any>, subCtx)
+        : `Denied: the sub-agent is read-only (no writing and no nested sub-agents).`;
       results.push({ type: 'tool_result', tool_use_id: tu.id, content: output });
     }
     messages.push({ role: 'user', content: results });
