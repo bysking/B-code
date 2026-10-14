@@ -7,9 +7,14 @@ import {
   DANGEROUS_PATTERNS,
   SENSITIVE_PATTERNS,
   decideExecution,
+  isEphemeralCommand,
+  isPersistableKey,
   loadAllowlist,
   matchAllowlist,
+  MAX_ALLOW_KEY_LENGTH,
+  MAX_ALLOWLIST_SIZE,
   mergeAllowlistKeys,
+  normalizeCommand,
   persistAllowlist,
   persistedKey,
   type ExecutionContext,
@@ -197,7 +202,11 @@ test('loadAllowlist：store 抛错时静默（不阻断启动）', () => {
 
 test('matchAllowlist：`*` 通配任意后缀，无 `*` 时退化为全等（正则元字符按字面量）', () => {
   assert.equal(matchAllowlist('write_file:/a/b/c', 'write_file:/a/b/*'), true);
-  assert.equal(matchAllowlist('write_file:/a/b', 'write_file:/a/b/*'), false, '前缀须含分隔符，不回退到父目录');
+  assert.equal(
+    matchAllowlist('write_file:/a/b', 'write_file:/a/b/*'),
+    false,
+    '前缀须含分隔符，不回退到父目录',
+  );
   assert.equal(matchAllowlist('shell:git push origin main', 'shell:git push *'), true);
   assert.equal(matchAllowlist('write_file:/a', 'write_file:/a'), true, '全等命中');
   assert.equal(matchAllowlist('write_file:/a', 'write_file:/b'), false);
@@ -223,10 +232,7 @@ test('mergeAllowlistKeys：同前缀折叠成 `工具:前缀/*`，不同工具�
 });
 
 test('mergeAllowlistKeys：shell 命令按词边界折叠（保留尾部空格）', () => {
-  const merged = mergeAllowlistKeys([
-    'shell:git push origin main',
-    'shell:git push origin dev',
-  ]);
+  const merged = mergeAllowlistKeys(['shell:git push origin main', 'shell:git push origin dev']);
   assert.deepEqual(merged, ['shell:git push origin *']);
 });
 
@@ -434,4 +440,115 @@ test('decideExecution：read 工具任何模式放行', async () => {
     const d = await decideExecution(mp('read_file', 'read'), { file_path: 'a' }, execCtx({ mode }));
     assert.equal(d.allow, true, `${mode} 下 read 放行`);
   }
+});
+
+// ── 白名单去噪：归一化 + 准入规则 + 容量上限（防冗余 / 防爆）──────────
+
+test('normalizeCommand：折叠空白/换行为单空格并去首尾（键稳定，消除格式抖动）', () => {
+  assert.equal(normalizeCommand('ls   -la'), 'ls -la');
+  assert.equal(normalizeCommand('  a\n\tb  '), 'a b');
+  assert.equal(
+    normalizeCommand('node -e "\nconst x=1\n"'),
+    'node -e " const x=1 "',
+    '换行折成空格，逻辑内容不变',
+  );
+});
+
+test('allowlistKey / persistedKey：多行与单行同命令 → 同键（否则白名单永不命中）', () => {
+  const one = 'git status --short';
+  const multi = 'git   status\n--short';
+  assert.equal(
+    allowlistKey(mp('run_shell', 'shell'), { command: one }),
+    allowlistKey(mp('run_shell', 'shell'), { command: multi }),
+    '格式不同、语义相同 → 同键',
+  );
+  assert.equal(
+    persistedKey(mp('run_shell', 'shell'), { command: multi }),
+    persistedKey(mp('run_shell', 'shell'), { command: one }),
+  );
+});
+
+test('isEphemeralCommand：识别 inline / heredoc / 命令替换等一次性命令', () => {
+  assert.equal(isEphemeralCommand(`node -e "console.log(1)"`), true);
+  assert.equal(isEphemeralCommand(`python -c "print(1)"`), true);
+  assert.equal(isEphemeralCommand('cat <<EOF\nhi\nEOF'), true);
+  assert.equal(isEphemeralCommand('echo $(date)'), true);
+  assert.equal(isEphemeralCommand('echo `date`'), true);
+  // 常规命令不算一次性
+  assert.equal(isEphemeralCommand('ls -la'), false);
+  assert.equal(isEphemeralCommand('git push origin main'), false);
+  assert.equal(isEphemeralCommand('npm test'), false);
+});
+
+test('isPersistableKey：超长 / 一次性 / 空值不入白名单；常规命令可入', () => {
+  assert.equal(isPersistableKey('shell:ls -la'), true);
+  assert.equal(isPersistableKey('save_memory'), true);
+  assert.equal(isPersistableKey('write_file:/Users/me/proj/a.ts'), true);
+  // 一次性命令：内容每次都变，落盘永不失配
+  assert.equal(isPersistableKey(`shell:node -e "console.log(1)"`), false);
+  assert.equal(isPersistableKey('shell:echo $(date)'), false);
+  // 超长：几乎必然是一次性脚本，且会撑爆配置
+  assert.equal(isPersistableKey('shell:' + 'x'.repeat(MAX_ALLOW_KEY_LENGTH + 10)), false);
+  // 空值无授权意义
+  assert.equal(isPersistableKey('shell:'), false);
+  assert.equal(isPersistableKey(''), false);
+});
+
+test('mergeAllowlistKeys：丢弃一次性命令与超长条目（清洗历史垃圾）', () => {
+  const merged = mergeAllowlistKeys([
+    'shell:ls -la',
+    `shell:node -e "\nconst a=1;\n"`, // 一次性 inline
+    'shell:cd /proj && cat > tmp/x.ts <<EOF\nhi\nEOF', // heredoc
+    'shell:' + 'y'.repeat(MAX_ALLOW_KEY_LENGTH + 1), // 超长
+  ]);
+  assert.deepEqual(merged, ['shell:ls -la'], '只留可复用的常规命令');
+});
+
+test('mergeAllowlistKeys：换行命令归一化后与同义单行合并去重', () => {
+  const merged = mergeAllowlistKeys([
+    'shell:git status --short',
+    'shell:git   status\n--short', // 归一化后与上条相同
+  ]);
+  assert.deepEqual(merged, ['shell:git status --short'], '归一化去重为一条');
+});
+
+test('mergeAllowlistKeys：条目数超过上限时截断（防爆）', () => {
+  const many = Array.from({ length: MAX_ALLOWLIST_SIZE + 50 }, (_, i) => `tool:item-${i}`);
+  const merged = mergeAllowlistKeys(many);
+  assert.equal(merged.length, MAX_ALLOWLIST_SIZE, '封顶到 MAX_ALLOWLIST_SIZE');
+});
+
+test('persistAllowlist：一次性命令不落盘（返回 false），常规命令落盘（返回 true）', () => {
+  let stored: string[] = [];
+  const store: AllowlistStore = {
+    load: () => [...stored],
+    save: (keys) => {
+      stored = keys;
+    },
+  };
+  assert.equal(persistAllowlist(store, `shell:node -e "x"`), false, '一次性命令拒绝落盘');
+  assert.deepEqual(stored, [], '配置文件未被写入垃圾');
+  assert.equal(persistAllowlist(store, 'shell:ls -la'), true);
+  assert.deepEqual(stored, ['shell:ls -la']);
+});
+
+test('loadAllowlist：载入时清洗历史垃圾（一次性/超长条目被剔除并回写）', () => {
+  let stored: string[] = [
+    'save_memory',
+    'shell:ls -la',
+    `shell:node -e "\nconst a=1;\n"`, // 历史垃圾：一次性 inline
+    'shell:' + 'z'.repeat(MAX_ALLOW_KEY_LENGTH + 5), // 历史垃圾：超长
+  ];
+  const before = JSON.stringify(stored).length;
+  const store: AllowlistStore = {
+    load: () => [...stored],
+    save: (keys) => {
+      stored = keys;
+    },
+  };
+  const set = new Set<string>();
+  loadAllowlist(store, set);
+  assert.deepEqual([...set].sort(), ['save_memory', 'shell:ls -la'].sort(), '只留可复用条目');
+  assert.deepEqual(stored.sort(), ['save_memory', 'shell:ls -la'].sort(), '清洗结果回写落盘');
+  assert.ok(JSON.stringify(stored).length < before, '配置文件体积显著缩小');
 });

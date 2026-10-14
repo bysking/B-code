@@ -79,9 +79,67 @@ export function checkPermission(mp: MountPoint, input: Record<string, any>, mode
   return 'confirm';
 }
 
-/** 会话级白名单键：shell 用命令内容做键（同命令不再问），其他按工具名 */
+/**
+ * 命令归一化：折叠空白（含换行/制表符）为单空格并去首尾空白。
+ *
+ * 为什么要在做键之前归一化：模型下发的同一条命令，格式会抖动——
+ * 多行 inline 脚本、` && ` 换行缩进等，都会让"同一逻辑调用"产生不同键，
+ * 于是白名单永远不命中、每次都新增一条近似重复项。归一化后两侧（写键 / 查键）
+ * 走同一函数，键才稳定可比。
+ */
+export function normalizeCommand(cmd: string): string {
+  return cmd.replace(/\s+/g, ' ').trim();
+}
+
+/** 会话级白名单键：shell 用归一化后的命令内容做键（同命令不再问），其他按工具名 */
 export function allowlistKey(mp: MountPoint, input: Record<string, any>): string {
-  return mp.mode === 'shell' ? `shell:${String(input.command ?? '')}` : mp.name;
+  return mp.mode === 'shell' ? `shell:${normalizeCommand(String(input.command ?? ''))}` : mp.name;
+}
+
+// ── 持久化准入规则：什么样的授权才值得"记住不再问" ──────────────────
+//
+// 科学原则：持久化白名单应沉淀**可复用的能力类**，而不是**一次性的具体调用**。
+// 据此设四条准入规则（不满足即只在本会话记住、不落盘）：
+//   ① 单条长度上限 —— 超长命令几乎必然是一次性 inline 脚本，还可能撑爆配置文件
+//   ② 一次性命令特征 —— inline 脚本 / heredoc / 命令替换：内容每次都不同，落盘永不失配
+//   ③ 归一化 —— 见 normalizeCommand，避免格式差异制造近似重复
+//   ④ 容量上限 —— 条目数封顶，超出按落盘序淘汰最旧，保证文件有界
+
+/** 单条白名单键最大长度：超长命令多为一次性 inline 脚本，持久化无意义且撑爆配置 */
+export const MAX_ALLOW_KEY_LENGTH = 200;
+/** 白名单条目上限：超出按落盘顺序淘汰最旧，避免无限累计 */
+export const MAX_ALLOWLIST_SIZE = 100;
+
+/**
+ * 一次性命令特征：inline 求值、heredoc、命令替换。
+ * 这类命令"每次执行内容都不同"，做成白名单条目既不可复用又常常携带大段脚本体。
+ */
+const EPHEMERAL_PATTERNS: RegExp[] = [
+  /\b(?:node|deno|bun)\s+(?:-e|--eval)\b/, // node -e '...'
+  /\b(?:python[23]?|ruby|perl|php)\s+-[ec]\b/, // python -c '...'
+  /<<-?\s*['"]?\w+/, // heredoc：cat <<EOF
+  /\$\(/, // 命令替换 $(...)
+  /`/, // 反引号替换
+];
+
+/** 是否为一次性命令（inline 脚本 / heredoc / 命令替换） */
+export function isEphemeralCommand(cmd: string): boolean {
+  return EPHEMERAL_PATTERNS.some((re) => re.test(cmd));
+}
+
+/**
+ * 该白名单键是否值得持久化（准入规则①②；长度按归一化后计算）。
+ *   shell:<命令> → 长度合规且非一次性命令才落盘
+ *   <工具名>     → 仅长度合规（工具名区分度已足够，如 write_file:<path>）
+ */
+export function isPersistableKey(key: string): boolean {
+  const i = key.indexOf(':');
+  if (i < 0) return key.length <= MAX_ALLOW_KEY_LENGTH && key.length > 0; // 无 ':' = 整键即工具名
+  const ns = key.slice(0, i);
+  const value = ns === 'shell' ? normalizeCommand(key.slice(i + 1)) : key.slice(i + 1);
+  if (value.length === 0) return false; // 空值（如缺 command）无授权意义
+  if (ns === 'shell' && isEphemeralCommand(value)) return false;
+  return ns.length + 1 + value.length <= MAX_ALLOW_KEY_LENGTH;
 }
 
 // ── 持久化白名单：把"本会话记住"升级为"记住不再问" ──────────────────
@@ -94,9 +152,10 @@ export function allowlistKey(mp: MountPoint, input: Record<string, any>): string
  *
  * 刻意不用 JSON.stringify：对象键顺序会因模型每次下发的参数顺序不同而抖动，
  * 且 undefined 键会被丢掉，导致同一逻辑调用产生不同键、白名单永远不命中。
+ * shell 命令先归一化空白（见 normalizeCommand），消除多行格式抖动。
  */
 export function persistedKey(mp: MountPoint, input: Record<string, any>): string {
-  if (mp.mode === 'shell') return `shell:${String(input.command ?? '')}`;
+  if (mp.mode === 'shell') return `shell:${normalizeCommand(String(input.command ?? ''))}`;
   const path = input.file_path;
   return typeof path === 'string' && path ? `${mp.name}:${path}` : mp.name;
 }
@@ -169,24 +228,32 @@ function mergeValues(values: string[]): string[] {
 }
 
 /**
- * 合并白名单键（去重 + 通配折叠），把 `write_file:/a/b/c` + `write_file:/a/b/d`
- * 收成 `write_file:/a/b/*`，`shell:git push origin main` + `...dev` 收成 `shell:git push origin *`。
+ * 合并白名单键（归一化 + 去噪 + 去重 + 通配折叠 + 容量封顶），把
+ * `write_file:/a/b/c` + `write_file:/a/b/d` 收成 `write_file:/a/b/*`，
+ * `shell:git push origin main` + `...dev` 收成 `shell:git push origin *`。
  * 折叠仅在**分隔符边界**发生且前缀足够具体——宁可不合并，也不产生过宽的授权。
  * 已存在的显式通配键会吸收被它覆盖的具体键。输出按字典序排序（落盘稳定）。
+ *
+ * 同时承担"清洗历史垃圾"职责（loadAllowlist 复用它）：
+ *   - shell 值先归一化空白，消除多行格式抖动制造的同义重复键
+ *   - 丢弃不可持久化的键（超长 / 一次性命令，见 isPersistableKey）
+ *   - 超过 MAX_ALLOWLIST_SIZE 时截断到上限（去噪后几乎不会触发，纯防爆）
  */
 export function mergeAllowlistKeys(keys: string[]): string[] {
   const groups = new Map<string, string[]>(); // 命名空间（首个 ':' 前）→ 值列表
   const plain: string[] = []; // 无 ':' 的键（整键即工具名）原样保留
   const wildcards: string[] = []; // 已是通配的键原样保留（下方统一做吸收）
 
-  for (const k of new Set(keys)) {
-    const i = k.indexOf(':');
+  for (const raw of new Set(keys)) {
+    const i = raw.indexOf(':');
     if (i < 0) {
-      plain.push(k);
+      if (isPersistableKey(raw)) plain.push(raw);
       continue;
     }
-    const ns = k.slice(0, i);
-    const value = k.slice(i + 1);
+    const ns = raw.slice(0, i);
+    const value = ns === 'shell' ? normalizeCommand(raw.slice(i + 1)) : raw.slice(i + 1);
+    const k = `${ns}:${value}`;
+    if (!isPersistableKey(k)) continue; // 去噪：超长 / 一次性命令不入白名单
     if (value.includes('*')) {
       wildcards.push(k);
       continue;
@@ -201,10 +268,9 @@ export function mergeAllowlistKeys(keys: string[]): string[] {
     for (const v of mergeValues(values)) out.push(`${ns}:${v}`);
   }
   // 通配键吸收被覆盖的具体键
-  const kept = out.filter(
-    (k) => !out.some((p) => p !== k && p.includes('*') && matchAllowlist(k, p)),
-  );
-  return [...new Set(kept)].sort();
+  const kept = out.filter((k) => !out.some((p) => p !== k && p.includes('*') && matchAllowlist(k, p)));
+  // 容量封顶：排序后取前 N，结果确定（去噪 + 折叠后正常远低于上限，纯防爆）
+  return [...new Set(kept)].sort().slice(0, MAX_ALLOWLIST_SIZE);
 }
 
 /** 启动时载入持久化白名单到会话集合（顺手折叠历史累计；失败静默：读不到就当空） */
@@ -226,14 +292,22 @@ export function loadAllowlist(store: AllowlistStore, into: Set<string>): void {
   }
 }
 
-/** 把某次授权写入持久化白名单（去重 + 通配折叠后落盘；失败静默，不影响本次放行） */
-export function persistAllowlist(store: AllowlistStore, key: string): void {
+/**
+ * 把某次授权写入持久化白名单（准入过滤 + 去重 + 通配折叠后落盘；失败静默）。
+ * 不可持久化的键（超长 / 一次性命令）直接跳过——仍可经会话白名单本次免问，
+ * 但不落盘，避免配置文件被一次性 inline 脚本撑爆。
+ * @returns 是否真的落盘（false = 该键不值得/不允许持久化）
+ */
+export function persistAllowlist(store: AllowlistStore, key: string): boolean {
+  if (!isPersistableKey(key)) return false;
   try {
     const keys = store.load();
-    if (keys.includes(key)) return;
+    if (keys.includes(key)) return true;
     store.save(mergeAllowlistKeys([...keys, key]));
+    return true;
   } catch {
     // 持久化失败不影响本会话放行
+    return false;
   }
 }
 
