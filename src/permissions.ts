@@ -107,20 +107,131 @@ export interface AllowlistStore {
   save(keys: string[]): void;
 }
 
-/** 启动时载入持久化白名单到会话集合（失败静默：读不到就当空） */
+// ── 通配匹配：`*` 折叠同类授权，避免白名单无限累计 ──────────────────
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 白名单通配匹配：pattern 中的 `*` 匹配任意字符序列（含空）。无 `*` 时退化为全等。
+ * 例：`write_file:/a/b/*` 命中 `write_file:/a/b/c`；`shell:git push *` 命中 `shell:git push origin main`。
+ */
+export function matchAllowlist(key: string, pattern: string): boolean {
+  if (pattern === key) return true;
+  if (!pattern.includes('*')) return false;
+  return new RegExp('^' + pattern.split('*').map(escapeRegExp).join('.*') + '$').test(key);
+}
+
+/** 会话集命中判定：精确键 **或** 任一通配键命中即视为已授权 */
+export function allowlistHas(allowlist: Set<string>, key: string): boolean {
+  if (allowlist.has(key)) return true;
+  for (const p of allowlist) if (matchAllowlist(key, p)) return true;
+  return false;
+}
+
+/** 折叠点的最小前缀长度：太短的公共前缀（如 `/a`、`git`）折叠过宽，宁可不合并 */
+const MIN_MERGE_PREFIX = 4;
+/** 折叠边界：前缀须止于路径分隔符或空白，避免 `/a/bc`+`/a/bd` → 过宽的 `/a/b*` */
+const MERGE_BOUNDARY = /[/\\\s]/;
+
+function commonPrefix(a: string, b: string): string {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return a.slice(0, i);
+}
+
+/** 可折叠判定：公共前缀止于分隔符，且去掉尾部分隔符后仍足够具体 */
+function isMergeBoundary(lcp: string): boolean {
+  if (lcp.length === 0) return false;
+  if (!MERGE_BOUNDARY.test(lcp[lcp.length - 1]!)) return false;
+  return lcp.replace(/[/\\\s]+$/, '').length >= MIN_MERGE_PREFIX;
+}
+
+/** 同命名空间内的值两两折叠：反复取最长公共前缀合成 `前缀*`，直到无可折叠 */
+function mergeValues(values: string[]): string[] {
+  const items = [...new Set(values)];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < items.length && !changed; i++) {
+      for (let j = i + 1; j < items.length && !changed; j++) {
+        const lcp = commonPrefix(items[i]!, items[j]!);
+        if (isMergeBoundary(lcp)) {
+          items[i] = `${lcp}*`;
+          items.splice(j, 1);
+          changed = true;
+        }
+      }
+    }
+  }
+  return items;
+}
+
+/**
+ * 合并白名单键（去重 + 通配折叠），把 `write_file:/a/b/c` + `write_file:/a/b/d`
+ * 收成 `write_file:/a/b/*`，`shell:git push origin main` + `...dev` 收成 `shell:git push origin *`。
+ * 折叠仅在**分隔符边界**发生且前缀足够具体——宁可不合并，也不产生过宽的授权。
+ * 已存在的显式通配键会吸收被它覆盖的具体键。输出按字典序排序（落盘稳定）。
+ */
+export function mergeAllowlistKeys(keys: string[]): string[] {
+  const groups = new Map<string, string[]>(); // 命名空间（首个 ':' 前）→ 值列表
+  const plain: string[] = []; // 无 ':' 的键（整键即工具名）原样保留
+  const wildcards: string[] = []; // 已是通配的键原样保留（下方统一做吸收）
+
+  for (const k of new Set(keys)) {
+    const i = k.indexOf(':');
+    if (i < 0) {
+      plain.push(k);
+      continue;
+    }
+    const ns = k.slice(0, i);
+    const value = k.slice(i + 1);
+    if (value.includes('*')) {
+      wildcards.push(k);
+      continue;
+    }
+    const arr = groups.get(ns) ?? [];
+    arr.push(value);
+    groups.set(ns, arr);
+  }
+
+  const out: string[] = [...plain, ...wildcards];
+  for (const [ns, values] of groups) {
+    for (const v of mergeValues(values)) out.push(`${ns}:${v}`);
+  }
+  // 通配键吸收被覆盖的具体键
+  const kept = out.filter(
+    (k) => !out.some((p) => p !== k && p.includes('*') && matchAllowlist(k, p)),
+  );
+  return [...new Set(kept)].sort();
+}
+
+/** 启动时载入持久化白名单到会话集合（顺手折叠历史累计；失败静默：读不到就当空） */
 export function loadAllowlist(store: AllowlistStore, into: Set<string>): void {
   try {
-    for (const k of store.load()) into.add(k);
+    const loaded = store.load();
+    const merged = mergeAllowlistKeys(loaded);
+    // 折叠出变化 → 回写，清掉历史累积的冗余条目（写回失败不影响本次载入）
+    if (JSON.stringify(merged) !== JSON.stringify(loaded)) {
+      try {
+        store.save(merged);
+      } catch {
+        // 写回失败静默
+      }
+    }
+    for (const k of merged) into.add(k);
   } catch {
     // 读取失败不阻断启动
   }
 }
 
-/** 把某次授权写入持久化白名单（去重后落盘；失败静默，不影响本次放行） */
+/** 把某次授权写入持久化白名单（去重 + 通配折叠后落盘；失败静默，不影响本次放行） */
 export function persistAllowlist(store: AllowlistStore, key: string): void {
   try {
     const keys = store.load();
-    if (!keys.includes(key)) store.save([...keys, key]);
+    if (keys.includes(key)) return;
+    store.save(mergeAllowlistKeys([...keys, key]));
   } catch {
     // 持久化失败不影响本会话放行
   }
@@ -179,8 +290,8 @@ export async function decideExecution(
   // ③ confirm：白名单命中直接放行，否则问用户（bypass 跳过；敏感命令连 bypass 也要问）
   if (permission === 'confirm' && (ctx.mode !== 'bypass' || sensitive)) {
     const key = allowlistKey(mp, input);
-    // 会话键（粗粒度）或持久化键（更具体）任一命中即免问
-    if (ctx.allowlist.has(key) || ctx.allowlist.has(persistedKey(mp, input))) {
+    // 会话键（粗粒度）或持久化键（更具体）任一命中即免问；支持通配键折叠（`*`）
+    if (allowlistHas(ctx.allowlist, key) || allowlistHas(ctx.allowlist, persistedKey(mp, input))) {
       return { allow: true };
     }
     const label = mp.mode === 'shell' ? String(input.command ?? '') : mp.name;

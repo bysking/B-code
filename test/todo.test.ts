@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,11 +58,42 @@ test('saveTodos / loadTodos：按项目隔离落盘并可回读', () => {
   const cwdA = join(home, 'a');
   const cwdB = join(home, 'b');
   saveTodos([{ content: 'A 任务', status: 'pending' }], cwdA);
-  saveTodos([{ content: 'B 任务', status: 'completed' }], cwdB);
+  saveTodos(
+    [
+      { content: 'B 任务', status: 'completed' },
+      { content: 'B 进行中', status: 'in_progress' },
+    ],
+    cwdB,
+  );
 
   assert.deepEqual(loadTodos(cwdA), [{ content: 'A 任务', status: 'pending' }]);
-  assert.deepEqual(loadTodos(cwdB), [{ content: 'B 任务', status: 'completed' }]);
+  assert.deepEqual(loadTodos(cwdB), [
+    { content: 'B 任务', status: 'completed' },
+    { content: 'B 进行中', status: 'in_progress' },
+  ]);
   assert.ok(todoFile(cwdA).startsWith(home), '落在 B_CODE_HOME 下');
+});
+
+test('saveTodos：全部完成 → 清空文件（收尾即清）', async () => {
+  const cwdDone = join(home, 'done');
+  saveTodos([{ content: '还在跑', status: 'in_progress' }], cwdDone);
+  assert.ok(existsSync(todoFile(cwdDone)), '未完成时文件存在');
+
+  saveTodos(
+    [
+      { content: '第一步', status: 'completed' },
+      { content: '第二步', status: 'completed' },
+    ],
+    cwdDone,
+  );
+  assert.equal(existsSync(todoFile(cwdDone)), false, '全部完成 → 文件被清空');
+  assert.deepEqual(loadTodos(cwdDone), [], '回读为空');
+});
+
+test('saveTodos：空数组落盘为空清单（非"完成"，不清空）', () => {
+  const cwdEmpty = join(home, 'empty');
+  saveTodos([], cwdEmpty);
+  assert.deepEqual(loadTodos(cwdEmpty), [], '空清单回读为空');
 });
 
 test('loadTodos：无文件 / 损坏文件 → []', () => {

@@ -16,6 +16,8 @@
 
 ### Added
 
+- 调整命令执行白名单避免无限累计
+- 优化项目已完成的待办任务的清空
 - **结构化任务清单**：新增 `todo_write` 工具，模型可维护 `pending / in_progress / completed`
   状态的任务清单，底部固定面板展示完成度；按项目隔离存储（`projects/{hash}/todo.json`），
   跨会话存续。新增 `/todos` 查看命令。

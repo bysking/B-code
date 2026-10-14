@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { dirs } from './utils/paths.js';
 import { projectKey } from './memory.js';
@@ -41,10 +41,19 @@ export function loadTodos(cwd: string = process.cwd()): TodoItem[] {
   }
 }
 
-/** 写入项目待办（重建目录；失败静默——清单不是关键路径） */
+/**
+ * 写入项目待办（重建目录；失败静默——清单不是关键路径）。
+ * 全部完成（非空且无 pending/in_progress）→ 视为本轮任务收尾，清空文件，
+ * 避免旧清单残留、下次启动又冒出来（"已完成即清空"）。
+ */
 export function saveTodos(todos: TodoItem[], cwd: string = process.cwd()): void {
   const file = todoFile(cwd);
   try {
+    const allDone = todos.length > 0 && todos.every((t) => t.status === 'completed');
+    if (allDone) {
+      rmSync(file, { force: true });
+      return;
+    }
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(todos, null, 2), 'utf-8');
   } catch {

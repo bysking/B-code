@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  allowlistHas,
   allowlistKey,
   checkPermission,
   DANGEROUS_PATTERNS,
   SENSITIVE_PATTERNS,
   decideExecution,
   loadAllowlist,
+  matchAllowlist,
+  mergeAllowlistKeys,
   persistAllowlist,
   persistedKey,
   type ExecutionContext,
@@ -188,6 +191,102 @@ test('loadAllowlist：store 抛错时静默（不阻断启动）', () => {
   const set = new Set<string>();
   assert.doesNotThrow(() => loadAllowlist(bad, set));
   assert.equal(set.size, 0);
+});
+
+// ── 通配折叠：`*` 合并同类授权，避免白名单无限累计 ──────────────────
+
+test('matchAllowlist：`*` 通配任意后缀，无 `*` 时退化为全等（正则元字符按字面量）', () => {
+  assert.equal(matchAllowlist('write_file:/a/b/c', 'write_file:/a/b/*'), true);
+  assert.equal(matchAllowlist('write_file:/a/b', 'write_file:/a/b/*'), false, '前缀须含分隔符，不回退到父目录');
+  assert.equal(matchAllowlist('shell:git push origin main', 'shell:git push *'), true);
+  assert.equal(matchAllowlist('write_file:/a', 'write_file:/a'), true, '全等命中');
+  assert.equal(matchAllowlist('write_file:/a', 'write_file:/b'), false);
+  // 正则元字符按字面量：`a+` 不应被当作量词
+  assert.equal(matchAllowlist('write_file:/a+b', 'write_file:/a+*'), true);
+  assert.equal(matchAllowlist('write_file:/aab', 'write_file:/a+*'), false);
+});
+
+test('allowlistHas：精确命中或任一通配键命中', () => {
+  const set = new Set(['write_file:/a/b/*']);
+  assert.equal(allowlistHas(set, 'write_file:/a/b/c'), true, '通配命中');
+  assert.equal(allowlistHas(set, 'write_file:/x/y'), false);
+  assert.equal(allowlistHas(new Set(['write_file:/x']), 'write_file:/x'), true, '精确命中');
+});
+
+test('mergeAllowlistKeys：同前缀折叠成 `工具:前缀/*`，不同工具互不干扰', () => {
+  const merged = mergeAllowlistKeys([
+    'write_file:/Users/me/proj/a.ts',
+    'write_file:/Users/me/proj/b.ts',
+    'write_file:/Users/me/proj/c.ts',
+  ]);
+  assert.deepEqual(merged, ['write_file:/Users/me/proj/*']);
+});
+
+test('mergeAllowlistKeys：shell 命令按词边界折叠（保留尾部空格）', () => {
+  const merged = mergeAllowlistKeys([
+    'shell:git push origin main',
+    'shell:git push origin dev',
+  ]);
+  assert.deepEqual(merged, ['shell:git push origin *']);
+});
+
+test('mergeAllowlistKeys：边界外不折叠（前缀不以分隔符结尾）', () => {
+  // `/Users/me/proj` 与 `/Users/me/proj2` 的公共前缀不含尾部 `/` → 不合并
+  const merged = mergeAllowlistKeys(['write_file:/Users/me/proj', 'write_file:/Users/me/proj2']);
+  assert.deepEqual(merged, ['write_file:/Users/me/proj', 'write_file:/Users/me/proj2']);
+});
+
+test('mergeAllowlistKeys：过短前缀不折叠（宁可不合并，也不放宽）', () => {
+  // 公共前缀 `/a/` 去掉分隔符后仅 2 字符 < MIN_MERGE_PREFIX → 保持原样
+  const merged = mergeAllowlistKeys(['write_file:/a/b', 'write_file:/a/c']);
+  assert.deepEqual(merged, ['write_file:/a/b', 'write_file:/a/c']);
+});
+
+test('mergeAllowlistKeys：已存在的通配键吸收被覆盖的具体键', () => {
+  const merged = mergeAllowlistKeys(['write_file:/a/b/*', 'write_file:/a/b/c', 'write_file:/a/b/d']);
+  assert.deepEqual(merged, ['write_file:/a/b/*']);
+});
+
+test('persistAllowlist：写入时自动折叠历史累计', () => {
+  let stored: string[] = ['write_file:/Users/me/proj/a.ts', 'write_file:/Users/me/proj/b.ts'];
+  const store: AllowlistStore = {
+    load: () => [...stored],
+    save: (keys) => {
+      stored = keys;
+    },
+  };
+  persistAllowlist(store, 'write_file:/Users/me/proj/c.ts');
+  assert.deepEqual(stored, ['write_file:/Users/me/proj/*'], '追加后收敛为通配键');
+});
+
+test('loadAllowlist：载入时顺手折叠历史累计并回写', () => {
+  let stored: string[] = ['write_file:/Users/me/proj/a.ts', 'write_file:/Users/me/proj/b.ts'];
+  const store: AllowlistStore = {
+    load: () => [...stored],
+    save: (keys) => {
+      stored = keys;
+    },
+  };
+  const set = new Set<string>();
+  loadAllowlist(store, set);
+  assert.deepEqual([...set], ['write_file:/Users/me/proj/*']);
+  assert.deepEqual(stored, ['write_file:/Users/me/proj/*'], '折叠结果回写落盘');
+});
+
+test('decideExecution：通配键命中 → 新文件免问直接放行', async () => {
+  const allowlist = new Set<string>();
+  allowlist.add(persistedKey(mp('write_file', 'write'), { file_path: '/Users/me/proj/a.ts' }));
+  // 用一条已折叠的通配键替换（模拟上次合并结果）
+  allowlist.clear();
+  allowlist.add('write_file:/Users/me/proj/*');
+  let asks = 0;
+  const d = await decideExecution(
+    mp('write_file', 'write'),
+    { file_path: '/Users/me/proj/new.ts' },
+    execCtx({ allowlist, askUser: async () => (asks++, false) }),
+  );
+  assert.equal(d.allow, true, '通配键命中 → 免问');
+  assert.equal(asks, 0, '不再询问');
 });
 
 test('decideExecution：持久化键命中 → 敏感命令免问直接放行', async () => {
