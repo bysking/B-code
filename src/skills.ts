@@ -128,24 +128,88 @@ export function discoverSkills(cwd: string = process.cwd()): SkillInfo[] {
 }
 
 /**
+ * 解析技能调用的参数字串：支持双引号包裹多词参数。
+ *
+ *   /merge "feature/login fix" main
+ *   → ['feature/login fix', 'main']
+ *
+ * 未闭合的引号按"到结尾"处理（不报错，宽容解析——用户少打一个引号不该让技能失效）。
+ */
+export function parseSkillArgs(raw: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  let has = false; // 当前是否已累积过内容（区分空引号 "" 与没有参数）
+  for (const ch of raw) {
+    if (ch === '"') {
+      quoted = !quoted;
+      has = true;
+      continue;
+    }
+    if (!quoted && /\s/.test(ch)) {
+      if (has) out.push(cur);
+      cur = '';
+      has = false;
+      continue;
+    }
+    cur += ch;
+    has = true;
+  }
+  if (has) out.push(cur);
+  return out;
+}
+
+/**
+ * 把调用参数填进技能正文。
+ *
+ * 占位符（均按位置替换，`$ARGUMENTS` 是整串）：
+ *   $ARGUMENTS  → 全部参数的原始字符串（保留引号内的空格，未解析）
+ *   $1 $2 …     → 第 n 个参数（越界替换为空串）
+ *
+ * 关键约定：**正文若一个占位符都没有，把参数以 `[调用参数]` 段追加到末尾**。
+ * 否则技能作者忘了写 $ARGUMENTS 时参数会被静默丢弃——而技能里的工具（比如
+ * 需要分支名的 git 操作）恰恰依赖这些参数，模型完全看不到就会瞎猜。
+ */
+export function fillSkillArgs(body: string, argsRaw: string): string {
+  const args = parseSkillArgs(argsRaw);
+  const hasPlaceholder = /\$ARGUMENTS|\$\d+/.test(body);
+  const clipped = argsRaw.slice(0, MAX_ARGUMENTS_CHARS);
+
+  // 一次性替换，且**参数内容不再参与后续匹配**：分两步做（先换 $ARGUMENTS 再换 $1）
+  // 会让参数里的 `$1` 被二次替换——用户传 "价格$100" 会变成 "价格"。
+  // 用单趟正则 + 占位符表彻底避开这个坑。
+  const prompt = body.replace(/\$ARGUMENTS|\$(\d+)/g, (_m, d?: string) => {
+    if (d === undefined) return clipped;
+    return args[Number.parseInt(d, 10) - 1] ?? '';
+  });
+
+  // 正文一个占位符都没有：把参数显式追加，避免技能里的工具拿不到参数
+  if (!hasPlaceholder && clipped.trim()) {
+    return `${prompt}\n\n[调用参数] ${clipped}`;
+  }
+  return prompt;
+}
+
+/**
  * 解析技能调用："/commit 新功能" → name=commit, args="新功能"
- * 命中返回替换好 $ARGUMENTS 的正文；未命中返回 null。
+ * 命中返回填好参数的正文；未命中返回 null。
  */
 export function resolveSkill(input: string, cwd: string = process.cwd()): string | null {
   if (!input.startsWith('/')) return null;
-  const [name, ...rest] = input.slice(1).split(' ');
-  if (!name) return null;
+  const trimmed = input.slice(1).trimStart();
+  if (!trimmed) return null;
+  // 只按空白切出技能名，其余全部作为参数字串（保留原始形式，交给 fillSkillArgs 解析）
+  const match = /^(\S+)\s*([\s\S]*)$/.exec(trimmed);
+  if (!match) return null;
+  const name = match[1]!;
+  const argsRaw = (match[2] ?? '').trim();
 
   for (const dir of skillDirs(cwd)) {
     const entry = findSkillEntry(dir, name);
     if (!entry) continue;
     const { meta, body } = parseFrontmatter(readFileSync(entry.file, 'utf-8'));
     if (!entry.directoryForm && !meta.name) continue; // 平铺形态无 name 的 frontmatter 不算技能
-
-    const args = rest.join(' ').trim();
-    let prompt = body;
-    if (args) prompt = prompt.replace(/\$ARGUMENTS/g, args.slice(0, MAX_ARGUMENTS_CHARS));
-    return prompt;
+    return fillSkillArgs(body, argsRaw);
   }
   return null;
 }

@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discoverSkills, resolveSkill, buildSkillDescriptions, SKILLS_DIR_ENV } from '../src/skills.js';
+import {
+  discoverSkills,
+  resolveSkill,
+  buildSkillDescriptions,
+  fillSkillArgs,
+  parseSkillArgs,
+  SKILLS_DIR_ENV,
+} from '../src/skills.js';
 import { BASE_PATH_ENV } from '../src/utils/paths.js';
 
 let home: string;
@@ -205,4 +212,71 @@ test('resolveSkill：路径穿越与隐藏名不命中技能', async () => {
   assert.equal(resolveSkill('/..', proj), null);
   assert.equal(resolveSkill('/a/b', proj), null);
   assert.equal(resolveSkill('/.hidden', proj), null);
+});
+
+// ── 参数透传：$1 $2 位置参数 / 缺占位符自动追加 ─────────────────
+
+test('parseSkillArgs：按空白切分，双引号内保留空格', () => {
+  assert.deepEqual(parseSkillArgs('feature/x main'), ['feature/x', 'main']);
+  assert.deepEqual(parseSkillArgs('"feature/login fix" main'), ['feature/login fix', 'main']);
+  assert.deepEqual(parseSkillArgs(''), []);
+  assert.deepEqual(parseSkillArgs('""'), [''], '空引号算一个空参数');
+});
+
+test('parseSkillArgs：未闭合引号宽容处理（不因少打个引号失效）', () => {
+  assert.deepEqual(parseSkillArgs('"unclosed arg'), ['unclosed arg']);
+});
+
+test('fillSkillArgs：$1 $2 位置参数按位置替换', () => {
+  const out = fillSkillArgs('把分支 $1 合并到 $2，全部: $ARGUMENTS', 'feature/x main');
+  assert.equal(out, '把分支 feature/x 合并到 main，全部: feature/x main');
+});
+
+test('fillSkillArgs：位置参数越界替换为空串（不残留占位符）', () => {
+  const out = fillSkillArgs('第二个是 $2', 'only-one');
+  assert.equal(out, '第二个是 ', '越界不报错、不残留 $2');
+});
+
+test('回归：参数里含 $1 这类文本不得被二次替换', () => {
+  // 分两步替换（先 $ARGUMENTS 再 $1）会把 "价格$100" 吃成 "价格"
+  const out = fillSkillArgs('值: $ARGUMENTS', '价格$100');
+  assert.equal(out, '值: 价格$100');
+});
+
+test('fillSkillArgs：正文无占位符时，参数以 [调用参数] 追加（参数不丢）', () => {
+  const out = fillSkillArgs('打印 hello world', '哈哈 你好');
+  assert.ok(out.startsWith('打印 hello world'), '正文保留');
+  assert.ok(out.includes('[调用参数] 哈哈 你好'), '参数明确追加，模型能据此传给工具');
+});
+
+test('fillSkillArgs：无参数时不做任何追加（保持正文原样）', () => {
+  assert.equal(fillSkillArgs('打印 hello world', ''), '打印 hello world');
+  assert.equal(fillSkillArgs('打印 hello world', '   '), '打印 hello world');
+});
+
+test('resolveSkill：无占位符的技能也能拿到参数（曾经静默丢失）', async () => {
+  await writeFile(
+    join(proj, '.claude', 'skills', 'plain.md'),
+    '---\nname: plain\ndescription: d\nuser-invocable: true\n---\n打印 hello world\n',
+  );
+  const out = resolveSkill('/plain 哈哈', proj);
+  assert.ok(out?.includes('[调用参数] 哈哈'), '参数必须送达，否则技能里的工具拿不到');
+});
+
+test('resolveSkill：带引号的多词参数原样透传', async () => {
+  await writeFile(
+    join(proj, '.claude', 'skills', 'merge.md'),
+    '---\nname: merge\ndescription: d\nuser-invocable: true\n---\n合并 $1 到 $2\n',
+  );
+  const out = resolveSkill('/merge "feature/login fix" main', proj);
+  assert.equal(out, '合并 feature/login fix 到 main');
+});
+
+test('resolveSkill：技能名后多个空格 / 制表符也能正确取参', async () => {
+  await writeFile(
+    join(proj, '.claude', 'skills', 'spaced.md'),
+    '---\nname: spaced\ndescription: d\nuser-invocable: true\n---\n参数: $1|$2\n',
+  );
+  const out = resolveSkill('/spaced   a\t b', proj);
+  assert.equal(out, '参数: a|b');
 });

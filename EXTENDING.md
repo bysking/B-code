@@ -111,6 +111,13 @@ user-invocable: true
 搜索链：项目 `.claude/skills` > `$B_CODE_SKILLS_DIR` > `$B_CODE_HOME/skills` > `~/.claude/skills`。
 同名技能前者生效（同目录内平铺文件优先于同名目录）。写文件即生效，`/my-skill 参数` 即用。
 
+**参数透传**：`/my-skill 参数1 参数2` 的参数会填进正文，技能里调用的工具因此能拿到它们。
+
+- `$ARGUMENTS` → 全部参数；`$1` `$2` … → 第 n 个（越界为空）
+- 引号可包多词：`/merge "feature/login fix" main`
+- **正文没写任何占位符时，参数会自动以 `[调用参数] …` 追加到末尾**——不必强制写占位符，
+  但显式写 `$1`/`$2` 能让模型更准确地把值传给对应工具参数。
+
 ## 5. 完成后必跑
 
 ```bash
