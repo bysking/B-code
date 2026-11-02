@@ -234,6 +234,32 @@ test('回归：pushOutput 输出行与消息流按时序交织（不挤在最前
   frame.cleanup();
 });
 
+test('回归：/技能 参数 回车必须提交，且参数随命令一起带上', async () => {
+  const ctrl = new AppController();
+  const submitted: (string | { text: string; images?: ClipboardImage[] })[] = [];
+  const frame = renderApp(ctrl, (t) => submitted.push(t));
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  await wait(30);
+
+  // 无匹配候选：Enter 曾被 SlashMenu 静默吞掉（picked 为 undefined 就什么都不做），
+  // 表现就是"回车后界面毫无变化"。现在应原样提交，交给 cli 决定怎么处理。
+  await press(frame, '/red-line-check 分支a 分支b');
+  await wait(30);
+  await press(frame, '\r');
+  await wait(50);
+  assert.deepEqual(submitted, ['/red-line-check 分支a 分支b'], '无匹配候选也不吞键');
+
+  // 有匹配候选：选中时参数不能丢（曾提交成 "/model"，参数整段消失）
+  submitted.length = 0;
+  await press(frame, '/model claude-opus-5-5');
+  await wait(30);
+  await press(frame, '\r');
+  await wait(50);
+  assert.deepEqual(submitted, ['/model claude-opus-5-5'], '选中候选时保留参数');
+
+  frame.cleanup();
+});
+
 test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async () => {
   const ctrl = new AppController();
   const frame = renderApp(ctrl);

@@ -19,7 +19,7 @@ import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
 import type { SpinnerLike } from './ui.js';
 import type { Mode } from './permissions.js';
 import { readClipboardImage, type ClipboardImage } from './utils/clipboard.js';
-import { checkForUpdate } from './version-check.js';
+import { checkForUpdate, localVersion } from './version-check.js';
 
 /**
  * 聊天输入封装：自动检测剪贴板图片，如果存在则与文本一起发送给模型。
@@ -240,9 +240,10 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     },
   });
 
-  // 绿色欢迎文案
+  // 绿色欢迎文案（末尾附版本号，读不到时省略）
+  const version = localVersion();
   process.stderr.write(
-    '\x1b[32m🚀 每一个伟大的背后，都来源于一次勇敢的尝试。您的AI编程助手，B Code 已就绪\x1b[0m\n\n',
+    `\x1b[32m🚀 每一个伟大的背后，都来源于一次勇敢的尝试。您的AI编程助手，B Code 已就绪${version ? ` v${version}` : ''}\x1b[0m\n\n`,
   );
 
   await agent.initMcp();

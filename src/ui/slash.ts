@@ -28,6 +28,15 @@ export function slashBaseName(query: string): string {
   return query.replace(/^\//, '').split(/\s+/)[0] ?? '';
 }
 
+/**
+ * 取出 `/name 参数…` 中的参数字符串（不含 name，保留原始形式与引号）。
+ * query 带不带前导 `/` 都接受（App 传入的是去掉 `/` 的部分）。
+ */
+export function slashArgs(query: string): string {
+  const rest = query.replace(/^\//, '');
+  return rest.replace(/^\S+/, '').trim();
+}
+
 /** 过滤候选：基础名前缀匹配（不区分大小写） */
 export function filterSlash(query: string, items: SlashItem[]): SlashItem[] {
   const base = slashBaseName(query).toLowerCase();
@@ -45,9 +54,22 @@ export function clampIndex(idx: number, length: number): number {
  * Tab 补全产出："/name " —— 恒带 / 前缀；尾空格让光标停在"补全内容之后一格"，
  * 继续输入参数时自然有了分隔（光标位置由 App 用 key 重挂 TextInput 保证落点）。
  */
-export function buildSlash(_line: string, itemName: string): string {
+export function buildSlash(line: string, itemName: string): string {
   // 恒带 `/` 前缀：补全后输入框文本保持"/name "（幂等：再 Tab 结果不变）
-  return `/${itemName} `;
+  // 已输入的参数原样保留，不能被补全抹掉（"/commit 修复登录 bug" + Tab 仍应带着 bug 描述）
+  const args = slashArgs(line);
+  return args ? `/${itemName} ${args}` : `/${itemName} `;
+}
+
+/**
+ * Enter 选中候选后真正提交的行：`/name` + 用户已输入的参数。
+ *
+ * 参数必须带上：菜单只按基础名过滤，用户敲的 `/red-line-check 分支a 分支b` 里
+ * 参数若在选中时被丢弃，技能/命令就拿不到分支名这类必需输入了。
+ */
+export function buildSubmitLine(query: string, itemName: string): string {
+  const args = slashArgs(query);
+  return args ? `/${itemName} ${args}` : `/${itemName}`;
 }
 
 /** Esc / 无匹配时给出安全行为 */

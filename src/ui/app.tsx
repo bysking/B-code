@@ -19,7 +19,7 @@ import { TaskPanel } from './task-panel.js';
 import { TodoPanel } from './todo-panel.js';
 import { AskInput } from './ask-input.js';
 import { ModeBar } from './mode-bar.js';
-import { buildSlash } from './slash.js';
+import { buildSlash, buildSubmitLine } from './slash.js';
 import type { ScrollFollow } from './scroll-follow.js';
 
 /**
@@ -273,8 +273,10 @@ export function App({
           query={ctrl.slashQuery}
           items={ctrl.slashItems}
           onPick={(item) => {
-            handleSubmit(`/${item.name}`);
+            // 带上用户已输入的参数：菜单只按基础名过滤，参数不能被选中动作吃掉
+            handleSubmit(buildSubmitLine(input, item.name));
           }}
+          onSubmitRaw={() => handleSubmit(input)}
           onComplete={handleComplete}
           onClose={() => ctrl.closeSlash()}
         />

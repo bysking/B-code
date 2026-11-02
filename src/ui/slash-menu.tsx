@@ -15,12 +15,15 @@ export function SlashMenu({
   query,
   items,
   onPick,
+  onSubmitRaw,
   onComplete,
   onClose,
 }: {
   query: string;
   items: SlashItem[];
   onPick: (item: SlashItem) => void;
+  /** 无匹配候选时按 Enter：把输入原样提交（不吞键） */
+  onSubmitRaw: () => void;
   onComplete: (item: SlashItem) => void;
   onClose: () => void;
 }) {
@@ -34,7 +37,10 @@ export function SlashMenu({
     else if (key.downArrow || _input === 'j') setIdx((i) => clampIndex(i + 1, filtered.length));
     else if (key.return) {
       const picked = filtered[clampIndex(idx, filtered.length)];
+      // 无匹配：菜单无从选中，但用户的输入仍然有效（可能是没被索引到的命令，
+      // 或想走普通对话）——必须放行，否则 Enter 被静默吞掉，界面毫无反应。
       if (picked) onPick(picked);
+      else onSubmitRaw();
     } else if (key.tab) {
       const picked = filtered[clampIndex(idx, filtered.length)];
       if (picked) onComplete(picked);
