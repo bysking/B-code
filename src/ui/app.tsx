@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
+import type { AppController, SlashItem, TaskPanelState, ToolCallDisplay } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
 import { readClipboardImage, readClipboardText } from '../utils/clipboard.js';
@@ -20,6 +20,7 @@ import { TodoPanel } from './todo-panel.js';
 import { AskInput } from './ask-input.js';
 import { ModeBar } from './mode-bar.js';
 import { buildSlash } from './slash.js';
+import type { ScrollFollow } from './scroll-follow.js';
 
 /**
  * ink 根组件：控制器状态 → 渲染树。
@@ -34,6 +35,7 @@ export function App({
   onExit,
   onSetMode,
   initialOutput,
+  scrollFollow,
 }: {
   ctrl: AppController;
   onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void;
@@ -41,9 +43,37 @@ export function App({
   onExit: () => void;
   onSetMode: (mode: Mode) => void;
   initialOutput?: string[];
+  /** 智能跟随：视口在底部时才自动滚动，滚离后冻结画面让用户回看（可缺省 → 恒跟随） */
+  scrollFollow?: ScrollFollow;
 }) {
   const [, force] = useState(0);
   useEffect(() => ctrl.subscribe(() => force((v) => v + 1)), [ctrl]);
+  // 跟随状态切换（滚离/回到底部）时重渲染：false 帧交给 MessageList 冻结快照
+  const [follow, setFollow] = useState(() => scrollFollow?.isFollowing() ?? true);
+  useEffect(() => {
+    if (!scrollFollow) return;
+    setFollow(scrollFollow.isFollowing());
+    return scrollFollow.subscribe(() => setFollow(scrollFollow.isFollowing()));
+  }, [scrollFollow]);
+
+  // 需要用户当场作答的交互（权限确认/向导/文本提问）必须可见：强制回到底部，
+  // 否则冻结在历史里的用户看不到在等自己确认。
+  const needsAnswer = Boolean(ctrl.askState || ctrl.askWizardState || ctrl.askTextState);
+  useEffect(() => {
+    if (needsAnswer) scrollFollow?.follow();
+  }, [needsAnswer, scrollFollow]);
+
+  // 底部面板（任务/待办）冻结快照：它们随工具状态频繁变化，滚离期间同样不能刷屏，
+  // 否则视口仍会被拽回底部（时间面板可能为空但仍占位，故单独记录"冻结时刻是否有"）。
+  const panelsRef = useRef<{ task: TaskPanelState | null; todos: typeof ctrl.todos } | null>(null);
+  if (follow) panelsRef.current = null;
+  else if (!panelsRef.current) {
+    panelsRef.current = {
+      task: ctrl.task ? { ...ctrl.task, items: ctrl.task.items.map((it) => ({ ...it })) } : null,
+      todos: ctrl.todos.map((t) => ({ ...t })),
+    };
+  }
+  const frozen = panelsRef.current ?? { task: ctrl.task, todos: ctrl.todos };
   // 终端尺寸变化：重估流式防溢出预算（live 帧超终端行数会触发 Ink 整屏清屏，滚动位置被重置）
   useEffect(() => {
     const onResize = () => ctrl.handleResize();
@@ -92,6 +122,8 @@ export function App({
     // Ctrl+O：切换工具输出面板（再次按下或 Esc 关闭）
     if (key.ctrl && _input === 'o') {
       ctrl.toggleOutputPanel();
+      // 主动打开面板 = 要看工具输出：强制回到底部（否则面板长在冻结视口下方看不见）
+      if (ctrl.outputPanel) scrollFollow?.follow();
       return;
     }
     // Shift+Tab：循环切换模式（向后循环）
@@ -196,6 +228,8 @@ export function App({
     setInputNonce((n) => n + 1); // 重挂 TextInput 让光标回到末尾
     imagesRef.current = []; // 清空本次已消费的图片
     ctrl.closeSlash();
+    // 主动提交 = 用户要看新一轮输出：强制回到底部（否则冻结在新消息上，看不到回复）
+    scrollFollow?.follow();
 
     if (usedImages.length > 0) {
       onSubmit({ text: cleanText, images: usedImages });
@@ -220,6 +254,7 @@ export function App({
           busySince={ctrl.busySince}
           busyThinking={ctrl.busyThinking}
           busyInputTokens={ctrl.busyInputTokens}
+          follow={follow}
         />
       </Box>
 
@@ -247,9 +282,10 @@ export function App({
 
       {ctrl.outputPanel ? <OutputPanel tools={allToolOutputs(ctrl)} /> : null}
 
-      {ctrl.task ? <TaskPanel task={ctrl.task} /> : null}
+      {/* 底部面板同样冻结：任务状态每个 tick 都在变，不冻结会把视口拽回底部 */}
+      {frozen.task ? <TaskPanel task={frozen.task} /> : null}
 
-      <TodoPanel todos={ctrl.todos} />
+      <TodoPanel todos={frozen.todos} />
 
       {quitArmed ? (
         <Box>

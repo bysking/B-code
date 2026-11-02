@@ -499,3 +499,94 @@ test('模型调用事件序列：busy_think → busy_tokens(估算) → usage �
   const realBusy = events[3] as { input_tokens: number };
   assert.equal(realBusy.input_tokens, 999, '真实值覆盖估算回填 busy');
 });
+
+// ── 工具调用重试（幂等工具才重试；写/shell 绝不重试）────────────────
+
+/** 注册一个可控失败次数的假工具，捕获 handler 被调用次数 */
+function registerFlakyTool(
+  agent: Agent,
+  name: string,
+  mode: 'read' | 'write' | 'shell' | 'external',
+  failTimes: number,
+) {
+  let calls = 0;
+  agent.registry.register({
+    name,
+    description: `flaky ${name}`,
+    inputSchema: { type: 'object', properties: {} },
+    mode,
+    kind: 'builtin',
+    handler: () => {
+      calls++;
+      if (calls <= failTimes) {
+        throw Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' });
+      }
+      return `${name}-ok`;
+    },
+  });
+  return () => calls;
+}
+
+/** 让模型先调用一次指定工具，再文本收尾 */
+function callToolOnce(fn: (input: ModelInput) => Promise<ModelOutput>, toolName: string) {
+  let step = 0;
+  return async (input: ModelInput): Promise<ModelOutput> => {
+    step++;
+    if (step === 1) {
+      return { content: [{ type: 'tool_use', id: 'tu-x', name: toolName, input: {} }] };
+    }
+    return fn(input);
+  };
+}
+
+test('工具重试：只读工具遇网络错误会重试并最终成功', async () => {
+  const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'read_flaky', input: {} }] }, { text: 'done' }]);
+  const agent = new Agent({
+    callModel: (i: ModelInput) => fn(i),
+    print: () => {},
+    askUser: async () => true, // 权限层放行（headless 默认拒，会挡住工具执行）
+    retrySleep: async () => {}, // 即时退避：不真等 10s
+  });
+  const calls = registerFlakyTool(agent, 'read_flaky', 'read', 2); // 前两次失败，第三次成功
+  await agent.chat('go');
+
+  assert.equal(calls(), 3, '只读工具失败后重试，共执行 3 次');
+  const last = agent
+    .history()
+    .filter((m) => m.role === 'user')
+    .at(-1) as {
+    content: { content: string }[];
+  };
+  assert.ok(String(last.content[0]!.content).includes('read_flaky-ok'), '重试后成功，结果喂回模型');
+});
+
+test('工具重试：写工具遇到可重试错误也不自动重试（防重复写入）', async () => {
+  const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'write_flaky', input: {} }] }, { text: 'done' }]);
+  const agent = new Agent({
+    callModel: (i: ModelInput) => fn(i),
+    print: () => {},
+    askUser: async () => true,
+  });
+  const calls = registerFlakyTool(agent, 'write_flaky', 'write', 1);
+  await agent.chat('go');
+
+  assert.equal(calls(), 1, '写工具失败只执行 1 次，绝不重试');
+  const last = agent
+    .history()
+    .filter((m) => m.role === 'user')
+    .at(-1) as { content: { content: string }[] };
+  assert.ok(String(last.content[0]!.content).startsWith('Error:'), '错误原样交给模型判断');
+});
+
+test('工具重试：shell 工具遇到可重试错误也不自动重试（防命令重复执行）', async () => {
+  const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'shell_flaky', input: {} }] }, { text: 'done' }]);
+  const agent = new Agent({
+    callModel: (i: ModelInput) => fn(i),
+    print: () => {},
+    askUser: async () => true,
+  });
+  const calls = registerFlakyTool(agent, 'shell_flaky', 'shell', 1);
+  await agent.chat('go');
+
+  assert.equal(calls(), 1, 'shell 失败只执行 1 次，绝不重试');
+});

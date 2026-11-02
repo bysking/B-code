@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { callModel, defaultModel, estimateTokens, type ModelInput, type ModelOutput } from './backend.js';
+import { formatDelay, withRetry, type Sleeper } from './retry.js';
 import type { ClipboardImage } from './utils/clipboard.js';
 import { registerBuiltinTools } from './tools.js';
 import { registerPlanTools } from './plan.js';
@@ -63,6 +64,20 @@ export type AgentEvent =
   /** 模型调用完成的真实 token 用量（落 turn 元信息） */
   | { type: 'usage'; usage: { input_tokens: number; output_tokens: number } };
 
+/**
+ * 该工具是否幂等（重复执行无副作用）——决定失败后能否自动重试。
+ *
+ * 白名单而非黑名单：新增工具默认不重试（安全侧），确认无副作用后再加进来。
+ * - 内置 read 类（read_file / list_files / grep_search / file_content）纯读，安全；
+ * - MCP 工具只有显式标了 mode:'read' 的才重试（external 可能带写副作用，不动）；
+ * - 子 agent（kind:'subagent'）会跑完整循环、可能已产生写入，不重试；
+ * - 写类与 shell（write_file / edit_file / run_shell）绝不自动重试。
+ */
+function isIdempotentTool(mp: import('./registry.js').MountPoint): boolean {
+  if (mp.kind === 'subagent') return false;
+  return mp.mode === 'read';
+}
+
 /** 请求输入 token 估算（busy 行实时展示用，非精确）：system + tools + messages 文本估算求和 */
 function estimateInputTokens(
   system: SystemBlock[],
@@ -119,6 +134,8 @@ export interface AgentOptions {
   ) => Promise<string>;
   /** 初始模式：default / plan（只读）/ bypass（--yolo）/ auto */
   mode?: Mode;
+  /** 幂等工具重试的退避等待实现（测试注入即时等待，避免真等 10s~2min）；缺省真实 sleep */
+  retrySleep?: Sleeper;
   /** 持久化白名单存储（可选）：注入则"记住不再问"跨会话生效；缺省不持久化 */
   allowlistStore?: AllowlistStore;
   /** 结构化待办变更回调（UI 更新任务清单视图） */
@@ -138,6 +155,8 @@ export class Agent {
   private readonly print: (text: string) => void;
   private readonly spinner: SpinnerLike;
   private readonly askUser: (question: string) => Promise<boolean>;
+  /** 幂等工具重试的退避等待（缺省真实 sleep；测试注入即时返回） */
+  private readonly retrySleep?: Sleeper;
   private readonly events?: (ev: AgentEvent) => void;
   /** 会话级白名单：确认过一次的 shell:<command> / 工具名不再问 */
   private readonly allowlist = new Set<string>();
@@ -163,6 +182,7 @@ export class Agent {
     this.print = opts.print ?? ((text) => process.stdout.write(text));
     this.spinner = opts.spinner ?? new Spinner();
     this.askUser = opts.askUser ?? (async () => false);
+    this.retrySleep = opts.retrySleep;
     this.events = opts.events;
     this.mode = opts.mode ?? 'default';
     this.allowlistStore = opts.allowlistStore;
@@ -432,6 +452,9 @@ export class Agent {
           onText: (delta) => this.print(delta),
           // 思考块增量 → thinking 事件（UI 以灰色斜体展示）；spinner 不动
           onThinking: (delta) => this.events?.({ type: 'thinking', text: delta }),
+          // 可恢复错误重试：状态行改为提示等待，避免长退避期间看起来像卡死
+          onRetry: ({ attempt, delayMs }) =>
+            this.spinner.start(`接口异常，${formatDelay(delayMs)}后重试（第 ${attempt} 次）…`),
         });
       } catch (err) {
         this.spinner.stop();
@@ -578,7 +601,15 @@ export class Agent {
     this.ctx.onToolOutput = (line: string) => this.print(`  ⤷ ${line}`);
     let output: string;
     try {
-      const raw = await mp.handler(input, this.ctx);
+      // 幂等工具失败才自动重试：读文件/搜索/列目录/MCP 读资源重复执行无副作用。
+      // 写文件/改文件/run_shell 不重试——请求可能已生效但响应丢失，重跑会写两遍/执行两遍。
+      const raw = isIdempotentTool(mp)
+        ? await withRetry(() => Promise.resolve(mp.handler(input, this.ctx)), {
+            signal: this.ctx.signal,
+            ...(this.retrySleep ? { sleep: this.retrySleep } : {}),
+            onRetry: ({ delayMs }) => this.print(`  ⤷ ${mp.name} 失败，${formatDelay(delayMs)}后重试\n`),
+          })
+        : await mp.handler(input, this.ctx);
       // 空输出统一标记：模型看到 "(empty output)" 知道工具执行完毕、只是没产出，
       // 不会误判为"没执行/还在跑"而重复调用
       output = raw == null || String(raw).trim() === '' ? '(empty output)' : String(raw);
@@ -627,6 +658,8 @@ export class Agent {
           ],
           tools: [],
           messages: [{ role: 'user', content: transcript }],
+          // 压缩同样走重试：必须能响应 Esc，否则退避期间（最长约 3 分钟）无法中断
+          signal: this.abortController?.signal,
         });
         const summary = out.content
           .filter((b): b is Anthropic.TextBlockParam => b.type === 'text')

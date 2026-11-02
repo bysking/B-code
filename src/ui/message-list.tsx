@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text } from 'ink';
 import type { OutputLine, ToolCallDisplay, Turn } from './controller.js';
 import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
@@ -17,23 +17,29 @@ function formatTokens(n: number): string {
 /**
  * 底部状态行（参考 Claude Code 的 ✽ Channelling… (34s · ↓ 1.2k tokens · thinking)）：
  * 本地 1s 自 tick 渲染实时耗时 + input token + thinking 相位标签。
+ *
+ * frozen=true（用户滚离底部，画面冻结中）时停止自 tick：否则每秒一次重渲染会让
+ * ink 写出新帧、把视口拽回底部，回看被打断。
  */
 function BusyLine({
   text,
   since,
   thinking,
   inputTokens,
+  frozen,
 }: {
   text: string;
   since: number;
   thinking: boolean;
   inputTokens: number;
+  frozen: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    if (frozen) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [frozen]);
   const elapsed = Math.max(0, Math.floor((now - since) / 1000));
   const parts = [`${elapsed}s`];
   if (inputTokens > 0) parts.push(`↓ ${formatTokens(inputTokens)} tokens`);
@@ -169,6 +175,21 @@ function hasChunks(t: Turn): boolean {
 }
 
 /**
+ * 深拷贝消息流（冻结快照用）。只复制会被 controller 原地改动的字段：
+ * tools 数组与每个工具对象、chunks/thinkingChunks 数组、usage 对象。
+ * 渲染只读这些字段，浅拷贝其余原语即可。
+ */
+function cloneTurns(turns: Turn[]): Turn[] {
+  return turns.map((t) => ({
+    ...t,
+    tools: t.tools.map((tool) => ({ ...tool })),
+    chunks: [...t.chunks],
+    thinkingChunks: [...t.thinkingChunks],
+    usage: t.usage ? { ...t.usage } : undefined,
+  }));
+}
+
+/**
  * 消息流列表 + 底部状态行（耗时/token/相位实时跳动）。
  *
  * 滚动稳定性（两层防线，目标都是 live 帧高度恒小于终端行数——否则 Ink 触发整屏清屏
@@ -178,13 +199,14 @@ function hasChunks(t: Turn): boolean {
  *    live 区只保留尾部——长回复/长工具日志也不会撑爆 live 帧（见 scroll-budget.ts）。
  */
 export function MessageList({
-  turns,
-  output,
+  turns: turnsProp,
+  output: outputProp,
   initialOutput,
-  busy,
+  busy: busyProp,
   busySince,
-  busyThinking,
-  busyInputTokens,
+  busyThinking: busyThinkingProp,
+  busyInputTokens: busyInputTokensProp,
+  follow,
 }: {
   turns: Turn[];
   output: OutputLine[];
@@ -193,7 +215,49 @@ export function MessageList({
   busySince: number | null;
   busyThinking: boolean;
   busyInputTokens: number;
+  /** 是否跟随到底部。false = 用户已滚离，画面冻结让用户回看（输出本身照常生成）。 */
+  follow: boolean;
 }) {
+  // ── 冻结快照 ───────────────────────────────────────────────
+  // controller 原地修改 turn/task 对象，只"不重渲染"挡不住内容变化：必须克隆出
+  // 一份冻结时刻的快照，冻结期间始终渲染它。输出逐字节不变 → ink 判定无变化 →
+  // 零写入 → 视口停在用户滚动的位置，不再被拽回底部。
+  const renderedRef = useRef(false);
+  const snapshotRef = useRef<{
+    turns: Turn[];
+    output: OutputLine[];
+    busy: string | null;
+    busyThinking: boolean;
+    busyInputTokens: number;
+  } | null>(null);
+
+  if (follow) {
+    // 强制重新渲染。见下方注释：ctrl.turns 是原地 push 的可变数组，引用不变会命中
+    // ink <Static> 的 useMemo 缓存导致新条目不渲染；切回跟随必须换新引用。
+    snapshotRef.current = null;
+  } else if (!snapshotRef.current) {
+    // 只在本组件已渲染过一次之后才建快照：首次挂载时若已处于冻结态（启动即滚离），
+    // 用空状态建快照会把整屏冻成空白。这一次先渲染当前内容，下次渲染起才真正冻结。
+    if (renderedRef.current) {
+      snapshotRef.current = {
+        turns: cloneTurns(turnsProp),
+        output: [...outputProp],
+        busy: busyProp,
+        busyThinking: busyThinkingProp,
+        busyInputTokens: busyInputTokensProp,
+      };
+    }
+  }
+  renderedRef.current = true;
+
+  const snap = snapshotRef.current;
+  const turns = snap ? snap.turns : turnsProp;
+  const output = snap ? snap.output : outputProp;
+  // busySince 冻结：快照时刻 = 冻结那一刻，耗时随之停住（BusyLine 也停止自 tick）
+  const busy = snap ? snap.busy : busyProp;
+  const busyThinking = snap ? snap.busyThinking : busyThinkingProp;
+  const busyInputTokens = snap ? snap.busyInputTokens : busyInputTokensProp;
+
   // 组装 <Static> 条目：output 行与 turn 共用同一 id 序列 → 统一按 id 升序合并，
   // 输出行落在它发生的那一刻（例如 (mode → plan) 出现在切换前后的两条消息之间）。
   // （initialOutput 是启动期输出，无 id，恒排在最前。）
@@ -314,7 +378,13 @@ export function MessageList({
         )}
         {busy && busySince !== null ? (
           <Box marginTop={1}>
-            <BusyLine text={busy} since={busySince} thinking={busyThinking} inputTokens={busyInputTokens} />
+            <BusyLine
+              text={busy}
+              since={busySince}
+              thinking={busyThinking}
+              inputTokens={busyInputTokens}
+              frozen={!follow}
+            />
           </Box>
         ) : null}
       </Box>

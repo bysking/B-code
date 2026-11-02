@@ -3,6 +3,7 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages
 import { EnvHttpProxyAgent, fetch as undiciFetch } from 'undici';
 import type { SystemBlock } from './prompt.js';
 import { flattenSystemBlocks } from './prompt.js';
+import { MAX_RETRIES, withRetry } from './retry.js';
 
 /**
  * 网络层：自包含的 undici v6（与 Node 22 内置同源）。
@@ -60,6 +61,8 @@ export interface ModelInput {
   onThinking?: (delta: string) => void;
   /** 硬中断：用户取消时 abort——在飞请求/流式读取立即终止（抛 AbortError） */
   signal?: AbortSignal;
+  /** 可恢复错误即将重试时的通知（UI 展示"Ns 后重试"；不传则静默重试） */
+  onRetry?: (info: { attempt: number; delayMs: number; error: unknown }) => void;
 }
 
 export interface ModelOutput {
@@ -243,8 +246,7 @@ export function withMessageCacheBreakpoint(messages: MessageParam[]): MessagePar
 // ── 统一调用入口 ──────────────────────────────────────────────────
 
 /** OpenAI 兼容后端请求参数：重试次数 / 退避基数 / 流式空闲超时 */
-export const OPENAI_MAX_RETRIES = 2;
-const RETRY_BASE_DELAY_MS = 800;
+export const OPENAI_MAX_RETRIES = MAX_RETRIES;
 
 /** 流式空闲超时（ms）：超过该时长没有新 chunk 就 abort——防 API 半挂时会话永久挂死 */
 export const IDLE_TIMEOUT_MS = (() => {
@@ -252,41 +254,36 @@ export const IDLE_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 })();
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason ?? new Error('Aborted'));
-    const t = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      reject(signal!.reason ?? new Error('Aborted'));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-/** 幂等重试：5xx/429 与网络错误指数退避重试，4xx 客户端错误直接原样返回。
- * signal 已 abort → 立即抛 AbortError；退避等待期间也响应取消。 */
+/**
+ * 带重试的请求：5xx/408/409/429 与网络错误按统一节奏退避重试
+ * （10s → 20s → 30s → 2min，见 retry.ts），4xx 客户端错误直接原样返回。
+ * signal 已 abort → 立即抛 AbortError；退避等待期间也响应取消。
+ */
 async function fetchWithRetry(
   url: string,
   init: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<Awaited<ReturnType<typeof proxiedFetch>>> {
-  for (let attempt = 0; ; attempt++) {
-    if (signal?.aborted) throw signal.reason ?? new Error('Aborted');
-    try {
-      const resp = await proxiedFetch(url, { ...init, ...(signal ? { signal } : {}) });
-      const retryable = resp.status >= 500 || resp.status === 429;
-      if (resp.ok || !retryable || attempt >= OPENAI_MAX_RETRIES) return resp;
-      await resp.body?.cancel(); // 释放连接以便重试
-    } catch (err) {
-      if (signal?.aborted) throw signal.reason ?? new Error('Aborted');
-      if (attempt >= OPENAI_MAX_RETRIES) throw err;
-    }
-    await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt, signal); // 800ms → 1600ms 指数退避
-  }
+  return withRetry(
+    async () => {
+      try {
+        const resp = await proxiedFetch(url, { ...init, ...(signal ? { signal } : {}) });
+        // 可重试的状态码转成错误抛出，交给 withRetry 统一判定与退避
+        if (
+          !resp.ok &&
+          (resp.status >= 500 || resp.status === 408 || resp.status === 409 || resp.status === 429)
+        ) {
+          await resp.body?.cancel(); // 释放连接以便重试
+          throw Object.assign(new Error(`HTTP ${resp.status}`), { status: resp.status });
+        }
+        return resp;
+      } catch (err) {
+        // 响应体读取阶段的网络错误：保留原始错误让 withRetry 判定
+        throw err;
+      }
+    },
+    { signal },
+  );
 }
 
 /**
@@ -424,36 +421,70 @@ export class OpenAIBackend implements ModelBackend {
 
   async call(input: ModelInput): Promise<ModelOutput> {
     const systemText = flattenSystemBlocks(input.system);
-    const resp = await fetchWithRetry(
-      `${process.env.OPENAI_BASE_URL}/chat/completions`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: input.model,
-          messages: [{ role: 'system', content: systemText }, ...toOpenAIMessages(input.messages)],
-          tools: toOpenAITools(input.tools),
-          stream: true,
-          // 流式末尾回传 usage 块（不支持的兼容服务会忽略该字段，优雅降级）
-          stream_options: { include_usage: true },
-        }),
-      },
-      input.signal,
-    );
-    if (!resp.ok) {
-      throw new Error(`OpenAI API ${resp.status}: ${await resp.text()}`);
-    }
+    // 已向 UI 吐出的正文/思考增量：一旦非空就不能再重试，否则重来一遍会重复输出。
+    // 此时失败直接上抛，由上层把错误交给用户/模型处理。
+    let emitted = false;
+    const tracked: ModelInput = {
+      ...input,
+      onText: input.onText
+        ? (delta: string) => {
+            emitted = true;
+            input.onText!(delta);
+          }
+        : undefined,
+      onThinking: input.onThinking
+        ? (delta: string) => {
+            emitted = true;
+            input.onThinking!(delta);
+          }
+        : undefined,
+    };
 
-    // 兼容性：部分 OpenAI 兼容服务即使请求 stream:true 也返回普通 JSON → 非流式降级
-    const isSSE = (resp.headers.get('content-type') ?? '').includes('text/event-stream');
-    if (!isSSE) {
-      return fromOpenAIResponse(JSON.parse(await resp.text()));
-    }
-    // 真·流式：reader 边收边回调，onText 随数据到达即时触发
-    return streamOpenAISSE(resp, input.onText, input.signal);
+    return withRetry(
+      async () => {
+        emitted = false;
+        const resp = await fetchWithRetry(
+          `${process.env.OPENAI_BASE_URL}/chat/completions`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: tracked.model,
+              messages: [{ role: 'system', content: systemText }, ...toOpenAIMessages(tracked.messages)],
+              tools: toOpenAITools(tracked.tools),
+              stream: true,
+              // 流式末尾回传 usage 块（不支持的兼容服务会忽略该字段，优雅降级）
+              stream_options: { include_usage: true },
+            }),
+          },
+          tracked.signal,
+        );
+        if (!resp.ok) {
+          throw Object.assign(new Error(`OpenAI API ${resp.status}: ${await resp.text()}`), {
+            status: resp.status,
+          });
+        }
+
+        // 兼容性：部分 OpenAI 兼容服务即使请求 stream:true 也返回普通 JSON → 非流式降级
+        const isSSE = (resp.headers.get('content-type') ?? '').includes('text/event-stream');
+        if (!isSSE) {
+          return fromOpenAIResponse(JSON.parse(await resp.text()));
+        }
+        // 真·流式：reader 边收边回调，onText 随数据到达即时触发
+        return streamOpenAISSE(resp, tracked.onText, tracked.signal);
+      },
+      {
+        signal: tracked.signal,
+        // 已吐出流式内容后不能再重试：重来一遍会把同一段文字输出两次
+        onRetry: ({ attempt, delayMs, error }) => {
+          if (emitted) throw error;
+          input.onRetry?.({ attempt, delayMs, error });
+        },
+      },
+    );
   }
 }
 
@@ -481,35 +512,57 @@ export class AnthropicBackend implements ModelBackend {
     const thinkingBudget = Number(process.env.B_CODE_THINKING ?? '');
     // B_CODE_MAX_TOKENS：输出上限可配（默认 4096；无效值回退默认）
     const maxTokens = Number(process.env.B_CODE_MAX_TOKENS ?? '4096');
-    const stream = this.client.messages.stream(
-      {
-        model: input.model,
-        max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
-        system: input.system,
-        // 前缀缓存断点：tools 尾部 + 最后一条消息（0.1× 缓存命中计费的关键）
-        tools: withToolCacheBreakpoint(input.tools),
-        messages: withMessageCacheBreakpoint(input.messages),
-        ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
-          ? { thinking: { type: 'enabled' as const, budget_tokens: thinkingBudget } }
-          : {}),
+
+    // 已吐出的流式增量：一旦非空就不再重试（重来会把同一段文字输出两次）
+    let emitted = false;
+
+    return withRetry(
+      async () => {
+        emitted = false;
+        const stream = this.client.messages.stream(
+          {
+            model: input.model,
+            max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
+            system: input.system,
+            // 前缀缓存断点：tools 尾部 + 最后一条消息（0.1× 缓存命中计费的关键）
+            tools: withToolCacheBreakpoint(input.tools),
+            messages: withMessageCacheBreakpoint(input.messages),
+            ...(Number.isFinite(thinkingBudget) && thinkingBudget > 0
+              ? { thinking: { type: 'enabled' as const, budget_tokens: thinkingBudget } }
+              : {}),
+          },
+          // 硬中断：用户取消时透传 AbortSignal，SDK 中止在飞请求与流式读取
+          input.signal ? { signal: input.signal } : undefined,
+        );
+        if (input.onText) {
+          stream.on('text', (text) => {
+            emitted = true;
+            input.onText!(text);
+          });
+        }
+        if (input.onThinking) {
+          // SDK MessageStream 对 thinking_delta 事件 emit 这个签名：(delta, snapshot)
+          stream.on('thinking', (delta) => {
+            emitted = true;
+            input.onThinking!(delta);
+          });
+        }
+        const reply = await stream.finalMessage();
+        return {
+          content: reply.content as Anthropic.ContentBlock[],
+          usage: reply.usage
+            ? { input_tokens: reply.usage.input_tokens, output_tokens: reply.usage.output_tokens }
+            : undefined,
+        };
       },
-      // 硬中断：用户取消时透传 AbortSignal，SDK 中止在飞请求与流式读取
-      input.signal ? { signal: input.signal } : undefined,
+      {
+        signal: input.signal,
+        onRetry: ({ attempt, delayMs, error }) => {
+          if (emitted) throw error;
+          input.onRetry?.({ attempt, delayMs, error });
+        },
+      },
     );
-    if (input.onText) {
-      stream.on('text', (text) => input.onText!(text));
-    }
-    if (input.onThinking) {
-      // SDK MessageStream 对 thinking_delta 事件 emit 这个签名：(delta, snapshot)
-      stream.on('thinking', (delta) => input.onThinking!(delta));
-    }
-    const reply = await stream.finalMessage();
-    return {
-      content: reply.content as Anthropic.ContentBlock[],
-      usage: reply.usage
-        ? { input_tokens: reply.usage.input_tokens, output_tokens: reply.usage.output_tokens }
-        : undefined,
-    };
   }
 }
 
