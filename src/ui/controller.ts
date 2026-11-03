@@ -6,8 +6,18 @@
  * 订阅渲染。非 TTY 路径不使用本类（保持 raw 直写）。
  */
 
-import { estimateLines, findStreamSplit, liveLineBudget, terminalCols } from './scroll-budget.js';
+import {
+  estimateLines,
+  findStreamSplit,
+  isCompactTerminal,
+  LIVE_TOOL_ROWS_MAX,
+  liveLineBudget,
+  terminalCols,
+} from './scroll-budget.js';
+import { todoPanelHeight } from './todo-panel.js';
+import { taskPanelHeight } from './task-panel.js';
 import type { Mode } from '../permissions.js';
+import type { UserTodo } from '../user-todo.js';
 
 export type ToolStatus = 'queued' | 'running' | 'done';
 
@@ -51,6 +61,15 @@ export interface Turn {
   chunks: string[];
   /** thinking 的已提交前缀片段（同 chunks；thinking 是纯文本，无 markdown 切分约束） */
   thinkingChunks: string[];
+  /**
+   * 已"落定"（必为 done）的工具数：其对应工具块已提交进 <Static>，live 区不再渲染。
+   *
+   * 为什么需要：一批工具里只要有一个还没跑完，整个 turn 就不能提交，于是**所有**
+   * 工具块（含已完成的）都滞留在 live 区。一批 30 个工具就能把 live 帧撑到 48 行，
+   * 超过终端行数 → ink 整屏清屏（ESC[3J 连 scrollback 一起清），用户回看位置丢失。
+   * 工具一经 done 就不再变化，天然可提前提交；用计数而非布尔，因为提交是逐个推进的。
+   */
+  toolsCommitted: number;
 }
 
 /** 底部固定任务面板：子项（一个工具调用） */
@@ -149,11 +168,44 @@ export interface SlashItem {
   description: string;
 }
 
+/**
+ * 工具块里展示的参数摘要。
+ *
+ * 不再整段 JSON：早期实现直接 `JSON.stringify(input)` 截 80 字符，结果工具块长这样
+ * `⠒ read_file {"file_path":"/very/long/.../file-22.component.tsx"}` —— 一条占 2 行，
+ * 一批 30 个工具就是 60 行，直接把 live 帧撑过终端高度 → ink 整屏清屏（ESC[3J
+ * 连 scrollback 一起清），用户回看位置丢失。
+ *
+ * 现在只取最具辨识度的单个参数（file_path / pattern / command / url / name），
+ * 且压成一行短摘要：30 个工具也只占 30 行以内，且一眼能看出操作对象。
+ * 完整参数与输出仍在 Ctrl+O 面板。
+ */
 function prettyInput(input: unknown): string {
-  const s = JSON.stringify(input);
-  if (!s || s === '{}') return '';
-  return s.length > 80 ? s.slice(0, 77) + '…' : s;
+  if (!input || typeof input !== 'object') return '';
+  const o = input as Record<string, unknown>;
+  // 按辨识度优先级挑一个关键参数展示
+  for (const key of ['file_path', 'pattern', 'command', 'url', 'name', 'id']) {
+    const v = o[key];
+    if (typeof v === 'string' && v.trim()) return clip(v.trim(), INPUT_LABEL_MAX);
+  }
+  // 没有白名单参数：退回第一个字符串值，仍受长度约束
+  for (const v of Object.values(o)) {
+    if (typeof v === 'string' && v.trim()) return clip(v.trim(), INPUT_LABEL_MAX);
+  }
+  return '';
 }
+
+/** 工具块参数展示上限：足够看清路径/命令主体，又不至于自己就折成两行 */
+const INPUT_LABEL_MAX = 60;
+
+/** 截断并保证**单行**（换行会额外占行，是撑高 live 帧的隐形来源） */
+function clip(s: string, max: number): string {
+  const oneLine = s.replace(/\s*\n\s*/g, ' ⏎ ').replace(/\s+/g, ' ');
+  return oneLine.length > max ? oneLine.slice(0, max - 1) + '…' : oneLine;
+}
+
+/** 内存里保留的系统日志行数上限（Ctrl+O 面板可翻页查看） */
+export const MAX_LOG_LINES = 2000;
 
 /** 固定输出行：id 与 Turn.id 共用同一自增序列，供 MessageList 按时序合并进同一个 <Static> */
 export interface OutputLine {
@@ -165,6 +217,12 @@ export class AppController {
   turns: Turn[] = [];
   /** 固定输出行：(resumed…) / (done) / 告警等 */
   output: OutputLine[] = [];
+  /**
+   * 系统日志（log.info/warn/error）：TTY 下由 setLogSink 接管收进这里，
+   * 供 Ctrl+O 面板查看。**刻意不写 stderr**——每写一次 stderr 终端就把视口
+   * 拉到光标处，用户回看历史时会被日志拽回底部。
+   */
+  logs: string[] = [];
   /** 顶部 busy/thinking 文案（null = 空闲） */
   busy: string | null = null;
   /** busy 开始时间戳（elapsed 计算基准；null = 空闲） */
@@ -187,6 +245,15 @@ export class AppController {
   task: TaskPanelState | null = null;
   /** 模型自管待办清单（todo_write 更新；空数组 = 无） */
   todos: { content: string; status: 'pending' | 'in_progress' | 'completed' }[] = [];
+  /**
+   * 用户自管待办清单（/todo 手动维护）。与上面的**模型自管** todos 刻意分开：
+   * 这份是用户自己的待办，跨会话存续，绝不喂给模型。存 user-todo.json（互不干扰）。
+   */
+  userTodos: UserTodo[] = [];
+  /** /todo 交互编辑器是否打开（TTY 下无参 /todo 进入；开时 App 让出键盘） */
+  userTodoOpen = false;
+  /** 用户待办变更后的落盘钩子（cli 注入；缺省不落盘，便于单测纯内存跑） */
+  persistUserTodos: ((todos: UserTodo[]) => void) | null = null;
   /** 文本输入提问（askText）：null = 无 */
   askTextState: { question: string } | null = null;
   /** 当前模式（plan / auto / bypass / default），UI 底部展示 */
@@ -219,6 +286,17 @@ export class AppController {
   }
 
   // ── 输出与消息流 ────────────────────────────────────────────
+  /**
+   * 追加一条系统日志。只存内存、**不 bump()**：
+   * 日志（MCP 连上/断开、hook 超时等）在后台随时可能发生，若触发重渲染
+   * 会打断正在回看历史的用户。用户按 Ctrl+O 时才看到累积结果。
+   */
+  pushLog(line: string) {
+    this.logs.push(line);
+    // 上限保护：日志可能长期累积（长会话 + MCP 反复重连），只保留最近一段
+    if (this.logs.length > MAX_LOG_LINES) this.logs.splice(0, this.logs.length - MAX_LOG_LINES);
+  }
+
   pushOutput(line: string) {
     // id 与 turn 共用序列：MessageList 把 output 与 turn 统一按 id 排序进同一个 <Static>，
     // 保证输出行插在它发生的那一时点（而非永远堆在最前/最后）。
@@ -242,7 +320,16 @@ export class AppController {
 
   pushUser(text: string) {
     const id = ++this.nextUserTurnId;
-    this.turns.push({ id, role: 'user', text, tools: [], streaming: false, chunks: [], thinkingChunks: [] });
+    this.turns.push({
+      id,
+      role: 'user',
+      text,
+      tools: [],
+      streaming: false,
+      chunks: [],
+      thinkingChunks: [],
+      toolsCommitted: 0,
+    });
     this.task = null; // 新一轮输入 → 面板清空（已完成状态让位于新任务）
     this.bump();
   }
@@ -260,16 +347,29 @@ export class AppController {
         streaming: true,
         chunks: [],
         thinkingChunks: [],
+        toolsCommitted: 0,
       });
     this.enforceLiveHeight(this.turns[this.turns.length - 1]!);
     this.bump();
   }
 
   /** 恢复会话：把最近几轮灌进消息流渲染（id 重新分配，避免与后续新轮冲突） */
-  loadTurns(turns: Array<Omit<Turn, 'id' | 'chunks' | 'thinkingChunks'>>) {
-    this.turns = turns.map((t, i) => ({ chunks: [], thinkingChunks: [], ...t, id: i + 1 }));
-    this.nextUserTurnId = Math.max(this.nextUserTurnId, this.turns.length);
+  loadTurns(turns: Array<Omit<Turn, 'id' | 'chunks' | 'thinkingChunks' | 'toolsCommitted'>>) {
+    this.turns = turns.map((t, i) => ({
+      chunks: [],
+      thinkingChunks: [],
+      ...t,
+      id: i + 1,
+      // 恢复的历史 turn 里工具全部已完成，整个 turn 本就是定稿 → 全部可提交
+      toolsCommitted: t.tools.length,
+    }));
+    this.nextTurnIdEnsure();
     this.bump();
+  }
+
+  /** 保证 id 序列不落后于已灌入的 turn 数（loadTurns 后接续分配） */
+  private nextTurnIdEnsure() {
+    this.nextUserTurnId = Math.max(this.nextUserTurnId, this.turns.length);
   }
 
   /** 模型本轮结束（assistant 不再追加） */
@@ -295,6 +395,8 @@ export class AppController {
     this.pendingTools = items;
     // 底部任务面板：宣布即建（全部 queued → 待…），不随 pendingTools 延后
     this.task = deriveTaskPanel(items);
+    // 面板出现 → 底部占用变大 → live 预算变小，残留内容需提前切走（见 reflowLive）
+    this.reflowLive();
     this.bump();
   }
 
@@ -332,11 +434,18 @@ export class AppController {
   toolEnd(id: string, output?: string) {
     const turn = this.activeAssistant();
     const tool = turn?.tools.find((t) => t.id === id);
-    if (tool) {
+    if (tool && turn) {
       tool.status = 'done';
       if (output !== undefined) tool.output = output;
+      // 已完成且**连续**的前缀工具可提前提交进 <Static>：工具 done 后不再变化，
+      // 没必要因为它所在批次还有别的工具在跑就整批滞留在 live 区（会把帧撑爆）。
+      // 只推进"连续 done 的前缀"——中间夹一个 running 就停下，保证 <Static> 里的
+      // 工具顺序与真实执行顺序一致（Static 只追加，不能回头插入）。
+      let n = 0;
+      while (n < turn.tools.length && turn.tools[n]!.status === 'done') n++;
+      turn.toolsCommitted = n;
       // 整批执行完 → 关掉 streaming，避免下一轮回复并进本 turn
-      if (turn && turn.tools.length > 0 && turn.tools.every((t) => t.status === 'done')) {
+      if (turn.tools.length > 0 && turn.tools.every((t) => t.status === 'done')) {
         turn.streaming = false;
       }
       this.bump();
@@ -361,6 +470,7 @@ export class AppController {
       streaming: false,
       chunks: [],
       thinkingChunks: [],
+      toolsCommitted: 0,
     };
     this.turns.push(t);
     return t;
@@ -381,6 +491,7 @@ export class AppController {
         streaming: true,
         chunks: [],
         thinkingChunks: [],
+        toolsCommitted: 0,
       });
     }
     this.enforceLiveHeight(this.turns[this.turns.length - 1]!);
@@ -398,11 +509,43 @@ export class AppController {
    * 预算分配：thinking 与 text 都在时文本是主体多留（7:3）；单一内容独占整个预算。
    * 切分带滞回（保留约 60% 预算），避免逐 token 频繁提交。
    */
+  /**
+   * 底部浮动面板当前占用的行数（待办 + 任务面板）。
+   * live 预算必须扣掉它，否则面板一变高整帧就溢出终端。
+   */
+  private footerChromeRows(): number {
+    // 与 app.tsx 的渲染保持一致：矮终端下任务面板不渲染，预算就不能算它
+    const task = isCompactTerminal() ? 0 : taskPanelHeight(this.task);
+    return todoPanelHeight(this.todos) + task;
+  }
+
+  /**
+   * live 区里**工具块**占用的行数。
+   *
+   * 工具块渲染在 live 区（未完成的那批），同样要占预算。之前 enforceLiveHeight
+   * 只按 "面板 + 固定 chrome" 扣预算、把剩余全给正文，工具块再叠上去就溢出——
+   * 表现为"任务清单/工具一出现，整帧冲过终端高度 → 整屏清屏"。
+   *
+   * 与 message-list 的 LIVE_TOOL_ROWS_MAX 保持一致：实际渲染是"上限内逐个 + 一行汇总"。
+   */
+  private liveToolBlockRows(): number {
+    const last = this.turns[this.turns.length - 1];
+    if (!last || last.role !== 'assistant') return 0;
+    const pending = Math.max(last.tools.length - last.toolsCommitted, 0);
+    if (pending === 0) return 0;
+    return Math.min(pending, LIVE_TOOL_ROWS_MAX) + (pending > LIVE_TOOL_ROWS_MAX ? 1 : 0);
+  }
+
   private enforceLiveHeight(turn: Turn) {
     const cols = terminalCols();
     const th = estimateLines(turn.thinking ?? '', cols);
     const tx = estimateLines(turn.text, cols);
-    const budget = liveLineBudget();
+    // 预算要扣掉两部分的**实测**高度：
+    //   ① 底部面板（待办/任务）——随条数与折行浮动；
+    //   ② live 区工具块——未完成的那批工具也渲染在 live 里，各占一行。
+    // 用固定常量预留会在面板/工具变多时让整帧溢出终端 → ink 整屏清屏
+    // （ESC[3J 连 scrollback 一起清），用户回看位置被重置。
+    const budget = liveLineBudget(this.footerChromeRows() + this.liveToolBlockRows());
     if (th + tx <= budget) return;
     const keep = Math.max(Math.floor(budget * 0.6), 4);
     const thKeep = tx === 0 ? keep : Math.min(th, Math.floor(keep * 0.3));
@@ -563,6 +706,41 @@ export class AppController {
   /** 设置模型自管待办（Agent.onTodos 接线；UI 底部清单视图） */
   setTodos(todos: { content: string; status: 'pending' | 'in_progress' | 'completed' }[]) {
     this.todos = todos;
+    // 待办面板变高 → live 预算变小 → 已流式的内容可能从"合规"变"超预算"。
+    // 这里必须重估：否则残留的 live 正文会把整帧顶过终端高度，触发 ink 整屏清屏。
+    this.reflowLive();
+    this.bump();
+  }
+
+  /**
+   * 按**当前**底部面板高度重估 live 高度。
+   *
+   * 面板出现/增高/消失都会改变 liveLineBudget()，而 enforceLiveHeight 只在流式
+   * 追加时被调用——面板变化后若不重估，live 区残留内容（正文、thinking）就会
+   * 超出新预算，整帧高于终端 → ink 走整屏清屏分支（ESC[3J 连 scrollback 一起清），
+   * 用户回看位置被重置。这是"任务清单一出现就跳到最底部"的直接原因。
+   */
+  private reflowLive() {
+    const last = this.turns[this.turns.length - 1];
+    if (last) this.enforceLiveHeight(last);
+  }
+
+  // ── 用户自管待办（/todo）────────────────────────────────────
+
+  /**
+   * 覆盖用户待办（编辑器内每次变更传入全量新数组 → 内存 + 落盘）。
+   * 不在 clearAll 里清：这是用户自己的清单，与对话历史无关，/clear 不该抹掉它。
+   */
+  setUserTodos(todos: UserTodo[]) {
+    this.userTodos = todos;
+    this.persistUserTodos?.(todos);
+    this.bump();
+  }
+
+  /** 打开/关闭 /todo 交互编辑器 */
+  setUserTodoOpen(open: boolean) {
+    if (this.userTodoOpen === open) return;
+    this.userTodoOpen = open;
     this.bump();
   }
 

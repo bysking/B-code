@@ -22,9 +22,10 @@ const RANK: Record<LogLevel, number> = {
   error: 40,
 };
 
-const state: { level: LogLevel; fileSink: string } = {
+const state: { level: LogLevel; fileSink: string; sink: LogSink | null } = {
   level: 'info',
   fileSink: '', // 空 = 仅终端
+  sink: null, // 非空 = 由 UI 接管终端展示（TTY 模式）
 };
 
 /** 幂等：可按 env 重新初始化（测试注入 dir / level） */
@@ -59,16 +60,33 @@ function fmt(extra: unknown): string {
   }
 }
 
+/** 日志汇：接住格式化后的行，由调用方决定落地方式（TTY 下转进 UI 面板） */
+export type LogSink = (line: string, level: LogLevel) => void;
+
+/**
+ * 临时接管日志输出。TTY 模式下 UI 会接管：把日志收进内存供 Ctrl+O 查看，
+ * 而不是直接写 stderr。返回卸载函数（还原为默认的 stderr 输出）。
+ *
+ * 为什么要接管：每写一次 stderr，终端就会把视口拉到光标处——用户向上回看历史时
+ * 会被日志拽回去；且 stderr 内容在 ink 接管屏幕后对用户基本不可见（没有地方展示）。
+ *
+ * 注意：**文件落地不受接管影响**（B_CODE_LOG_FILE 仍然照常写），
+ * 接管只改变"终端上怎么显示"。
+ */
+export function setLogSink(sink: LogSink | null): () => void {
+  const prev = state.sink;
+  state.sink = sink;
+  return () => {
+    state.sink = prev;
+  };
+}
+
 function emit(level: LogLevel, msg: string, extra?: unknown): void {
   if (RANK[level] < RANK[state.level]) return; // 级别不够直接丢弃，零格式化开销
   const line = `${new Date().toISOString()} [${level.toUpperCase()}] ${msg}${
     extra === undefined ? '' : ` ${fmt(extra)}`
   }`;
-  // 终端输出：info 用浅色，warn/error 用对应颜色，便于区分启动日志与用户直接输出
-  const dim = level === 'info' ? '\x1b[2m' : '';
-  const reset = level === 'info' ? '\x1b[22m' : '';
-  process.stderr.write(dim + line + reset + '\n');
-  // 文件输出：不加 ANSI 转义
+  // 文件输出：不加 ANSI 转义（先写文件，保证调试日志不因终端接管而丢失）
   if (state.fileSink) {
     try {
       appendFileSync(state.fileSink, line + '\n');
@@ -76,6 +94,15 @@ function emit(level: LogLevel, msg: string, extra?: unknown): void {
       // 磁盘/权限异常时日志不阻塞主流程
     }
   }
+  // 终端输出：有汇（TTY 的 UI 面板）就交给它，否则退回 stderr
+  if (state.sink) {
+    state.sink(line, level);
+    return;
+  }
+  // info 用浅色，warn/error 用对应颜色，便于区分启动日志与用户直接输出
+  const dim = level === 'info' ? '\x1b[2m' : '';
+  const reset = level === 'info' ? '\x1b[22m' : '';
+  process.stderr.write(dim + line + reset + '\n');
 }
 
 export const log = {

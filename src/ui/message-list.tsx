@@ -3,6 +3,7 @@ import { Box, Static, Text } from 'ink';
 import type { OutputLine, ToolCallDisplay, Turn } from './controller.js';
 import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
 import { Markdown } from './markdown-view.js';
+import { LIVE_TOOL_ROWS_MAX } from './scroll-budget.js';
 
 /** token 数值格式化：<1k 原样；<10k 一位小数 k（整千去 .0）；更大整数 k */
 function formatTokens(n: number): string {
@@ -51,15 +52,35 @@ function BusyLine({
   );
 }
 
-/** 工具调用块：┌ ○/⠒/✓ name(args) ┐ 带上做/完成状态 */
+/**
+ * 工具调用块：`⠒ name 参数摘要`，**严格单行**。
+ *
+ * 单行很关键：这条渲染在 live 区，折成两行就意味着高度翻倍。一批工具全在跑时
+ * （都不 done → 整批留在 live），折行足以把帧撑过终端高度，触发 ink 整屏清屏。
+ * 因此名与参数都用 wrap="truncate-end"，宁可截断也不换行。
+ */
 function ToolView({ tool }: { tool: ToolCallDisplay }) {
+  // 单个 Text + truncate-end：相邻两个 Text 各自截断时无法共享剩余宽度，
+  // 合起来仍可能溢出换行。合成一条文本才能可靠地"一行内截断"。
   return (
-    <Box>
-      <Text color={TOOL_COLOR[tool.status]}>
-        {TOOL_SYMBOL[tool.status]} {tool.name}
-      </Text>
+    <Text color={TOOL_COLOR[tool.status]} wrap="truncate-end">
+      {TOOL_SYMBOL[tool.status]} {tool.name}
       {tool.input ? <Text dimColor> {tool.input}</Text> : null}
-    </Box>
+    </Text>
+  );
+}
+
+/** 渲染一批工具，超过上限时折叠尾部为一行汇总 */
+function ToolList({ tools }: { tools: ToolCallDisplay[] }) {
+  const visible = tools.slice(0, LIVE_TOOL_ROWS_MAX);
+  const hidden = tools.length - visible.length;
+  return (
+    <>
+      {visible.map((t) => (
+        <ToolView key={t.id} tool={t} />
+      ))}
+      {hidden > 0 ? <Text dimColor> … 另有 {hidden} 个工具（Ctrl+O 查看）</Text> : null}
+    </>
   );
 }
 
@@ -105,9 +126,7 @@ function TurnView({ turn }: { turn: Turn }) {
           {turn.thinking}
         </Text>
       ) : null}
-      {turn.tools.map((t) => (
-        <ToolView key={t.id} tool={t} />
-      ))}
+      <ToolList tools={turn.tools} />
       {turn.text.trim() ? <Markdown text={turn.text} /> : null}
       <UsageLine turn={turn} />
     </Box>
@@ -133,9 +152,7 @@ function TurnRemainder({ turn }: { turn: Turn }) {
           {turn.thinking}
         </Text>
       ) : null}
-      {turn.tools.map((t) => (
-        <ToolView key={t.id} tool={t} />
-      ))}
+      <ToolList tools={turn.tools} />
       {turn.text.trim() ? <Markdown text={turn.text} /> : null}
       <UsageLine turn={turn} />
     </Box>
@@ -158,11 +175,13 @@ function isCommittable(turn: Turn, isLast: boolean, busy: string | null): boolea
   return true;
 }
 
-/** <Static> 条目：整 turn（未分段）| 流式期提交的片段 | 分段 turn 落定后的余量收尾 | 固定输出行 */
+/** <Static> 条目：整 turn（未分段）| 流式期提交的片段 | 分段 turn 落定后的余量收尾 | 已完成的工具块 | 固定输出行 */
 type StaticEntry =
   | { kind: 'turn'; key: string; turn: Turn }
   | { kind: 'chunk'; key: string; text: string; thinking: boolean; firstOfTurn: boolean }
   | { kind: 'rest'; key: string; turn: Turn }
+  /** turn 未落定、但其中某个工具已完成：工具块单独提前提交，避免堆积在 live 区 */
+  | { kind: 'tool'; key: string; tool: ToolCallDisplay; firstOfTurn: boolean }
   | { kind: 'output'; key: string; text: string };
 
 /** 一条输出行的渲染（dimColor 灰字，与消息流区分） */
@@ -227,6 +246,7 @@ export function MessageList({
     turns: Turn[];
     output: OutputLine[];
     busy: string | null;
+    busySince: number | null;
     busyThinking: boolean;
     busyInputTokens: number;
   } | null>(null);
@@ -243,6 +263,7 @@ export function MessageList({
         turns: cloneTurns(turnsProp),
         output: [...outputProp],
         busy: busyProp,
+        busySince,
         busyThinking: busyThinkingProp,
         busyInputTokens: busyInputTokensProp,
       };
@@ -253,8 +274,12 @@ export function MessageList({
   const snap = snapshotRef.current;
   const turns = snap ? snap.turns : turnsProp;
   const output = snap ? snap.output : outputProp;
-  // busySince 冻结：快照时刻 = 冻结那一刻，耗时随之停住（BusyLine 也停止自 tick）
+  // busySince 冻结：快照时刻 = 冻结那一刻，耗时随之停住（BusyLine 也停止自 tick）。
+  // 必须连同 since 一起冻结：只冻结文案不够——agent 每批工具都 spinner.stop()/start()，
+  // busy 文案在 "thinking…"/"running X…" 之间来回切换，若 since 跟着实时更新，
+  // 冻结的文案配实时起点，一重渲染就整屏重绘（视口被拽回底部）。
   const busy = snap ? snap.busy : busyProp;
+  const since = snap ? snap.busySince : busySince;
   const busyThinking = snap ? snap.busyThinking : busyThinkingProp;
   const busyInputTokens = snap ? snap.busyInputTokens : busyInputTokensProp;
 
@@ -281,8 +306,7 @@ export function MessageList({
   const liveBoundary = firstLiveTurnId === -1 ? Infinity : turns[firstLiveTurnId]!.id;
 
   type SeqItem =
-    | { id: number; kind: 'output'; text: string }
-    | { id: number; kind: 'turn'; turn: Turn; index: number };
+    { id: number; kind: 'output'; text: string } | { id: number; kind: 'turn'; turn: Turn; index: number };
   const seq: SeqItem[] = [];
   for (const o of outputById) seq.push({ id: o.id, kind: 'output', text: o.text });
   turns.forEach((t, i) => seq.push({ id: t.id, kind: 'turn', turn: t, index: i }));
@@ -311,14 +335,24 @@ export function MessageList({
     t.chunks.forEach((c, ci) => pushChunk(c, false, ci));
 
     if (!committable[it.index]) {
-      live.push(t);
+      // turn 还没落定，但其中已完成的工具块可以先行提交（toolsCommitted 是连续前缀计数）。
+      // 这样 live 区只剩"尚未完成"的工具，一批 30 个工具也不会把帧撑爆。
+      const committed = t.toolsCommitted ?? 0;
+      for (let ti = 0; ti < committed; ti++) {
+        entries.push({
+          kind: 'tool',
+          key: `t${t.id}-tl${ti}`,
+          tool: t.tools[ti]!,
+          firstOfTurn,
+        });
+        firstOfTurn = false;
+      }
+      live.push({ ...t, tools: t.tools.slice(committed) });
       continue;
     }
     // 落定：余量作 rest 收尾（chunks 已先入 Static）；未分段则整 turn 一条
     entries.push(
-      firstOfTurn
-        ? { kind: 'turn', key: `t${t.id}`, turn: t }
-        : { kind: 'rest', key: `t${t.id}-r`, turn: t },
+      firstOfTurn ? { kind: 'turn', key: `t${t.id}`, turn: t } : { kind: 'rest', key: `t${t.id}-r`, turn: t },
     );
   }
 
@@ -331,9 +365,7 @@ export function MessageList({
   const staticEntries = [...leading, ...entries];
 
   // live 区：仍在途的输出行与未落定的 turn 也须按 id 排序，保证底部时序正确
-  type LiveItem =
-    | { id: number; kind: 'output'; text: string }
-    | { id: number; kind: 'turn'; turn: Turn };
+  type LiveItem = { id: number; kind: 'output'; text: string } | { id: number; kind: 'turn'; turn: Turn };
   const liveItems: LiveItem[] = [
     ...liveOutput.map((o) => ({ id: o.id, kind: 'output' as const, text: o.text })),
     ...live.map((t) => ({ id: t.id, kind: 'turn' as const, turn: t })),
@@ -363,6 +395,13 @@ export function MessageList({
                   )}
                 </Box>
               );
+            case 'tool':
+              return (
+                <Box key={e.key} flexDirection="column">
+                  {e.firstOfTurn ? <AssistantHeader /> : null}
+                  <ToolView tool={e.tool} />
+                </Box>
+              );
           }
         }}
       </Static>
@@ -376,11 +415,11 @@ export function MessageList({
             <TurnView key={it.turn.id} turn={it.turn} />
           ),
         )}
-        {busy && busySince !== null ? (
+        {busy && since !== null ? (
           <Box marginTop={1}>
             <BusyLine
               text={busy}
-              since={busySince}
+              since={since}
               thinking={busyThinking}
               inputTokens={busyInputTokens}
               frozen={!follow}

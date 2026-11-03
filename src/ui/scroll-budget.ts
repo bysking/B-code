@@ -23,14 +23,86 @@ export function terminalCols(): number {
   return process.stdout.columns || 80;
 }
 
-/** live 区为底部固定元素预留的行数：输入行 / busy 行 / 任务面板 / 确认框等 */
+/**
+ * live 区为**固定**底部元素预留的行数：输入行 / busy 行 / 模式栏。
+ * 面板（任务清单 / 待办）高度是浮动的，不写在这里——由调用方用
+ * liveLineBudget(动态占用) 把它们各自的实测高度传进来。
+ */
 export const CHROME_RESERVED_ROWS = 16;
 /** live 预算下限（极小终端也至少留 8 行给流式尾部） */
 export const MIN_LIVE_BUDGET = 8;
 
-/** live 区可用行数预算 = 终端行数 − 底部预留 */
-export function liveLineBudget(): number {
-  return Math.max(terminalRows() - CHROME_RESERVED_ROWS, MIN_LIVE_BUDGET);
+/**
+ * live 区最多渲染几个工具块（超出折叠成一行汇总）。
+ *
+ * 两处共用（message-list 渲染 / controller 预算），必须一致：
+ * 渲染端按它截断、预算端按它扣行数，任一处改了另一边不跟就会继续溢出。
+ */
+export const LIVE_TOOL_ROWS_MAX = 4;
+
+/**
+ * 终端太小时，底部面板必须让位。
+ *
+ * 面板（待办 + 任务）在窄/矮终端里折行后能轻易吃掉十几二十行；此时再把正文和
+ * 面板一起塞进一屏，物理上放不下 → 整帧必然超过终端高度 → ink 整屏清屏。
+ * 与其继续压缩正文（压到 1 行也没用），不如收起面板：正文才是主体，
+ * 待办/任务状态仍可通过 Ctrl+O 与下一次刷新看到。
+ *
+ * 阈值 = 可用给"正文 + 面板"的总行数；低于它就只保留最必要的部分。
+ */
+export const COMPACT_TERMINAL_ROWS = 30;
+
+/** 终端是否紧张（矮终端） */
+export function isCompactTerminal(): boolean {
+  return terminalRows() < COMPACT_TERMINAL_ROWS;
+}
+
+/**
+ * live 区可用行数预算 = 终端行数 − 底部预留。
+ *
+ * extraChromeRows：底部浮动面板的实测占用行数（todoPanelHeight + taskPanelHeight）。
+ * 必须动态传入：面板高度随条数**和折行**变化（一条长待办能占 3 行），
+ * 用固定常量预留会导致"面板一变高，live 帧连同面板一起超出终端行数"→
+ * ink 整屏清屏（ESC[3J 连 scrollback 一起清）→ 用户回看位置被重置。
+ */
+export function liveLineBudget(extraChromeRows = 0): number {
+  const avail = terminalRows() - (CHROME_RESERVED_ROWS + extraChromeRows);
+  // avail ≤ MIN_LIVE_BUDGET 时（终端很小或面板很高）**不能**硬抬到 8：
+  // 预算一旦与真实可用空间脱钩，整帧必然溢出终端 → ink 整屏清屏。
+  // 此时只保证留 1 行（否则切分逻辑无法收敛）；avail 充裕时才用 MIN_LIVE_BUDGET
+  // 作为"别把正文切得太碎"的下限。
+  if (avail <= MIN_LIVE_BUDGET) return Math.max(avail, 1);
+  return avail;
+}
+
+/**
+ * 按**渲染行数**（而非条数）裁剪列表，返回可见项与剩余条数。
+ *
+ * 为什么不能只限条数：面板里每项是一段自然语言（如 "Add userTodos state + editor
+ * open flag + persist hook to AppController"），在窄终端会折成 2~3 行。限 10 条
+ * 实际可能占 30 行，面板高度失控 → 整帧超过终端行数 → ink 整屏清屏（连 scrollback
+ * 一起清），用户回看位置被重置。按行数裁切才能给出确定的高度上限。
+ *
+ * 第一项总会保留（哪怕它自己就超预算），否则面板会变成空白。
+ */
+export function clampByLines<T>(
+  items: T[],
+  textOf: (item: T) => string,
+  maxLines: number,
+  opts: { cols?: number; reservedLines?: number; lineOf?: (item: T) => number } = {},
+): { visible: T[]; hidden: number; lines: number } {
+  const cols = opts.cols ?? terminalCols();
+  const reserved = opts.reservedLines ?? 0; // 边框/标题/省略提示等固定占用
+  const budget = Math.max(maxLines - reserved, 1);
+  const visible: T[] = [];
+  let used = 0;
+  for (const item of items) {
+    const h = opts.lineOf ? opts.lineOf(item) : estimateLines(textOf(item), cols);
+    if (visible.length > 0 && used + h > budget) break;
+    used += h;
+    visible.push(item);
+  }
+  return { visible, hidden: items.length - visible.length, lines: used };
 }
 
 /** 估算文本按终端宽度硬换行后的行数（CJK 宽度由 wrap-ansi 内部的 string-width 处理） */

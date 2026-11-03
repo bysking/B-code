@@ -14,9 +14,11 @@ import { Confirm } from './confirm.js';
 import { Wizard } from './wizard.js';
 import { SlashMenu } from './slash-menu.js';
 import { InputBox } from './input-box.js';
-import { OutputPanel } from './output-panel.js';
+import { OutputPanel, outputPanelMaxScroll, type PanelTab } from './output-panel.js';
+import { isCompactTerminal, terminalRows } from './scroll-budget.js';
 import { TaskPanel } from './task-panel.js';
 import { TodoPanel } from './todo-panel.js';
+import { UserTodoEditor } from './user-todo-editor.js';
 import { AskInput } from './ask-input.js';
 import { ModeBar } from './mode-bar.js';
 import { buildSlash, buildSubmitLine } from './slash.js';
@@ -74,6 +76,8 @@ export function App({
     };
   }
   const frozen = panelsRef.current ?? { task: ctrl.task, todos: ctrl.todos };
+  // 矮终端：只保留一个底部面板（见下方渲染处注释），避免整帧超过终端高度
+  const compact = isCompactTerminal();
   // 终端尺寸变化：重估流式防溢出预算（live 帧超终端行数会触发 Ink 整屏清屏，滚动位置被重置）
   useEffect(() => {
     const onResize = () => ctrl.handleResize();
@@ -88,90 +92,123 @@ export function App({
   const [inputNonce, setInputNonce] = useState(0);
   // 双 Ctrl+C：第一次提示，第二次真正退出（2s 内有效）
   const [quitArmed, setQuitArmed] = useState(false);
+  // Ctrl+O 面板的翻页偏移（0 = 贴底看最新日志；正数 = 向上翻看更早的行）
+  const [panelScroll, setPanelScroll] = useState(0);
+  // Ctrl+O 面板的标签页：工具输出 / 系统日志（Tab 切换）
+  const [panelTab, setPanelTab] = useState<PanelTab>('tools');
   // 输入历史：提交过的提示词，用于上下键导航（最新在前）
   const inputHistory = useRef<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1); // -1 = 当前输入，≥0 为历史索引
   // 粘贴的图片数据：[image #N] 占位符 → N-1 索引
   const imagesRef = useRef<ClipboardImage[]>([]);
 
-  useInput((_input, key) => {
-    // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
-    if (key.ctrl && _input === 'c') {
-      if (ctrl.askState) {
-        // Ctrl+C 取消审批 = 拒绝（Yes 已在第一项，不能用 options[0]）
-        const deny = ctrl.askState.options.find((o) => o.value === 'no');
-        ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? '');
+  useInput(
+    (_input, key) => {
+      // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
+      if (key.ctrl && _input === 'c') {
+        if (ctrl.askState) {
+          // Ctrl+C 取消审批 = 拒绝（Yes 已在第一项，不能用 options[0]）
+          const deny = ctrl.askState.options.find((o) => o.value === 'no');
+          ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? '');
+          return;
+        }
+        if (ctrl.askWizardState) {
+          ctrl.resolveAskWizard('__cancel__');
+          return;
+        }
+        if (ctrl.askTextState) {
+          ctrl.resolveAskText('', true);
+          return;
+        }
+        if (quitArmed) {
+          onExit();
+          return;
+        }
+        setQuitArmed(true);
+        setTimeout(() => setQuitArmed(false), 2000);
         return;
       }
-      if (ctrl.askWizardState) {
-        ctrl.resolveAskWizard('__cancel__');
+      // Ctrl+O：切换工具输出面板（再次按下或 Esc 关闭）
+      // 刻意**不**强制回到底部：查看日志与"回看历史"目标一致，不该把视口拽走。
+      // 面板渲染在 live 帧底部，冻结态下同样会被画出来（冻结只锁内容快照，不阻止面板出现）。
+      if (ctrl.outputPanel) {
+        // Tab 在"工具输出 / 系统日志"之间切换（Shift+Tab 在本面板内也让位给切换，
+        // 避免误切成权限模式）。切换后回贴底，因为两页的滚动尺度完全不同。
+        if (key.tab) {
+          setPanelTab((t) => (t === 'tools' ? 'logs' : 'tools'));
+          setPanelScroll(0);
+          return;
+        }
+        // 面板打开时接管 ↑↓：翻页看完整日志（PgUp/PgDn 加大步长）
+        const step = key.pageUp || key.pageDown ? Math.max(terminalRows() - 12, 5) : 1;
+        if (key.upArrow || key.pageUp) {
+          setPanelScroll((s) =>
+            Math.min(s + step, outputPanelMaxScroll(allToolOutputs(ctrl), panelTab, ctrl.logs)),
+          );
+          return;
+        }
+        if (key.downArrow || key.pageDown) {
+          setPanelScroll((s) => Math.max(s - step, 0));
+          return;
+        }
+        if (key.escape) {
+          ctrl.toggleOutputPanel(false);
+          return;
+        }
+      }
+      if (key.ctrl && _input === 'o') {
+        ctrl.toggleOutputPanel();
+        setPanelScroll(0); // 每次打开都贴底看最新日志，不残留上次的翻页位置
         return;
       }
-      if (ctrl.askTextState) {
+      // Shift+Tab：循环切换模式（向后循环）
+      if (key.tab && key.shift) {
+        ctrl.cycleMode();
+        onSetMode(ctrl.mode);
+        return;
+      }
+      // 上箭头：导航到历史中更早的输入（有确认框/向导/文本输入时，由对应组件处理）
+      if (key.upArrow && !key.ctrl && !key.meta) {
+        if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
+        const hist = inputHistory.current;
+        if (hist.length > 0 && historyIdx < hist.length - 1) {
+          const newIdx = historyIdx + 1;
+          setHistoryIdx(newIdx);
+          setInput(hist[hist.length - 1 - newIdx] ?? '');
+          setInputNonce((n) => n + 1); // 重挂 TextInput 让光标到末尾
+        }
+        return;
+      }
+      // 下箭头：导航到历史中更新的输入（或清空到当前输入；有确认框/向导/文本输入时，由对应组件处理）
+      if (key.downArrow && !key.ctrl && !key.meta) {
+        if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
+        if (historyIdx > 0) {
+          const newIdx = historyIdx - 1;
+          setHistoryIdx(newIdx);
+          setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? '');
+          setInputNonce((n) => n + 1);
+        } else if (historyIdx === 0) {
+          setHistoryIdx(-1);
+          setInput('');
+          setInputNonce((n) => n + 1);
+        }
+        return;
+      }
+      // Esc：先关输出面板 / 取消文本输入；有向导/确认/文本输入时 Esc 由对应组件自处理
+      if (key.escape && ctrl.outputPanel) {
+        ctrl.toggleOutputPanel(false);
+        return;
+      }
+      if (key.escape && ctrl.askTextState) {
         ctrl.resolveAskText('', true);
         return;
       }
-      if (quitArmed) {
-        onExit();
-        return;
+      if (key.escape && !ctrl.askState && !ctrl.askWizardState && ctrl.busy !== null) {
+        onInterrupt();
       }
-      setQuitArmed(true);
-      setTimeout(() => setQuitArmed(false), 2000);
-      return;
-    }
-    // Ctrl+O：切换工具输出面板（再次按下或 Esc 关闭）
-    if (key.ctrl && _input === 'o') {
-      ctrl.toggleOutputPanel();
-      // 主动打开面板 = 要看工具输出：强制回到底部（否则面板长在冻结视口下方看不见）
-      if (ctrl.outputPanel) scrollFollow?.follow();
-      return;
-    }
-    // Shift+Tab：循环切换模式（向后循环）
-    if (key.tab && key.shift) {
-      ctrl.cycleMode();
-      onSetMode(ctrl.mode);
-      return;
-    }
-    // 上箭头：导航到历史中更早的输入（有确认框/向导/文本输入时，由对应组件处理）
-    if (key.upArrow && !key.ctrl && !key.meta) {
-      if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
-      const hist = inputHistory.current;
-      if (hist.length > 0 && historyIdx < hist.length - 1) {
-        const newIdx = historyIdx + 1;
-        setHistoryIdx(newIdx);
-        setInput(hist[hist.length - 1 - newIdx] ?? '');
-        setInputNonce((n) => n + 1); // 重挂 TextInput 让光标到末尾
-      }
-      return;
-    }
-    // 下箭头：导航到历史中更新的输入（或清空到当前输入；有确认框/向导/文本输入时，由对应组件处理）
-    if (key.downArrow && !key.ctrl && !key.meta) {
-      if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
-      if (historyIdx > 0) {
-        const newIdx = historyIdx - 1;
-        setHistoryIdx(newIdx);
-        setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? '');
-        setInputNonce((n) => n + 1);
-      } else if (historyIdx === 0) {
-        setHistoryIdx(-1);
-        setInput('');
-        setInputNonce((n) => n + 1);
-      }
-      return;
-    }
-    // Esc：先关输出面板 / 取消文本输入；有向导/确认/文本输入时 Esc 由对应组件自处理
-    if (key.escape && ctrl.outputPanel) {
-      ctrl.toggleOutputPanel(false);
-      return;
-    }
-    if (key.escape && ctrl.askTextState) {
-      ctrl.resolveAskText('', true);
-      return;
-    }
-    if (key.escape && !ctrl.askState && !ctrl.askWizardState && ctrl.busy !== null) {
-      onInterrupt();
-    }
-  });
+    },
+    { isActive: !ctrl.userTodoOpen },
+  );
 
   const handleChange = (value: string) => {
     setInput(value);
@@ -282,12 +319,25 @@ export function App({
         />
       ) : null}
 
-      {ctrl.outputPanel ? <OutputPanel tools={allToolOutputs(ctrl)} /> : null}
+      {ctrl.outputPanel ? (
+        <OutputPanel tools={allToolOutputs(ctrl)} logs={ctrl.logs} tab={panelTab} scroll={panelScroll} />
+      ) : null}
 
-      {/* 底部面板同样冻结：任务状态每个 tick 都在变，不冻结会把视口拽回底部 */}
-      {frozen.task ? <TaskPanel task={frozen.task} /> : null}
+      {/* 底部面板同样冻结：任务状态每个 tick 都在变，不冻结会把视口拽回底部。
+          矮终端下只留一个面板：两个面板折行后能吃掉 20+ 行，24 行终端里放不下，
+          整帧必然超过终端高度 → ink 整屏清屏（连 scrollback 一起清）。
+          优先保留待办（跨轮存续、承载"要做什么"），任务面板的信息在 Ctrl+O 里更全。 */}
+      {frozen.task && !compact ? <TaskPanel task={frozen.task} /> : null}
 
       <TodoPanel todos={frozen.todos} />
+
+      {ctrl.userTodoOpen ? (
+        <UserTodoEditor
+          todos={ctrl.userTodos}
+          onChange={(todos) => ctrl.setUserTodos(todos)}
+          onClose={() => ctrl.setUserTodoOpen(false)}
+        />
+      ) : null}
 
       {quitArmed ? (
         <Box>
@@ -302,7 +352,7 @@ export function App({
           onChange={handleChange}
           onSubmit={handleSubmit}
           onPaste={handlePaste}
-          disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState}
+          disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState || ctrl.userTodoOpen}
           slashOpen={ctrl.slashOpen}
         />
         <ModeBar mode={ctrl.mode} updateInfo={ctrl.updateInfo} />

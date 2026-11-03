@@ -78,6 +78,60 @@ function isIdempotentTool(mp: import('./registry.js').MountPoint): boolean {
   return mp.mode === 'read';
 }
 
+/**
+ * 回显行里单个字符串参数的展示上限（字符）。
+ * 取 80：超出一行（终端常见 80~120 列）就失去"扫一眼知道在干嘛"的价值，
+ * 而多出来的内容只会把 live 帧撑高、逼 ink 整屏清屏。
+ */
+const ECHO_VALUE_MAX = 80;
+/** 回显行总长上限：多个参数各 80 字符也可能拼出两三百字符，再兜一层 */
+const ECHO_TOTAL_MAX = 200;
+
+/**
+ * 把工具 input 压成**单行短摘要**，供 `→ tool(...)` 回显使用。
+ *
+ * 为什么必须压缩：write_file / edit_file 的 input 里带着整篇文件内容，
+ * 直接 `JSON.stringify` 会把几千字符压成一行；终端按宽度折行后可能占几十行，
+ * 使 live 帧超过终端行数 → ink 走整屏清屏分支（ESC[2J+3J+H，3J 连 scrollback
+ * 一起清），用户向上回看的位置被重置，表现为"突然跳到最底部"。
+ *
+ * 压缩策略（保留辨识度，丢掉体积）：
+ *   - 长字符串 → `"前缀…(+N)"`，能看出是哪个文件/哪段内容，但不占屏；
+ *   - 多行文本（含 \n）→ 额外标注行数，比裸截断更有信息量；
+ *   - 整体仍超长 → 硬截断，保证绝不会撑爆一屏。
+ */
+export function compactToolEcho(input: unknown): string {
+  const value = input as Record<string, unknown> | null | undefined;
+  if (!value || typeof value !== 'object') return '';
+
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(value)) {
+    parts.push(`${k}: ${compactValue(v)}`);
+  }
+  const line = parts.join(', ');
+  return line.length > ECHO_TOTAL_MAX
+    ? `${line.slice(0, ECHO_TOTAL_MAX)}…(+${line.length - ECHO_TOTAL_MAX})`
+    : line;
+}
+
+/**
+ * 单个参数值的压缩展示。
+ *
+ * 关键：体积标注（行数/字符数）放在**前缀之前**。若放在后面，超长内容的前缀
+ * 会先把整个回显行撑到 ECHO_TOTAL_MAX、把标注挤掉——那段标注恰恰是最有用的
+ * 信息（"这是个 400 行文件"比"前 80 字符长啥样"更能判断在干什么）。
+ */
+function compactValue(v: unknown): string {
+  if (typeof v !== 'string') return JSON.stringify(v) ?? String(v);
+  // 多行内容（write_file 的 content、edit_file 的 old/new_string）
+  const lines = v.split('\n').length;
+  if (v.length <= ECHO_VALUE_MAX && lines <= 1) return JSON.stringify(v);
+  const prefix = v.slice(0, ECHO_VALUE_MAX).replace(/\n/g, '\\n');
+  const unit = lines > 1 ? `${lines} 行 / ${v.length} 字符` : `${v.length} 字符`;
+  // 标注在前：即使外层 ECHO_TOTAL_MAX 硬截断，体积信息也一定能留下
+  return `<${unit}> "${prefix}…"`;
+}
+
 /** 请求输入 token 估算（busy 行实时展示用，非精确）：system + tools + messages 文本估算求和 */
 function estimateInputTokens(
   system: SystemBlock[],
@@ -524,8 +578,12 @@ export class Agent {
         mp: import('./registry.js').MountPoint | undefined,
         input: Record<string, any>,
       ): Promise<void> => {
-        // 工具调用的进度提示走 print 缝（与模型文本同一条 UI 通道）
-        this.print(`  → ${tu.name}(${JSON.stringify(tu.input)})\n`);
+        // 工具调用的进度提示走 print 缝（与模型文本同一条 UI 通道）。
+        // 必须截断：write_file/edit_file 的 input 里带着**整篇文件内容**，
+        // 原样打印会变成一行几千字符的长文本，按终端宽度折成几十行 →
+        // live 帧超过终端行数 → ink 整屏清屏（ESC[3J 连 scrollback 一起清），
+        // 用户向上回看的位置被直接重置。见 compactToolEcho。
+        this.print(`  → ${tu.name}(${compactToolEcho(tu.input)})\n`);
         if (!mp) {
           // P5：循环唯一入口 = registry.resolve；未注册工具 fail-closed 拒绝
           outputById.set(tu.id, `Unknown tool: ${tu.name}`);

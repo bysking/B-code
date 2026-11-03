@@ -17,7 +17,13 @@ const MODE_META: Record<Mode, { label: string; color: string }> = {
  * 版本升级提示：启动异步检查到远程 npm 有新版时，在权限模式文案后面
  * 追加一行提示，附带升级命令（用户可一键复制）。
  */
-export function ModeBar({ mode, updateInfo }: { mode: Mode; updateInfo?: { current: string; latest: string } | null }) {
+export function ModeBar({
+  mode,
+  updateInfo,
+}: {
+  mode: Mode;
+  updateInfo?: { current: string; latest: string } | null;
+}) {
   const meta = MODE_META[mode] ?? MODE_META.default;
   return (
     <Box flexDirection="column">

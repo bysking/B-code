@@ -12,6 +12,19 @@ import type { WizardStep } from './ui/controller.js';
 import { createSettingsAllowlistStore, loadSettings } from './config.js';
 import { formatCost } from './cost.js';
 import { renderTodos } from './todo.js';
+import {
+  USER_TODO_HELP,
+  addUserTodo,
+  clearDoneUserTodos,
+  indexToId,
+  loadUserTodos,
+  parseUserTodoCommand,
+  removeUserTodo,
+  renderUserTodos,
+  saveUserTodos,
+  toggleUserTodo,
+  type UserTodo,
+} from './user-todo.js';
 import { loadHooks } from './hooks.js';
 import { mountTtyApp } from './ui/render.js';
 import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
@@ -177,6 +190,45 @@ export function groupsAsWizard(
 function countMcpTools(registry: Registry, serverName: string): number | null {
   const n = registry.list().filter((mp) => mp.name.startsWith(`mcp__${serverName}__`)).length;
   return n > 0 ? n : null;
+}
+
+/**
+ * /todo 非交互子命令的纯处理（TTY 与非 TTY 共用，便于单测）。
+ * 输入当前清单 + 参数串 → 新清单 + 待展示文本 + 是否请求打开交互编辑器。
+ * 序号越界/非法 → 原样返回并给出提示（不静默吞掉，用户要知道为什么没反应）。
+ */
+export function applyUserTodoCommand(
+  todos: UserTodo[],
+  args: string,
+): { todos: UserTodo[]; output: string; open: boolean } {
+  const cmd = parseUserTodoCommand(args);
+  const withList = (next: UserTodo[], head?: string): { todos: UserTodo[]; output: string; open: boolean } => ({
+    todos: next,
+    output: head ? `${head}\n${renderUserTodos(next)}` : renderUserTodos(next),
+    open: false,
+  });
+  switch (cmd.kind) {
+    case 'open':
+      return { todos, output: '', open: true };
+    case 'list':
+      return withList(todos);
+    case 'add':
+      return withList(addUserTodo(todos, cmd.text));
+    case 'clear-done':
+      return withList(clearDoneUserTodos(todos));
+    case 'help':
+      return { todos, output: USER_TODO_HELP, open: false };
+    case 'toggle': {
+      const id = indexToId(todos, cmd.index);
+      if (!id) return withList(todos, `(序号无效: ${cmd.index})`);
+      return withList(toggleUserTodo(todos, id));
+    }
+    case 'remove': {
+      const id = indexToId(todos, cmd.index);
+      if (!id) return withList(todos, `(序号无效: ${cmd.index})`);
+      return withList(removeUserTodo(todos, id));
+    }
+  }
 }
 
 /** TTY 路径（ink）：处理交互/one-shot/goal/loop，全部渲染进组件树 */
@@ -376,6 +428,14 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       }
       if (trimmed === '/todos') {
         ctrl.pushOutput(`任务清单:\n${renderTodos(agent.todoList())}`);
+        return;
+      }
+      if (trimmed === '/todo' || trimmed.startsWith('/todo ')) {
+        // 用户自管待办：无参 → 打开交互编辑器；有参 → 按子命令就地处理（list/add/done/rm/clear）
+        const r = applyUserTodoCommand(ctrl.userTodos, trimmed.slice('/todo'.length));
+        if (r.todos !== ctrl.userTodos) ctrl.setUserTodos(r.todos);
+        if (r.open) ctrl.setUserTodoOpen(true);
+        else ctrl.pushOutput(r.output);
         return;
       }
       if (trimmed === '/model' || trimmed.startsWith('/model ')) {

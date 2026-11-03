@@ -2,6 +2,7 @@ import React from 'react';
 import { render, type Instance } from 'ink';
 import { App } from './app.js';
 import { createScrollFollow, type ScrollFollow } from './scroll-follow.js';
+import { setLogSink } from '../utils/log.js';
 import type { AppController } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
@@ -32,6 +33,16 @@ export function mountTtyApp(
   },
   initialOutput?: string[],
 ): TtyMount {
+  /**
+   * 接管系统日志：TTY 下不写 stderr，而是收进 controller 供 Ctrl+O 的"日志"页查看。
+   *
+   * 不写 stderr 的原因：每写一次终端就把视口拉到光标处——用户向上回看历史时会被
+   * 后台日志（MCP 连接、hook 超时、会话保存失败等）硬拽回底部；而且 ink 接管屏幕后
+   * stderr 的内容本来也没地方展示，等于既打扰又看不见。
+   * 文件落地（B_CODE_LOG_FILE）不受影响，仍在 log.ts 里照写。
+   */
+  const restoreLogSink = setLogSink((line) => ctrl.pushLog(line));
+
   const scrollFollow = createScrollFollow();
   const instance = render(
     React.createElement(App, {
@@ -52,6 +63,7 @@ export function mountTtyApp(
     unmount: () => {
       scrollFollow.dispose();
       instance.unmount();
+      restoreLogSink(); // 交还 stderr，退出期日志要能正常打到终端
     },
     scrollFollow,
   };

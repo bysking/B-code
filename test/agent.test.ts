@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Agent } from '../src/agent.js';
+import { Agent, compactToolEcho } from '../src/agent.js';
 import type { ModelInput, ModelOutput } from '../src/backend.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 
@@ -589,4 +589,51 @@ test('工具重试：shell 工具遇到可重试错误也不自动重试（防�
   await agent.chat('go');
 
   assert.equal(calls(), 1, 'shell 失败只执行 1 次，绝不重试');
+});
+
+// ── 工具回显压缩：write_file 不能把整篇文件打进终端 ────────────
+
+test('compactToolEcho：短参数原样展示，不损失辨识度', () => {
+  assert.equal(compactToolEcho({ file_path: 'src/a.ts' }), 'file_path: "src/a.ts"');
+  assert.equal(compactToolEcho({ command: 'npm test' }), 'command: "npm test"');
+});
+
+test('compactToolEcho：write_file 的整篇文件内容被压成单行短摘要', () => {
+  // 回归：原样 JSON.stringify 会把 400 行文件压成一行 5000+ 字符，
+  // 按 100 列折成 50+ 行 → live 帧超终端行数 → ink 整屏清屏（视口被重置）
+  const content = 'const a = 1;\n'.repeat(400);
+  const out = compactToolEcho({ file_path: '/x/a.ts', content });
+
+  assert.ok(out.length < 200, `回显必须压到 200 字符内（实际 ${out.length}）`);
+  assert.ok(out.includes('/x/a.ts'), '保留文件路径，能看出在操作哪个文件');
+  assert.ok(/\d+ 行 \/ \d+ 字符/.test(out), '标注原内容体积（行数/字符数），比裸截断更有信息量');
+  assert.ok(!out.includes('\n'), '必须单行——多行会直接撑高 live 帧');
+});
+
+test('compactToolEcho：edit_file 的大段 old/new 也被压缩', () => {
+  const out = compactToolEcho({
+    file_path: 'a.ts',
+    old_string: 'x'.repeat(500),
+    new_string: 'y\n'.repeat(200),
+  });
+  assert.ok(out.length < 250, `总长须受控（实际 ${out.length}）`);
+  assert.ok(out.includes('a.ts'));
+  assert.ok(!out.includes('\n'));
+});
+
+test('compactToolEcho：多参数拼接过长时硬截断（兜底，绝不允许撑爆一屏）', () => {
+  const out = compactToolEcho({
+    a: 'x'.repeat(80),
+    b: 'y'.repeat(80),
+    c: 'z'.repeat(80),
+    d: 'w'.repeat(80),
+  });
+  assert.ok(out.length <= 200 + 20, `硬截断生效（实际 ${out.length}）`);
+});
+
+test('compactToolEcho：非字符串参数走 JSON，非对象输入返回空串', () => {
+  assert.equal(compactToolEcho({ count: 3, flag: true }), 'count: 3, flag: true');
+  assert.equal(compactToolEcho(null), '');
+  assert.equal(compactToolEcho(undefined), '');
+  assert.equal(compactToolEcho('str'), '');
 });

@@ -12,7 +12,8 @@
  * `\x1b[{row};{col}R`，row 是光标相对视口顶部的行号。用户向上滚动后，光标落到
  * 视口下方，row 会超过终端行数，超出的行数≈距底部的距离。
  * 终端不支持上报屏幕外光标位置时会恒返回 row ≤ rows，此时判定恒在底部 →
- * 退化为"始终跟随"（等同改动前的行为，不会变差）；连续无响应则彻底停止探测。
+ * 退化为"始终跟随"（等同改动前的行为，不会变差）；连续无响应则退避重试
+ * （**不停止探测**，见 currentInterval 的说明）。
  *
  * 冻结：判定离底后，UI 渲染"最后一份跟随态快照"——输出逐字节不变 → ink 的
  * log-update 判定无变化 → 零写入 → 视口不动。内容本身照常生成（controller 不受
@@ -29,8 +30,20 @@ const DEFAULT_TOLERANCE = 2;
 const DEFAULT_INTERVAL_MS = 600;
 /** 单次 CPR 等待上限（ms）：超时视为本轮无响应 */
 const CPR_TIMEOUT_MS = 200;
-/** 连续无响应达到该次数 → 判定终端不支持，停止探测 */
-const MAX_MISSES = 3;
+/**
+ * 连续无响应达到该次数 → 视为"终端此刻忙不过来"，探测进入退避（**不停止**）。
+ *
+ * 关键：探测绝不能永久关闭。曾经的实现是在此永久停止探活，于是终端只要出现过
+ * 一次"连着 3 轮没在 200ms 内应答"（重绘繁忙、SSH、慢终端都会），此后就再也判不出
+ * "用户滚离"——视口被永久拽回底部，且没有任何提示。退避同样能避免对不支持的终端
+ * 持续发 DSR，却保留了负载过去后自动回到正常节奏的能力。
+ */
+const MISS_BACKOFF_AT = 3;
+/**
+ * 退避上限 = 正常间隔 × 该倍数。取得较小（2 倍）是刻意的：退避只是"别太吵"，
+ * 而"用户回到底部"要能在 ~1s 内被感知；上限过大（如几秒）会让回底判定严重迟钝。
+ */
+const MAX_BACKOFF_FACTOR = 2;
 /** 未收全的 CPR 前缀缓冲上限：超过则不再等待，直接转发（防畸形输入卡死） */
 const MAX_PENDING = 32;
 
@@ -153,8 +166,8 @@ export function createScrollFollow(opts: ScrollFollowOptions = {}): ScrollFollow
   let following = true;
   let disposed = false;
   let awaiting = false; // 已发探测、等响应
-  let misses = 0; // 连续无响应次数
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let misses = 0; // 连续无响应次数（收到应答即清零）
+  let timer: ReturnType<typeof setTimeout> | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   const notify = (): void => {
@@ -174,6 +187,46 @@ export function createScrollFollow(opts: ScrollFollowOptions = {}): ScrollFollow
     }
   };
 
+  /**
+   * 当前探测节奏：正常为 intervalMs；连续无响应（≥ MISS_BACKOFF_AT）后指数退避，
+   * 封顶 intervalMs × MAX_BACKOFF_FACTOR。收到应答（misses=0）立刻回到正常节奏。
+   */
+  const currentInterval = (): number => {
+    if (misses < MISS_BACKOFF_AT) return intervalMs;
+    const backoff = intervalMs * 2 ** (misses - MISS_BACKOFF_AT + 1);
+    return Math.min(backoff, intervalMs * MAX_BACKOFF_FACTOR);
+  };
+
+  /**
+   * 排下一轮探测。**这是唯一的排期落点**：应答到达、超时、跳过本轮都必须经过它。
+   *
+   * 曾经漏掉"应答到达也要续期"（当时用 setInterval 自动续期，换自调度后没补），
+   * 结果第一轮收到应答后整条探测链就断了——形同永久停止探测，与本函数要防的
+   * bug 一模一样。保持单一落点，避免再次分叉。
+   */
+  const scheduleNext = (): void => {
+    if (disposed || !timer) return; // stopProbing 已把 timer 置空 = 已取消
+    timer = setTimeout(probe, currentInterval());
+    timer.unref?.();
+  };
+
+  const probe = (): void => {
+    if (disposed) return;
+    // 上一轮还没回：跳过本轮，避免响应堆积。仍要续期——否则一次迟到会停掉整个循环
+    if (awaiting) return scheduleNext();
+    awaiting = true;
+    stdout.write(CPR_REQUEST);
+    timeoutTimer = setTimeout(() => {
+      awaiting = false;
+      timeoutTimer = null;
+      misses++;
+      // 注意：**不停探测**。终端忙/慢（重绘高峰、SSH、慢终端）都会让应答错过窗口，
+      // 一旦永久停掉，此后永远判不出"用户滚离"，视口就被永久拽回底部。
+      scheduleNext();
+    }, CPR_TIMEOUT_MS);
+    timeoutTimer.unref?.();
+  };
+
   /** 收到 CPR 响应：row 超过终端行数 + 容差 → 光标在视口下方 → 用户已滚离底部 */
   const onCpr = (row: number): void => {
     awaiting = false;
@@ -181,37 +234,29 @@ export function createScrollFollow(opts: ScrollFollowOptions = {}): ScrollFollow
     clearTimeoutTimer();
     const rows = stdout.rows || 40;
     setFollowing(row <= rows + tolerance);
+    scheduleNext(); // 应答即续期：否则探测链在首个应答后就断了
   };
 
+  /** 停止探测：交还终端 / 销毁时调用。timer=null 即"已取消"，scheduleNext 不再续期 */
   const stopProbing = (): void => {
     if (timer) {
-      clearInterval(timer);
+      clearTimeout(timer);
       timer = null;
     }
     clearTimeoutTimer();
-  };
-
-  const probe = (): void => {
-    if (disposed || awaiting) return; // 上一轮还没回，跳过，避免响应堆积
-    awaiting = true;
-    stdout.write(CPR_REQUEST);
-    timeoutTimer = setTimeout(() => {
-      awaiting = false;
-      timeoutTimer = null;
-      if (++misses >= MAX_MISSES) {
-        // 终端不支持 CPR：停止探测，退化为恒跟随（不打扰用户）
-        stopProbing();
-        setFollowing(true);
-      }
-    }, CPR_TIMEOUT_MS);
-    timeoutTimer.unref?.();
   };
 
   const onData = (chunk: Buffer | string): void => {
     const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
     const { rest, rows } = parser.push(text);
     for (const r of rows) onCpr(r);
-    if (rest) input.write(rest);
+    if (rest) {
+      input.write(rest);
+      // 用户在打字/按键 = 人还在终端前，无论 CPR 是否灵通都该保持跟随。
+      // 同时清掉 misses，让探测尽快回到正常节奏（不必等下一次应答）。
+      misses = 0;
+      setFollowing(true);
+    }
   };
 
   /**
@@ -224,7 +269,8 @@ export function createScrollFollow(opts: ScrollFollowOptions = {}): ScrollFollow
    */
   const startProbing = (): void => {
     if (!enabled || timer || disposed) return;
-    timer = setInterval(probe, intervalMs);
+    misses = 0;
+    timer = setTimeout(probe, intervalMs);
     timer.unref?.();
   };
 
