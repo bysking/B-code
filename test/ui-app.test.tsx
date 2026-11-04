@@ -32,28 +32,39 @@ const frameText = (frame: { lastFrame: () => string | undefined }): string =>
   stripAnsi(frame.lastFrame() ?? '');
 
 /**
- * 等待 frame 渲染出包含 needle 的内容（轮询代替固定睡眠：
- * ink 渲染提交在微任务/帧边界后，固定 wait 在高负载下可能读到上一帧）
+ * 等待 frame 渲染出包含 needle 的内容。
+ *
+ * 轮询间隔刻意取 40ms 而不是 10ms：ink 8 的输入解析走 `readable` 事件，
+ * 密集的 `setTimeout(10)` 轮询会持续抢占事件循环，导致紧接着写入的按键
+ * 在解析前就被丢弃（实测表现为"↓ 收不到，下一击 Enter 提交了默认项"）。
+ * 40ms 足够覆盖一次渲染提交，又给输入事件留出处理窗口。
  */
 async function waitForFrame(
   frame: { lastFrame: () => string | undefined },
   needle: string,
   label: string,
-  timeoutMs = 2000,
+  timeoutMs = 3000,
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const out = frameText(frame);
     if (out.includes(needle)) return out;
     if (Date.now() > deadline) throw new Error(`waitForFrame 超时（${label}）：\n${out}`);
-    await wait(10);
+    await wait(40);
   }
 }
 
-/** 写一段按键序列后等 ink 处理完（stdin 是同步 emit，等一帧让 React 提交渲染） */
+/**
+ * 写一段按键序列后等 ink 处理完。
+ *
+ * ink 8 把 useInput 的回调包在 useEffectEvent + discreteUpdates 里，渲染提交要经过
+ * 微任务与帧边界。20ms 在本机偶发不足——表现为"连按两个键时第一个丢失"，
+ * 例如 ↓ 后紧接 Enter 会变成"↓ 没生效，Enter 提交了默认项"。
+ * 取 50ms：足够覆盖一次提交，又不至于让整个套件变慢。
+ */
 const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
   frame.stdin.write(keys);
-  await wait(20);
+  await wait(50);
 };
 
 test('渲染：用户消息 + assistant markdown 流式文本', async () => {
@@ -196,10 +207,9 @@ test('渲染：斜杠菜单打开显示候选', async () => {
   ]);
   // 空查询候选超过可视上限，菜单滚动显示；用查询把内置命令与技能都收进窗口
   ctrl.openSlash('c');
-  await wait(30);
-  const out = frame.lastFrame() ?? '';
-  assert.ok(out.includes('commit'), '斜杠菜单含技能');
-  assert.ok(out.includes('/clear'), '斜杠菜单含内置命令');
+  // 等菜单真正渲染出来：菜单会先用估算高度渲染、再用 useBoxMetrics 实测收敛一次，
+  // 固定 wait(30) 在串行跑全套时可能读到收敛前的帧。
+  const out = await waitForFrame(frame, '/clear', '菜单渲染');
   frame.cleanup();
 });
 
@@ -268,14 +278,11 @@ test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async ()
     { name: 'zzz-last', description: '最后一项' },
   ]);
   ctrl.openSlash('');
-  await wait(30);
-  let out = frame.lastFrame() ?? '';
-  assert.ok(!out.includes('zzz-last'), '初始窗口看不到最后一项');
-  assert.match(out, /\/\d+（↑↓ 滚动）/, '显示滚动位置提示');
-  // 按 ↑（到末尾）后最后一项滚入窗口
-  frame.stdin.write('\x1b[A');
-  await wait(30);
-  out = frame.lastFrame() ?? '';
+  const init = await waitForFrame(frame, '↑↓ 滚动', '滚动位置提示');
+  assert.ok(!init.includes('zzz-last'), '初始窗口看不到最后一项');
+  // 按 ↑（环绕到末尾）后最后一项滚入窗口
+  await press(frame, '\x1b[A');
+  const out = await waitForFrame(frame, 'zzz-last', '滚动后选中项可见');
   assert.ok(out.includes('zzz-last'), '滚动后选中项可见');
   frame.cleanup();
 });
@@ -378,10 +385,14 @@ test('回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可�
   const p = ctrl.askWizard('选方案?', [
     { title: '方案', question: '用哪个?', options: [{ label: 'React', value: 'react' }] },
   ]);
-  await waitForFrame(frame, '用哪个?', '向导渲染');
+  // 等"选中项"出现再按键：向导的标题文本在 React 首次渲染时就有，但 useInput
+  // 的监听器是在 effect 里挂的——只等标题会抢在监听器之前按键，那一击就丢了
+  // （表现为"↓ 没生效，Enter 直接提交了默认项"）。
+  await waitForFrame(frame, '❯ 1. React', '向导就绪');
 
   // ↓ 移到自定义项 → Enter 进入输入态，Esc"返回选项"
   await press(frame, '\x1b[B');
+  await waitForFrame(frame, '❯ 2. ✎', '↓ 移到自定义项');
   await press(frame, '\r');
   await waitForFrame(frame, '输入你的答案', '进入输入态');
 
@@ -393,5 +404,146 @@ test('回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可�
   await press(frame, '\x03');
   assert.equal(ctrl.askWizardState, null, 'Ctrl+C 应取消向导');
   assert.equal(await p, '__cancel__');
+  frame.cleanup();
+});
+
+// ── 底栏压缩回归 ────────────────────────────────────────────────
+//
+// 踩过的两个坑（都会让"第一项看不到"）：
+//   1. 视口与底栏兄弟节点都用默认 flexShrink=1 → 总高超出时 Yoga 按比例让
+//      **每个**子节点都缩，菜单被压掉顶部几行，且内部行叠在一起（渲染乱码）。
+//   2. 菜单固定 MAX_VISIBLE=12 条，超出可用高度后仍按 12 条计算滚动窗口，
+//      被裁掉的顶部与"选中第 1 项"矛盾 → 看到的是第 8 项。
+
+test('回归：历史撑满视口后，斜杠菜单第一项仍可见且选中态正确', async () => {
+  const ctrl = new AppController();
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  // 撑满视口（模拟 /help 打出大量输出）
+  for (let i = 0; i < 40; i++) ctrl.pushOutput(`帮助行 ${i}`);
+
+  const frame = renderApp(ctrl);
+  await wait(50);
+  ctrl.openSlash('');
+  await waitForFrame(frame, '/clear', '菜单渲染');
+
+  const out = frameText(frame);
+  assert.ok(out.includes('/clear'), '第一项 /clear 必须可见');
+  assert.ok(/❯\s*\/clear/.test(out), '选中态落在第一项上');
+  // 内容不能重叠：每行只有一个菜单项（曾出现两行内容叠在同一行）
+  const menuLines = out.split('\n').filter((l) => l.includes('/') && l.includes('—'));
+  assert.ok(menuLines.length >= 3, '至少渲染出几项');
+  for (const line of menuLines) {
+    const cmdCount = (line.match(/\/[a-z]+/g) ?? []).length;
+    assert.ok(cmdCount <= 2, `单行不应混入多个命令（实际 ${cmdCount} 个）: ${line}`);
+  }
+  frame.cleanup();
+});
+
+test('回归：斜杠菜单可见条数随终端高度自适应（不硬编码 12）', async () => {
+  const ctrl = new AppController();
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  const frame = renderApp(ctrl);
+  await wait(50);
+  ctrl.openSlash('');
+  await waitForFrame(frame, '滚动', '菜单滚动提示');
+
+  // 可见项数应小于候选总数（在测试终端高度下装不下 15 项），
+  // 且必须给出滚动位置提示，否则用户不知道还有更多
+  const out = frameText(frame);
+  assert.match(out, /… \d+\/15/, '有滚动位置提示');
+  frame.cleanup();
+});
+
+// ── 命令执行后菜单必须收起 ──────────────────────────────────────
+//
+// /skills、/mcp 会打开交互面板。若斜杠菜单没跟着收起，面板上方会残留一条
+// 候选（看起来像"输入没被消费"）。由 controller.openCapability 统一负责，
+// 不依赖每个调用方记得调 closeSlash。
+test('回归：打开能力面板时斜杠菜单自动收起，输入框清空', async () => {
+  const ctrl = new AppController();
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  const frame = renderApp(ctrl);
+  await wait(60);
+  ctrl.openSlash('skills');
+  await waitForFrame(frame, '/skills', '菜单渲染');
+
+  // 模拟 cli 执行 /skills：只调 openCapability
+  ctrl.openCapability('skill', [{ name: 'commit', enabled: true, detail: 'git 提交' }]);
+  await waitForFrame(frame, '🔧 技能', '面板打开');
+
+  assert.equal(ctrl.slashOpen, false, '斜杠菜单已收起');
+  const out = frameText(frame);
+  assert.ok(!/❯\s*\/skills/.test(out), '不再残留斜杠候选');
+  frame.cleanup();
+});
+
+test('回归：/mcp 面板同样不残留斜杠候选', async () => {
+  const ctrl = new AppController();
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  const frame = renderApp(ctrl);
+  await wait(60);
+  ctrl.openSlash('mcp');
+  await waitForFrame(frame, '/mcp', '菜单渲染');
+
+  ctrl.openCapability('mcp', [{ name: 'github', enabled: true, detail: '12 工具', connected: true }]);
+  await waitForFrame(frame, 'MCP Server', '面板打开');
+
+  assert.equal(ctrl.slashOpen, false);
+  assert.ok(!/❯\s*\/mcp/.test(frameText(frame)), '不残留斜杠候选');
+  frame.cleanup();
+});
+
+// ── Tab 补全路径的菜单收起 ──────────────────────────────────────
+//
+// 用 Tab 补全时输入框是 "/mcp "（带尾随空格，方便继续输参数）。此时按 Enter：
+// InputBox 因 slashOpen=true 不提交，交给 SlashMenu.onPick。若 InputBox 的
+// Enter 分支写成 `if (key.return && !slashOpen) {...}` 而不 return，就会继续
+// 落到"插入普通字符"分支——`\r` 被插进 value 变成 "/mcp \r"，触发 handleChange
+// → openSlash，把刚关掉的菜单又打开（面板下方残留一条候选）。
+test('回归：Tab 补全（带尾随空格）+ Enter 后菜单收起，不留 /mcp\\r', async () => {
+  const ctrl = new AppController();
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  const submitted: string[] = [];
+  const frame = renderApp(ctrl, (t) => {
+    const s = typeof t === 'string' ? t.trim() : '';
+    submitted.push(s);
+    if (s === '/mcp') ctrl.openCapability('mcp', [{ name: 'github', enabled: true, detail: '12 工具' }]);
+  });
+  await wait(60);
+
+  // 逐字输入 /mc → Tab 补全成 "/mcp "
+  for (const ch of '/mc') {
+    await press(frame, ch);
+  }
+  await waitForFrame(frame, '/mcp', '候选出现');
+  await press(frame, '\t');
+  await wait(120);
+
+  await press(frame, '\r');
+  await waitForFrame(frame, 'MCP Server', '面板打开');
+
+  assert.deepEqual(submitted, ['/mcp'], '只提交一次，且不带 \\r 脏字符');
+  assert.equal(ctrl.slashOpen, false, '斜杠菜单已收起');
+  const out = frameText(frame);
+  assert.ok(!/❯\s*\/mcp/.test(out), '不残留斜杠候选');
+  frame.cleanup();
+});
+
+test('回归：输入框不接收控制字符（\\r / \\t / ESC 不落进草稿）', async () => {
+  const ctrl = new AppController();
+  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  const frame = renderApp(ctrl);
+  await wait(60);
+
+  await press(frame, 'abc');
+  await waitForFrame(frame, 'abc', '文本输入');
+  // 菜单关闭状态下按 Esc（不应插入任何字符）
+  await press(frame, '\x1b');
+  await wait(60);
+  const out = frameText(frame);
+  // 输入行仍应只有 abc
+  const line = out.split('\n').find((l) => l.trimStart().startsWith('>'));
+  assert.ok(line && line.includes('abc'), '文本保留');
+  assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(line ?? ''), '没有控制字符混入');
   frame.cleanup();
 });

@@ -44,9 +44,11 @@ export function SimpleTextInput({
       return;
     }
 
-    // Enter：提交（slash 菜单打开时交给 SlashMenu 处理，避免双发）
-    if (key.return && !slashOpen) {
-      onSubmit(value);
+    // Enter：slash 菜单打开时**完全让给 SlashMenu**——既不能提交（会双发），
+    // 也不能往下落到普通字符分支（`\r` 会被当成字符插进输入框，把 "/mcp " 变成
+    // "/mcp \r"，再触发 handleChange → 重新打开刚关掉的菜单）。
+    if (key.return) {
+      if (!slashOpen) onSubmit(value);
       return;
     }
 
@@ -87,7 +89,10 @@ export function SimpleTextInput({
     if (key.ctrl || key.meta) return;
 
     // 普通字符：插入当前光标位置
-    if (input) {
+    // 控制字符（\r \t \x1b 等）必须挡掉：它们是某个功能键没被上面各分支消费时的
+    // 残留，插进输入框会变成不可见脏字符，还会连带触发 handleChange（例如把刚关掉的
+    // 斜杠菜单重新打开）。除 tab 外的控制字符对输入框没有合法用途。
+    if (input && !/[\u0000-\u0008\u000a-\u001f\u007f]/.test(input)) {
       onChange(value.slice(0, cursor) + input + value.slice(cursor));
       setCursor(cursor + input.length);
     }

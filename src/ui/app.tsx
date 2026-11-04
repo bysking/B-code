@@ -1,15 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
-import type { AppController, SlashItem, TaskPanelState, ToolCallDisplay } from './controller.js';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Box, Text, useInput, usePaste } from 'ink';
+import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
-import { readClipboardImage, readClipboardText } from '../utils/clipboard.js';
-
-/** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
-function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
-  return ctrl.turns.flatMap((t) => t.tools);
-}
-import { MessageList } from './message-list.js';
+import { readClipboardImage } from '../utils/clipboard.js';
+import { Transcript, BusyLine } from './transcript.js';
+import { ScrollView } from './viewport/scroll-view.js';
+import {
+  INITIAL_SCROLL,
+  isAtBottom,
+  scrollDown,
+  scrollToBottom,
+  scrollUp,
+  type ScrollState,
+} from './viewport/viewport.js';
 import { Confirm } from './confirm.js';
 import { Wizard } from './wizard.js';
 import { SlashMenu } from './slash-menu.js';
@@ -23,13 +27,23 @@ import { CapabilityPanel } from './capability-panel.js';
 import { AskInput } from './ask-input.js';
 import { ModeBar } from './mode-bar.js';
 import { buildSlash, buildSubmitLine } from './slash.js';
-import type { ScrollFollow } from './scroll-follow.js';
 
 /**
- * ink 根组件：控制器状态 → 渲染树。
- * 输入文本（受控）在 App：/ 触发菜单、Tab 补全写回输入框、Enter 提交分发。
- * Ctrl-C：有等待的选择先 Esc，否则退出进程。
+ * ink 根组件（ink 8 滚动视口版）。
+ *
+ * 布局：滚动视口（历史 + 底部状态行） → 交互区（确认/向导/菜单/面板） → 输入框 → 模式栏。
+ *
+ * 与旧实现的关键差别：
+ *   1. 历史不再交给终端 scrollback，而是画在 `<ScrollView>` 里。resize 时重排的是
+ *      **同一帧**，不存在"按旧布局行数擦除新内容"这种必然花屏的路径。
+ *   2. 视口高度由 flexGrow 让 Yoga 算，不再用 estimateLines 猜底栏占几行。
+ *   3. 滚动状态是我们自己的（距底行数 + 是否跟随），取代向终端发 CPR 问光标位置。
  */
+
+/** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
+function allToolOutputs(ctrl: AppController): ToolCallDisplay[] {
+  return ctrl.turns.flatMap((t) => t.tools);
+}
 
 export function App({
   ctrl,
@@ -41,7 +55,6 @@ export function App({
   onReconnectCapability,
   refreshCapability,
   initialOutput,
-  scrollFollow,
 }: {
   ctrl: AppController;
   onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void;
@@ -55,193 +68,209 @@ export function App({
   /** 面板刷新数据源（每次按键后重拉，避免列表过期） */
   refreshCapability?: () => void;
   initialOutput?: string[];
-  /** 智能跟随：视口在底部时才自动滚动，滚离后冻结画面让用户回看（可缺省 → 恒跟随） */
-  scrollFollow?: ScrollFollow;
 }) {
   const [, force] = useState(0);
   useEffect(() => ctrl.subscribe(() => force((v) => v + 1)), [ctrl]);
-  // 跟随状态切换（滚离/回到底部）时重渲染：false 帧交给 MessageList 冻结快照
-  const [follow, setFollow] = useState(() => scrollFollow?.isFollowing() ?? true);
-  useEffect(() => {
-    if (!scrollFollow) return;
-    setFollow(scrollFollow.isFollowing());
-    return scrollFollow.subscribe(() => setFollow(scrollFollow.isFollowing()));
-  }, [scrollFollow]);
 
-  // 需要用户当场作答的交互（权限确认/向导/文本提问）必须可见：强制回到底部，
-  // 否则冻结在历史里的用户看不到在等自己确认。
+  // ── 滚动状态 ──────────────────────────────────────────────
+  const [scroll, setScrollState] = useState<ScrollState>(INITIAL_SCROLL);
+  const scrollRef = useRef(scroll);
+  scrollRef.current = scroll;
+  const setScroll = useCallback((next: ScrollState) => {
+    if (next === scrollRef.current) return; // 同引用 = 无需更新
+    setScrollState(next);
+  }, []);
+
+  // 需要用户当场作答的交互（确认/向导/文本提问）必须可见 → 强制回到底部
   const needsAnswer = Boolean(ctrl.askState || ctrl.askWizardState || ctrl.askTextState);
   useEffect(() => {
-    if (needsAnswer) scrollFollow?.follow();
-  }, [needsAnswer, scrollFollow]);
+    if (needsAnswer && !scrollRef.current.following) setScroll(scrollToBottom());
+  }, [needsAnswer, setScroll]);
 
-  // 底部面板（任务/待办）冻结快照：它们随工具状态频繁变化，滚离期间同样不能刷屏，
-  // 否则视口仍会被拽回底部（时间面板可能为空但仍占位，故单独记录"冻结时刻是否有"）。
-  const panelsRef = useRef<{ task: TaskPanelState | null; todos: typeof ctrl.todos } | null>(null);
-  if (follow) panelsRef.current = null;
-  else if (!panelsRef.current) {
-    panelsRef.current = {
-      task: ctrl.task ? { ...ctrl.task, items: ctrl.task.items.map((it) => ({ ...it })) } : null,
-      todos: ctrl.todos.map((t) => ({ ...t })),
-    };
-  }
-  const frozen = panelsRef.current ?? { task: ctrl.task, todos: ctrl.todos };
-  // 矮终端：只保留一个底部面板（见下方渲染处注释），避免整帧超过终端高度
-  const compact = isCompactTerminal();
-  // 终端尺寸变化：重估流式防溢出预算（live 帧超终端行数会触发 Ink 整屏清屏，滚动位置被重置）
+  // 终端 resize：触发一次重渲染让 flexGrow 重新布局。ScrollView 内部用 useBoxMetrics
+  // 感知高度变化并修正距底行数（保持用户看到的内容不跳）。
   useEffect(() => {
-    const onResize = () => ctrl.handleResize();
+    const onResize = () => force((v) => v + 1);
     process.stdout.on('resize', onResize);
     return () => {
       process.stdout.off('resize', onResize);
     };
-  }, [ctrl]);
+  }, []);
 
   const [input, setInput] = useState('');
-  // 补全时 ++ 强制 TextInput 重挂：让光标回到新文本末尾（"补全词 + 空格"之后）
+  // 补全时 ++ 强制 TextInput 重挂：让光标回到新文本末尾
   const [inputNonce, setInputNonce] = useState(0);
   // 双 Ctrl+C：第一次提示，第二次真正退出（2s 内有效）
   const [quitArmed, setQuitArmed] = useState(false);
-  // Ctrl+O 面板的翻页偏移（0 = 贴底看最新日志；正数 = 向上翻看更早的行）
+  // Ctrl+O 面板的翻页偏移与标签页
   const [panelScroll, setPanelScroll] = useState(0);
-  // Ctrl+O 面板的标签页：工具输出 / 系统日志（Tab 切换）
   const [panelTab, setPanelTab] = useState<PanelTab>('tools');
-  // 输入历史：提交过的提示词，用于上下键导航（最新在前）
+  // 输入历史
   const inputHistory = useRef<string[]>([]);
-  const [historyIdx, setHistoryIdx] = useState(-1); // -1 = 当前输入，≥0 为历史索引
+  const [historyIdx, setHistoryIdx] = useState(-1);
   // 粘贴的图片数据：[image #N] 占位符 → N-1 索引
   const imagesRef = useRef<ClipboardImage[]>([]);
 
-  useInput(
-    (_input, key) => {
-      // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
-      if (key.ctrl && _input === 'c') {
-        if (ctrl.askState) {
-          // Ctrl+C 取消审批 = 拒绝（Yes 已在第一项，不能用 options[0]）
-          const deny = ctrl.askState.options.find((o) => o.value === 'no');
-          ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? '');
-          return;
-        }
-        if (ctrl.askWizardState) {
-          ctrl.resolveAskWizard('__cancel__');
-          return;
-        }
-        if (ctrl.askTextState) {
-          ctrl.resolveAskText('', true);
-          return;
-        }
-        if (quitArmed) {
-          onExit();
-          return;
-        }
-        setQuitArmed(true);
-        setTimeout(() => setQuitArmed(false), 2000);
+  /** 翻页步长：视口的 3/4，留几行上下文便于连续阅读 */
+  const pageLines = () => Math.max(Math.floor(terminalRows() * 0.75), 3);
+
+  useInput((_input, key) => {
+    // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
+    if (key.ctrl && _input === 'c') {
+      if (ctrl.askState) {
+        const deny = ctrl.askState.options.find((o) => o.value === 'no');
+        ctrl.resolveAsk(deny?.value ?? ctrl.askState.options[0]?.value ?? '');
         return;
       }
-      // Ctrl+O：切换工具输出面板（再次按下或 Esc 关闭）
-      // 刻意**不**强制回到底部：查看日志与"回看历史"目标一致，不该把视口拽走。
-      // 面板渲染在 live 帧底部，冻结态下同样会被画出来（冻结只锁内容快照，不阻止面板出现）。
-      if (ctrl.outputPanel) {
-        // Tab 在"工具输出 / 系统日志"之间切换（Shift+Tab 在本面板内也让位给切换，
-        // 避免误切成权限模式）。切换后回贴底，因为两页的滚动尺度完全不同。
-        if (key.tab) {
-          setPanelTab((t) => (t === 'tools' ? 'logs' : 'tools'));
-          setPanelScroll(0);
-          return;
-        }
-        // 面板打开时接管 ↑↓：翻页看完整日志（PgUp/PgDn 加大步长）
-        const step = key.pageUp || key.pageDown ? Math.max(terminalRows() - 12, 5) : 1;
-        if (key.upArrow || key.pageUp) {
-          setPanelScroll((s) =>
-            Math.min(s + step, outputPanelMaxScroll(allToolOutputs(ctrl), panelTab, ctrl.logs)),
-          );
-          return;
-        }
-        if (key.downArrow || key.pageDown) {
-          setPanelScroll((s) => Math.max(s - step, 0));
-          return;
-        }
-        if (key.escape) {
-          ctrl.toggleOutputPanel(false);
-          return;
-        }
-      }
-      if (key.ctrl && _input === 'o') {
-        ctrl.toggleOutputPanel();
-        setPanelScroll(0); // 每次打开都贴底看最新日志，不残留上次的翻页位置
+      if (ctrl.askWizardState) {
+        ctrl.resolveAskWizard('__cancel__');
         return;
       }
-      // Shift+Tab：循环切换模式（向后循环）
-      if (key.tab && key.shift) {
-        ctrl.cycleMode();
-        onSetMode(ctrl.mode);
-        return;
-      }
-      // 上箭头：导航到历史中更早的输入（有确认框/向导/文本输入时，由对应组件处理）
-      if (key.upArrow && !key.ctrl && !key.meta) {
-        if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
-        const hist = inputHistory.current;
-        if (hist.length > 0 && historyIdx < hist.length - 1) {
-          const newIdx = historyIdx + 1;
-          setHistoryIdx(newIdx);
-          setInput(hist[hist.length - 1 - newIdx] ?? '');
-          setInputNonce((n) => n + 1); // 重挂 TextInput 让光标到末尾
-        }
-        return;
-      }
-      // 下箭头：导航到历史中更新的输入（或清空到当前输入；有确认框/向导/文本输入时，由对应组件处理）
-      if (key.downArrow && !key.ctrl && !key.meta) {
-        if (ctrl.askState || ctrl.askWizardState || ctrl.askTextState) return;
-        if (historyIdx > 0) {
-          const newIdx = historyIdx - 1;
-          setHistoryIdx(newIdx);
-          setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? '');
-          setInputNonce((n) => n + 1);
-        } else if (historyIdx === 0) {
-          setHistoryIdx(-1);
-          setInput('');
-          setInputNonce((n) => n + 1);
-        }
-        return;
-      }
-      // Esc：先关输出面板 / 取消文本输入；有向导/确认/文本输入时 Esc 由对应组件自处理
-      if (key.escape && ctrl.outputPanel) {
-        ctrl.toggleOutputPanel(false);
-        return;
-      }
-      if (key.escape && ctrl.askTextState) {
+      if (ctrl.askTextState) {
         ctrl.resolveAskText('', true);
         return;
       }
-      if (key.escape && !ctrl.askState && !ctrl.askWizardState && ctrl.busy !== null) {
-        onInterrupt();
+      if (quitArmed) {
+        onExit();
+        return;
       }
-    },
-    { isActive: !ctrl.userTodoOpen && !ctrl.capabilityPanel },
-  );
+      setQuitArmed(true);
+      setTimeout(() => setQuitArmed(false), 2000);
+      return;
+    }
+
+    // Ctrl+O：工具输出面板（面板自己处理 ↑↓ 翻页）
+    if (ctrl.outputPanel) {
+      if (key.tab) {
+        setPanelTab((t) => (t === 'tools' ? 'logs' : 'tools'));
+        setPanelScroll(0);
+        return;
+      }
+      const step = key.pageUp || key.pageDown ? Math.max(terminalRows() - 12, 5) : 1;
+      if (key.upArrow || key.pageUp) {
+        setPanelScroll((s) =>
+          Math.min(s + step, outputPanelMaxScroll(allToolOutputs(ctrl), panelTab, ctrl.logs)),
+        );
+        return;
+      }
+      if (key.downArrow || key.pageDown) {
+        setPanelScroll((s) => Math.max(s - step, 0));
+        return;
+      }
+      if (key.escape) {
+        ctrl.toggleOutputPanel(false);
+        return;
+      }
+    }
+    if (key.ctrl && _input === 'o') {
+      ctrl.toggleOutputPanel();
+      setPanelScroll(0);
+      return;
+    }
+
+    // Shift+Tab：循环切换模式
+    if (key.tab && key.shift) {
+      ctrl.cycleMode();
+      onSetMode(ctrl.mode);
+      return;
+    }
+
+    // ── 滚动（替代旧的 CPR 探测：视口是我们自己的，不必问终端） ──
+    // ↑↓ 是"共享按键"：斜杠菜单/确认框/向导都要用，所以这些交互打开时必须让位
+    // （它们各自有 useInput，这里提前 return 就不会拦截）。PgUp/PgDn 是滚动专用，随时可接管。
+    const uiBusy = Boolean(
+      ctrl.slashOpen || ctrl.askState || ctrl.askWizardState || ctrl.askTextState,
+    );
+    if (key.pageUp && !uiBusy) {
+      setScroll(scrollUp(scrollRef.current, pageLines()));
+      return;
+    }
+    if (key.pageDown && !uiBusy) {
+      setScroll(scrollDown(scrollRef.current, pageLines()));
+      return;
+    }
+
+    if (key.upArrow && !key.ctrl && !key.meta) {
+      if (uiBusy) return; // 让给菜单/选择框
+      // 已滚离底部 → ↑ 继续上滚（回看历史优先）
+      if (!scrollRef.current.following) {
+        setScroll(scrollUp(scrollRef.current, 1));
+        return;
+      }
+      // 贴底态下 ↑ 走输入历史导航
+      const hist = inputHistory.current;
+      if (hist.length > 0 && historyIdx < hist.length - 1) {
+        const newIdx = historyIdx + 1;
+        setHistoryIdx(newIdx);
+        setInput(hist[hist.length - 1 - newIdx] ?? '');
+        setInputNonce((n) => n + 1);
+      }
+      return;
+    }
+    if (key.downArrow && !key.ctrl && !key.meta) {
+      if (uiBusy) return; // 让给菜单/选择框
+      // 已滚离底部 → ↓ 优先往下滚回来（回到底部即自动恢复跟随）
+      if (!scrollRef.current.following) {
+        setScroll(scrollDown(scrollRef.current, 1));
+        return;
+      }
+      if (historyIdx > 0) {
+        const newIdx = historyIdx - 1;
+        setInput(inputHistory.current[inputHistory.current.length - 1 - newIdx] ?? '');
+        setInputNonce((n) => n + 1);
+      } else if (historyIdx === 0) {
+        setHistoryIdx(-1);
+        setInput('');
+        setInputNonce((n) => n + 1);
+      }
+      return;
+    }
+
+    // Esc
+    if (key.escape && ctrl.outputPanel) {
+      ctrl.toggleOutputPanel(false);
+      return;
+    }
+    if (key.escape && ctrl.askTextState) {
+      ctrl.resolveAskText('', true);
+      return;
+    }
+    if (key.escape && !ctrl.askState && !ctrl.askWizardState && ctrl.busy !== null) {
+      onInterrupt();
+    }
+  });
+
+  // ── 粘贴（ink 8 的 usePaste：括号粘贴，整段文本一次到达）──────
+  // 取代旧的"自己读剪贴板文本 + 逐字符插入"。图片仍走 Ctrl+V
+  // （剪贴板里是二进制，需要剪贴板 API 才读得到）。
+  //
+  // 注意：**不要**用 isActive 关掉它。ink 的 usePaste 在 isActive 变化时会
+  // setRawMode(false)——那会把整个 ink 的 raw mode 关掉，之后所有 useInput
+  // 都收不到按键（表现为"打开向导后键盘失灵"）。改为常驻挂载、在 handler 里
+  // 判断是否该接收粘贴。
+  usePaste((text) => {
+    if (ctrl.askState || ctrl.askTextState || ctrl.askWizardState) return;
+    if (ctrl.userTodoOpen || ctrl.capabilityPanel) return;
+    setInput((v) => v + text);
+  });
 
   const handleChange = (value: string) => {
     setInput(value);
-    // 用户手动编辑时退出历史导航态
     if (historyIdx !== -1) setHistoryIdx(-1);
     if (value.startsWith('/')) ctrl.openSlash(value.slice(1));
     else if (ctrl.slashOpen) ctrl.closeSlash();
   };
 
-  // Ctrl+V / Cmd+V 粘贴：读取剪贴板，图片 → 存图片 + 放 [image #N] 占位符；文本 → 直接返回文本
-  // 同步执行（readClipboardImage 内部使用 execSync，不阻塞 UI）
-  const handlePaste = (): string | null => {
+  /** Ctrl+V：只用来取图片（文本走 usePaste 的括号粘贴） */
+  const handlePasteImage = (): string | null => {
     const clipboardImage = readClipboardImage();
-    if (clipboardImage) {
-      const idx = imagesRef.current.length + 1; // 1-indexed，用户友好
-      imagesRef.current.push(clipboardImage);
-      return `[image #${idx}]`;
-    }
-    // 剪贴板无图片：尝试读取文本
-    return readClipboardText();
+    if (!clipboardImage) return null;
+    const idx = imagesRef.current.length + 1;
+    imagesRef.current.push(clipboardImage);
+    return `[image #${idx}]`;
   };
 
-  // Tab 补全：把候选命令名写回输入框（可继续输入参数），保持菜单打开
+  /** Tab 补全 */
   const handleComplete = (item: SlashItem) => {
     const completed = buildSlash(input, item.name);
     setInput(completed);
@@ -253,136 +282,139 @@ export function App({
     const trimmed = line.trim();
     if (!trimmed) return;
 
-    // 解析 [image #N] 占位符，提取对应的图片数据
+    // 解析 [image #N] 占位符
     const images = imagesRef.current;
     const usedImages: ClipboardImage[] = [];
     const regex = /\[image #(\d+)\]/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(trimmed)) !== null) {
       const idx = parseInt(match[1] ?? '', 10) - 1;
-      if (idx >= 0 && idx < images.length) {
-        usedImages.push(images[idx]!);
-      }
+      if (idx >= 0 && idx < images.length) usedImages.push(images[idx]!);
     }
-    // 清理占位符后的纯文本
     const cleanText = trimmed.replace(/\[image #\d+\]/g, '').trim();
 
-    // 记入输入历史（去重紧邻重复，保存原始输入含占位符）
     const hist = inputHistory.current;
     if (hist[hist.length - 1] !== trimmed) hist.push(trimmed);
     setHistoryIdx(-1);
     setInput('');
-    setInputNonce((n) => n + 1); // 重挂 TextInput 让光标回到末尾
-    imagesRef.current = []; // 清空本次已消费的图片
+    setInputNonce((n) => n + 1);
+    imagesRef.current = [];
     ctrl.closeSlash();
-    // 主动提交 = 用户要看新一轮输出：强制回到底部（否则冻结在新消息上，看不到回复）
-    scrollFollow?.follow();
+    // 提交 = 用户要看新一轮输出 → 贴底跟随
+    setScroll(scrollToBottom());
 
-    if (usedImages.length > 0) {
-      onSubmit({ text: cleanText, images: usedImages });
-    } else {
-      onSubmit(trimmed); // 纯文本，行为不变
-    }
+    if (usedImages.length > 0) onSubmit({ text: cleanText, images: usedImages });
+    else onSubmit(trimmed);
   };
 
+  const compact = isCompactTerminal();
+  // 底部状态行只在贴底时显示（滚上去看历史时不打扰）
+  const atBottom = isAtBottom(scroll.fromBottom);
+
+  /**
+   * 底栏容器：**必须 flexShrink={0}**。
+   *
+   * Yoga 里所有子节点默认 flexShrink=1，总高超出时按比例让**每个**子节点都缩。
+   * 于是"视口 + 斜杠菜单"同时被压：视口缩几行无感（它本来就可滚动），但菜单被压掉
+   * 顶部几行，用户就看不到第一项（实测 /help 撑满视口后 → 菜单只剩 7 项且行与行叠在一起）。
+   *
+   * 正确的模型：视口是唯一的弹性区（flexGrow=1 + flexShrink=1），底栏各块固定高度、
+   * 绝不压缩。这样无论历史多长，菜单/面板总是完整展示。
+   */
   return (
-    <Box flexDirection="column">
-      <Box flexDirection="column" flexGrow={1}>
-        {/* 固定输出行（initialOutput + ctrl.output）与消息流共用同一个 <Static>：
-            ink 7 只认最后一个挂载的 <Static>（root.staticNode 是单指针，后来的覆盖先前的），
-            且在 live 区会跳过所有 static 节点——挂两个 <Static> 会让先前那个的内容凭空消失。
-            MessageList 内部把 output 与 turn 按 id 统一排序进同一个 <Static>，见其注释。 */}
-        <MessageList
-          key={ctrl.resetEpoch}
-          turns={ctrl.turns}
-          output={ctrl.output}
-          initialOutput={initialOutput}
-          busy={ctrl.busy}
-          busySince={ctrl.busySince}
-          busyThinking={ctrl.busyThinking}
-          busyInputTokens={ctrl.busyInputTokens}
-          follow={follow}
-        />
-      </Box>
+    <Box flexDirection="column" height={terminalRows()}>
+      {/* 滚动视口：唯一可伸缩的区块 */}
+      <ScrollView scroll={scroll} onScroll={setScroll}>
+        <Transcript turns={ctrl.turns} output={ctrl.output} initialOutput={initialOutput} />
+        {ctrl.busy && ctrl.busySince !== null && atBottom ? (
+          <Box marginTop={1}>
+            <BusyLine
+              text={ctrl.busy}
+              since={ctrl.busySince}
+              thinking={ctrl.busyThinking}
+              inputTokens={ctrl.busyInputTokens}
+            />
+          </Box>
+        ) : null}
+      </ScrollView>
 
-      {ctrl.askWizardState ? (
-        <Wizard ask={ctrl.askWizardState} onResolve={(v) => ctrl.resolveAskWizard(v)} />
-      ) : ctrl.askState ? (
-        <Confirm ask={ctrl.askState} onResolve={(v) => ctrl.resolveAsk(v)} />
-      ) : null}
+      {/* ── 底栏：固定高度，绝不压缩（flexShrink=0） ──
+          每一块都是"用户必须看全"的内容：菜单少了第一项就没法选，确认框截断就读不懂在问什么。
+          把它们包进 flexShrink=0 的容器，让所有压缩都落在上面那个可滚动的视口上。 */}
+      <Box flexDirection="column" flexShrink={0}>
+        {/* 交互区（同时最多一种） */}
+        {ctrl.askWizardState ? (
+          <Wizard ask={ctrl.askWizardState} onResolve={(v) => ctrl.resolveAskWizard(v)} />
+        ) : ctrl.askState ? (
+          <Confirm ask={ctrl.askState} onResolve={(v) => ctrl.resolveAsk(v)} />
+        ) : null}
 
-      {ctrl.askTextState ? (
-        <AskInput question={ctrl.askTextState.question} onSubmit={(v) => ctrl.resolveAskText(v)} />
-      ) : null}
+        {ctrl.askTextState ? (
+          <AskInput question={ctrl.askTextState.question} onSubmit={(v) => ctrl.resolveAskText(v)} />
+        ) : null}
 
-      {ctrl.slashOpen ? (
-        <SlashMenu
-          query={ctrl.slashQuery}
-          items={ctrl.slashItems}
-          onPick={(item) => {
-            // 带上用户已输入的参数：菜单只按基础名过滤，参数不能被选中动作吃掉
-            handleSubmit(buildSubmitLine(input, item.name));
-          }}
-          onSubmitRaw={() => handleSubmit(input)}
-          onComplete={handleComplete}
-          onClose={() => ctrl.closeSlash()}
-        />
-      ) : null}
+        {ctrl.slashOpen ? (
+          <SlashMenu
+            query={ctrl.slashQuery}
+            items={ctrl.slashItems}
+            onPick={(item) => handleSubmit(buildSubmitLine(input, item.name))}
+            onSubmitRaw={() => handleSubmit(input)}
+            onComplete={handleComplete}
+            onClose={() => ctrl.closeSlash()}
+          />
+        ) : null}
 
-      {ctrl.outputPanel ? (
-        <OutputPanel tools={allToolOutputs(ctrl)} logs={ctrl.logs} tab={panelTab} scroll={panelScroll} />
-      ) : null}
+        {ctrl.outputPanel ? (
+          <OutputPanel tools={allToolOutputs(ctrl)} logs={ctrl.logs} tab={panelTab} scroll={panelScroll} />
+        ) : null}
 
-      {/* 底部面板同样冻结：任务状态每个 tick 都在变，不冻结会把视口拽回底部。
-          矮终端下只留一个面板：两个面板折行后能吃掉 20+ 行，24 行终端里放不下，
-          整帧必然超过终端高度 → ink 整屏清屏（连 scrollback 一起清）。
-          优先保留待办（跨轮存续、承载"要做什么"），任务面板的信息在 Ctrl+O 里更全。 */}
-      {frozen.task && !compact ? <TaskPanel task={frozen.task} /> : null}
+        {ctrl.task && !compact ? <TaskPanel task={ctrl.task} /> : null}
 
-      <TodoPanel todos={frozen.todos} />
+        <TodoPanel todos={ctrl.todos} />
 
-      {ctrl.userTodoOpen ? (
-        <UserTodoEditor
-          todos={ctrl.userTodos}
-          onChange={(todos) => ctrl.setUserTodos(todos)}
-          onClose={() => ctrl.setUserTodoOpen(false)}
-        />
-      ) : null}
+        {ctrl.userTodoOpen ? (
+          <UserTodoEditor
+            todos={ctrl.userTodos}
+            onChange={(todos) => ctrl.setUserTodos(todos)}
+            onClose={() => ctrl.setUserTodoOpen(false)}
+          />
+        ) : null}
 
-      {ctrl.capabilityPanel ? (
-        <CapabilityPanel
-          kind={ctrl.capabilityPanel.kind}
-          items={ctrl.capabilityPanel.items}
-          onToggle={(name) => onToggleCapability?.(name)}
-          onReconnect={(name) => onReconnectCapability?.(name)}
-          onRefresh={() => refreshCapability?.()}
-          onClose={() => ctrl.closeCapability()}
-        />
-      ) : null}
+        {ctrl.capabilityPanel ? (
+          <CapabilityPanel
+            kind={ctrl.capabilityPanel.kind}
+            items={ctrl.capabilityPanel.items}
+            onToggle={(name) => onToggleCapability?.(name)}
+            onReconnect={(name) => onReconnectCapability?.(name)}
+            onRefresh={() => refreshCapability?.()}
+            onClose={() => ctrl.closeCapability()}
+          />
+        ) : null}
 
-      {quitArmed ? (
-        <Box>
-          <Text dimColor>(再按一次 Ctrl+C 退出)</Text>
+        {quitArmed ? (
+          <Box>
+            <Text dimColor>(再按一次 Ctrl+C 退出)</Text>
+          </Box>
+        ) : null}
+
+        <Box flexDirection="column" flexShrink={0}>
+          <InputBox
+            key={inputNonce}
+            value={input}
+            onChange={handleChange}
+            onSubmit={handleSubmit}
+            onPaste={handlePasteImage}
+            disabled={
+              !!ctrl.askState ||
+              !!ctrl.askTextState ||
+              !!ctrl.askWizardState ||
+              ctrl.userTodoOpen ||
+              !!ctrl.capabilityPanel
+            }
+            slashOpen={ctrl.slashOpen}
+          />
+          <ModeBar mode={ctrl.mode} updateInfo={ctrl.updateInfo} />
         </Box>
-      ) : null}
-
-      <Box flexDirection="column">
-        <InputBox
-          key={inputNonce}
-          value={input}
-          onChange={handleChange}
-          onSubmit={handleSubmit}
-          onPaste={handlePaste}
-          disabled={
-            !!ctrl.askState ||
-            !!ctrl.askTextState ||
-            !!ctrl.askWizardState ||
-            ctrl.userTodoOpen ||
-            !!ctrl.capabilityPanel
-          }
-          slashOpen={ctrl.slashOpen}
-        />
-        <ModeBar mode={ctrl.mode} updateInfo={ctrl.updateInfo} />
       </Box>
     </Box>
   );

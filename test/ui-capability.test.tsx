@@ -196,27 +196,64 @@ test('能力面板打开时 App 让出键盘（Ctrl+C 不退出）', async () =>
   frame.cleanup();
 });
 
-// ── 面板高度（live 预算口径）────────────────────────────────
-test('capabilityPanelHeight：随条目增长，且不随无限条目无限膨胀', () => {
-  const few = capabilityPanelHeight([SKILLS[0]!], { cols: 100 });
-  const many = capabilityPanelHeight(SKILLS, { cols: 100 });
+// ── 面板高度与滚动窗口 ──────────────────────────────────────
+test('capabilityPanelHeight：条目多时受可见条数封顶，不会撑爆终端', () => {
+  const few = capabilityPanelHeight([SKILLS[0]!]);
+  const many = capabilityPanelHeight(SKILLS);
   assert.ok(many > few, '条目多则更高');
 
-  const huge = Array.from({ length: 100 }, (_, i) => ({
-    name: `s${i}`,
-    enabled: true,
-    detail: 'd',
-  }));
-  const capped = capabilityPanelHeight(huge, { cols: 100 });
-  assert.ok(capped <= 16 + 5 + 1, '受 MAX_PANEL_LINES 封顶，不会撑爆终端');
+  const huge = Array.from({ length: 100 }, (_, i) => ({ name: `s${i}`, enabled: true }));
+  const capped = capabilityPanelHeight(huge);
+  assert.ok(capped <= 6 + 12 + 1, '受可见条数上限封顶');
   assert.ok(capped > 0);
 });
 
-test('capabilityPanelHeight：矮终端上限更低', () => {
-  const items = Array.from({ length: 30 }, (_, i) => ({ name: `s${i}`, enabled: true }));
-  const normal = capabilityPanelHeight(items, { cols: 100, compact: false });
-  const compact = capabilityPanelHeight(items, { cols: 100, compact: true });
-  assert.ok(compact < normal, '矮终端上面板更矮（正文优先）');
+test('回归：条目超出一屏时，光标能滚到最后的项（不再永久隐藏）', async () => {
+  // 旧实现用"头部裁切 + 还有 N 项"，被裁掉的项永远看不到也选不到。
+  // 现在窗口随光标滚动，最后一项必须能翻到。
+  const many: CapabilityItem[] = Array.from({ length: 20 }, (_, i) => ({
+    name: `skill-${String(i + 1).padStart(2, '0')}`,
+    enabled: true,
+  }));
+  const ctrl = new AppController();
+  const toggled: string[] = [];
+  ctrl.openCapability('skill', many);
+  const frame = renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
+  await wait(60);
+
+  // 逐次 ↓ 到底（每次等光标真的移动到位，避免高频按键被丢）
+  for (let i = 2; i <= 20; i++) {
+    const target = `skill-${String(i).padStart(2, '0')}`;
+    let reached = false;
+    for (let attempt = 0; attempt < 30 && !reached; attempt++) {
+      frame.stdin.write('\x1b[B');
+      await wait(60);
+      reached = new RegExp(`❯.*${target}`).test(stripAnsi(frame.lastFrame() ?? ''));
+    }
+    assert.ok(reached, `光标应能移动到第 ${i} 项`);
+  }
+
+  const out = stripAnsi(frame.lastFrame() ?? '');
+  assert.ok(out.includes('skill-20'), '最后一项可见');
+  assert.ok(/❯.*skill-20/.test(out), '最后一项是选中项');
+
+  // 选中项上按空格 → 切换的是最后一项（证明光标真的到了）
+  await press(frame, ' ');
+  assert.deepEqual(toggled, ['skill-20'], '空格作用于最后一项');
+  frame.cleanup();
+});
+
+test('能力面板：面板本身不被压缩（flexShrink=0），历史再长也完整显示', async () => {
+  const ctrl = new AppController();
+  // 用大量历史把视口撑满
+  for (let i = 0; i < 60; i++) ctrl.pushOutput(`历史行 ${i}`);
+  ctrl.openCapability('skill', SKILLS);
+  const frame = renderApp(ctrl);
+  await wait(60);
+  const out = stripAnsi(frame.lastFrame() ?? '');
+  assert.ok(out.includes('commit'), '第一项可见');
+  assert.ok(out.includes('red-line-check'), '第二项可见');
+  frame.cleanup();
 });
 
 test('kind 类型约束：只有 skill / mcp 两种', () => {

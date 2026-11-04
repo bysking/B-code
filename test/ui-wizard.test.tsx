@@ -23,21 +23,21 @@ async function waitForFrame(
   frame: { lastFrame: () => string | undefined },
   needle: string,
   label: string,
-  timeoutMs = 2000,
+  timeoutMs = 3000,
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const out = frameText(frame);
     if (out.includes(needle)) return out;
     if (Date.now() > deadline) throw new Error(`waitForFrame 超时（${label}）：\n${out}`);
-    await wait(10);
+    await wait(40);
   }
 }
 
 /** 写一段按键序列后等 ink 处理完（stdin 是同步 emit，等一帧让 React 提交渲染） */
 const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
   frame.stdin.write(keys);
-  await wait(20);
+  await wait(50);
 };
 
 function createApp(ctrl: AppController) {
@@ -109,7 +109,7 @@ test('渲染：Wizard 进度条 + 当前步选项 + 自定义特殊项；Review 
       ],
     },
   ]);
-  await wait(30);
+  await wait(50);
   const out = frame.lastFrame() ?? '';
   assert.ok(out.includes('✔Submit→'), '进度条含 Submit');
   assert.ok(out.includes('选择前端框架?'), '第一步问题');
@@ -137,7 +137,9 @@ test('交互：选中自定义 → 行内输入 → 回车作为该步答案 →
       ],
     },
   ]);
-  await waitForFrame(frame, '用哪个?', '向导渲染');
+  // 等"选中项"而不是标题：标题在首次渲染就有，但 useInput 监听器是在 effect 里
+  // 挂的，只等标题会抢在监听器之前按键（那一击就丢了）。
+  await waitForFrame(frame, '❯ 1. React', '向导就绪');
 
   // ↓↓ 移到自定义项（导航范围 = 2 选项 + 自定义）并 Enter 进入输入态
   await press(frame, '\x1b[B');
@@ -177,27 +179,27 @@ test('分步多选：Enter/空格勾选多个 → 完成本步 → Review 提交
     ],
     true, // multi
   );
-  await wait(30);
+  // 等选中项出现 = useInput 监听器已挂（只等标题会抢在监听器之前按键）
+  await waitForFrame(frame, '❯ ○ 1. Vue', '向导就绪');
   const out = frame.lastFrame() ?? '';
   assert.ok(out.includes('○ 1. Vue'), '未选显示 ○');
   assert.ok(out.includes('✔ 完成并查看汇总'), '单步时特殊项为完成汇总');
   assert.ok(!out.includes('我想自己提供一个不在选项里面的答案'), '多选模式不出现自定义入口');
 
-  // Enter 勾选 Vue（不前进）
+  // 每一步都等"渲染结果真的变了"再按下一个键。
+  // 固定 wait 在多文件同时跑（CPU 竞争）时会丢键——表现为"空格没勾上，后面全错位"。
   frame.stdin.write('\r');
-  await wait(20);
-  assert.ok((frame.lastFrame() ?? '').includes('✓ 1. Vue'), 'Enter 后 Vue 变 ✓');
+  await waitForFrame(frame, '✓ 1. Vue', 'Enter 勾选 Vue');
   // ↓ 到 React，空格勾选
-  frame.stdin.write('[B');
-  await wait(10);
+  frame.stdin.write('\x1b[B');
+  await waitForFrame(frame, '❯ ○ 2. React', '↓ 移到 React');
   frame.stdin.write(' ');
-  await wait(20);
-  assert.ok((frame.lastFrame() ?? '').includes('✓ 2. React'), '空格后 React 变 ✓');
+  await waitForFrame(frame, '✓ 2. React', '空格勾选 React');
   // ↓ 到特殊项（完成本步）→ Enter 进 Review → Enter 提交
-  frame.stdin.write('[B');
-  await wait(10);
+  frame.stdin.write('\x1b[B');
+  await waitForFrame(frame, '❯ 3. ✔ 完成并查看汇总', '↓ 移到完成项');
   frame.stdin.write('\r');
-  await wait(20);
+  await waitForFrame(frame, 'Review your answers', '进入 Review');
   frame.stdin.write('\r');
   assert.equal(await p, '框架: Vue, React');
   frame.cleanup();
@@ -220,20 +222,20 @@ test('分步多选：再次 Enter 取消勾选，空选走 Review 标未选', as
     ],
     true,
   );
-  await wait(30);
+  await wait(50);
   // 勾选 Vue → 再 Enter 取消
   frame.stdin.write('\r');
-  await wait(20);
+  await wait(50);
   frame.stdin.write('\r');
-  await wait(20);
+  await wait(50);
   assert.ok((frame.lastFrame() ?? '').includes('○ 1. Vue'), '再次 Enter 取消勾选');
   // 空选直接完成本步 → Review 未选 → 提交
   frame.stdin.write('[B');
-  await wait(10);
+  await wait(50);
   frame.stdin.write('[B');
-  await wait(10);
+  await wait(50);
   frame.stdin.write('\r');
-  await wait(20);
+  await wait(50);
   frame.stdin.write('\r');
   assert.equal(await p, '框架: （未选）');
   frame.cleanup();

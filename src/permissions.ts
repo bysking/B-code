@@ -145,8 +145,27 @@ export function isPersistableKey(key: string): boolean {
 // ── 持久化白名单：把"本会话记住"升级为"记住不再问" ──────────────────
 
 /**
+ * MCP 工具名 → server 级通配键。
+ *
+ * 名字形如 `mcp__<server>__<tool>`，确认一次折叠成 `mcp__<server>__*`，
+ * 于是"我信任这个 server"只需表达一次，而不是每个 tool 各确认一遍。
+ *
+ * 为什么 MCP 按 server 粒度而文件类按路径粒度：MCP 的一个 server 就是**一个整体能力**
+ * （"github 集成"），它的 tool 列表会随 server 版本变化；按 tool 记白名单意味着
+ * server 升级后用户又要重新确认一堆新 tool。而文件写入的风险按**路径**区分才有意义
+ * （写 /tmp 与写 /etc 完全两码事）。
+ *
+ * @returns 通配键；非 MCP 工具返回 null（由调用方走原有规则）
+ */
+export function mcpServerKey(name: string): string | null {
+  const m = /^mcp__(.+?)__/.exec(name);
+  return m ? `mcp__${m[1]}__*` : null;
+}
+
+/**
  * 持久化白名单存储键：比会话键更**具体**，避免"永久放行整个工具"过宽。
  *   shell   → `shell:<命令>`（同 git push origin main 整串）
+ *   MCP     → `mcp__<server>__*`（按 server，见 mcpServerKey）
  *   文件类  → `<工具名>:<file_path>`（按文件，不按内容——内容每次都会变）
  *   其余    → 工具名
  *
@@ -156,6 +175,9 @@ export function isPersistableKey(key: string): boolean {
  */
 export function persistedKey(mp: MountPoint, input: Record<string, any>): string {
   if (mp.mode === 'shell') return `shell:${normalizeCommand(String(input.command ?? ''))}`;
+  // MCP：一次确认 = 授权整个 server（否则 server 升级加个 tool 就又要确认）
+  const serverKey = mp.kind === 'mcp' ? mcpServerKey(mp.name) : null;
+  if (serverKey) return serverKey;
   const path = input.file_path;
   return typeof path === 'string' && path ? `${mp.name}:${path}` : mp.name;
 }

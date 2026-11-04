@@ -1,15 +1,14 @@
 /**
- * 流式防溢出：约束 Ink 的 live 帧高度恒小于终端行数。
+ * 终端尺寸与面板的布局工具。
  *
- * 背景：Ink 的 live 输出（非 <Static>）一旦超过终端行数，就会触发整屏清屏
- * `clearTerminal = ESC[2J + ESC[3J + ESC[H`——其中 ESC[3J 会连同 scrollback 一起清空，
- * 用户向上滚动查看历史时视口随之失效、被弹回顶部。因此 live 区高度必须始终低于终端行数。
+ * 历史消息渲染已改为应用内滚动视口（`viewport/scroll-view.tsx`），
+ * 原先那套"估算行数 → 切片提交进 <Static>"的防溢出机制随之删除。
+ * 这里只剩两块仍被面板类组件共用的东西：
  *
- * 策略：流式追加导致尾部内容超过预算时，把前缀在安全边界切出、提交进 turn.chunks
- * （交给 <Static> 只打印一次），live 区只保留尾部。切分逻辑见 findStreamSplit。
- *
- * 注：这些常量/估算只服务于"防溢出"的高度预算，不追求与 Ink 实际渲染逐行精确一致——
- * 保留 KEEP_RATIO 的余量即为吸收 markdown 渲染（表格/代码框）带来的少量行数膨胀。
+ *   1. `terminalRows` / `terminalCols` —— 终端尺寸（非 TTY 兜底）。
+ *   2. `clampByLines` / `estimateLines` —— 按**渲染行数**裁切列表。
+ *      面板（待办/任务/能力面板/输出面板）仍需要限高：它们不是滚动视口，
+ *      条数多了会把底栏撑高、挤占正文。
  */
 import wrapAnsi from 'wrap-ansi';
 
@@ -22,30 +21,6 @@ export function terminalRows(): number {
 export function terminalCols(): number {
   return process.stdout.columns || 80;
 }
-
-/**
- * live 区为**固定**底部元素预留的行数：busy 行 / 输入行 / 模式栏 / 换行余量。
- *
- * 只算这三样（各自 1 行）+ 3 行余量 = 8。**面板高度不算在这里**——
- * 待办/任务面板随条数与折行浮动（窄终端下两个面板能占 18 行），
- * 用固定常量预留必然估偏；调用方通过 liveLineBudget(动态占用) 把实测高度传进来。
- *
- * 历史教训：这个值曾是 16，隐含把面板也算了进去。一旦实际面板更高
- * （长待办折行 + 多工具面板），预算就系统性高估可用空间，live 帧必然溢出
- * → ink 整屏清屏（连 scrollback 一起清）。
- */
-export const CHROME_RESERVED_ROWS = 8;
-/** live 预算下限（极小终端也至少留 8 行给流式尾部） */
-export const MIN_LIVE_BUDGET = 8;
-
-/**
- * live 区最多渲染几个工具块（超出折叠成一行汇总）。
- *
- * 两处共用（message-list 渲染 / controller 预算），必须一致：
- * 渲染端按它截断、预算端按它扣行数，任一处改了另一边不跟就会继续溢出。
- */
-export const LIVE_TOOL_ROWS_MAX = 4;
-
 /**
  * 终端太小时，底部面板必须让位。
  *
@@ -61,24 +36,6 @@ export const COMPACT_TERMINAL_ROWS = 30;
 /** 终端是否紧张（矮终端） */
 export function isCompactTerminal(): boolean {
   return terminalRows() < COMPACT_TERMINAL_ROWS;
-}
-
-/**
- * live 区可用行数预算 = 终端行数 − 底部预留。
- *
- * extraChromeRows：底部浮动面板的实测占用行数（todoPanelHeight + taskPanelHeight）。
- * 必须动态传入：面板高度随条数**和折行**变化（一条长待办能占 3 行），
- * 用固定常量预留会导致"面板一变高，live 帧连同面板一起超出终端行数"→
- * ink 整屏清屏（ESC[3J 连 scrollback 一起清）→ 用户回看位置被重置。
- */
-export function liveLineBudget(extraChromeRows = 0): number {
-  const avail = terminalRows() - (CHROME_RESERVED_ROWS + extraChromeRows);
-  // avail ≤ MIN_LIVE_BUDGET 时（终端很小或面板很高）**不能**硬抬到 8：
-  // 预算一旦与真实可用空间脱钩，整帧必然溢出终端 → ink 整屏清屏。
-  // 此时只保证留 1 行（否则切分逻辑无法收敛）；avail 充裕时才用 MIN_LIVE_BUDGET
-  // 作为"别把正文切得太碎"的下限。
-  if (avail <= MIN_LIVE_BUDGET) return Math.max(avail, 1);
-  return avail;
 }
 
 /**
@@ -117,93 +74,3 @@ export function estimateLines(text: string, cols = terminalCols()): number {
   return wrapAnsi(text, Math.max(cols, 10), { hard: true, trim: false }).split('\n').length;
 }
 
-export interface StreamSplit {
-  /** 提交前缀的字符切点（落在行边界，前缀以换行结尾） */
-  cut: number;
-  /** 在代码块内部切分时：前缀末尾需补的闭合围栏（如 "```"） */
-  closeFence: string | null;
-  /** 在代码块内部切分时：余量开头需重开的同语种围栏（含换行，如 "```ts\n"） */
-  openFence: string | null;
-}
-
-const FENCE_OPEN_RE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
-const FENCE_CLOSE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
-
-function parseFenceOpen(line: string): { marker: string; info: string } | null {
-  const m = FENCE_OPEN_RE.exec(line);
-  if (!m) return null;
-  // CommonMark：反引号围栏的 info string 不能包含反引号
-  if (m[1]!.startsWith('`') && m[2]!.includes('`')) return null;
-  return { marker: m[1]!, info: m[2]!.trim() };
-}
-
-function isFenceClose(line: string, marker: string): boolean {
-  const m = FENCE_CLOSE_RE.exec(line);
-  return !!m && m[1]![0] === marker[0] && m[1]!.length >= marker.length;
-}
-
-/**
- * 在流式文本中找一个提交切分点，使 live 区约保留 keepLines 行。
- *
- * 切点必须落在行边界，优先级：空行边界（段落界）> 围栏外任意行边界 > 围栏内边界。
- * 围栏内切分只在整个目标区间都处于同一个大代码块时才会命中（整块代码无空行、也无围栏外边界）；
- * 此时前缀末尾补闭合围栏、余量开头重开同语种围栏，保证两侧各自渲染正确。
- *
- * markdown=false（thinking 纯文本）时不做围栏跟踪，任意行边界均可切。
- * 未超出 keepLines 或无法切分（如单行超长文本）返回 null。
- */
-export function findStreamSplit(
-  text: string,
-  keepLines: number,
-  opts: { cols?: number; markdown?: boolean } = {},
-): StreamSplit | null {
-  const cols = opts.cols ?? terminalCols();
-  const markdown = opts.markdown ?? true;
-  const lines = text.split('\n');
-  if (lines.length < 2) return null;
-
-  // 逐行累计渲染高度，并记录每行之后仍处于打开状态的代码围栏
-  const heights: number[] = [];
-  const fenceAfter: ({ marker: string; info: string } | null)[] = [];
-  let open: { marker: string; info: string } | null = null;
-  let total = 0;
-  for (const line of lines) {
-    const h = estimateLines(line, cols);
-    heights.push(h);
-    total += h;
-    if (markdown) {
-      if (open) {
-        if (isFenceClose(line, open.marker)) open = null;
-      } else {
-        open = parseFenceOpen(line);
-      }
-    }
-    fenceAfter.push(open);
-  }
-  const target = total - keepLines;
-  if (target <= 0) return null;
-
-  let inFence: StreamSplit | null = null;
-  let outside: StreamSplit | null = null;
-  let blank: StreamSplit | null = null;
-  let cum = 0;
-  let offset = 0;
-  // 只遍历到倒数第二行：切点后至少要给 live 区留一行
-  for (let i = 0; i < lines.length - 1; i++) {
-    cum += heights[i]!;
-    offset += lines[i]!.length + 1;
-    if (cum > target) break;
-    const fence = fenceAfter[i];
-    if (fence) {
-      inFence = {
-        cut: offset,
-        closeFence: fence.marker,
-        openFence: `${fence.marker}${fence.info ? fence.info : ''}\n`,
-      };
-    } else {
-      outside = { cut: offset, closeFence: null, openFence: null };
-      if (lines[i]!.trim() === '' || lines[i + 1]!.trim() === '') blank = outside;
-    }
-  }
-  return blank ?? outside ?? inFence;
-}

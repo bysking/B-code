@@ -110,12 +110,17 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 - `Esc`：硬中断当前对话——立即取消在飞的模型请求、终止 `run_shell` 子进程，回到输入等待新指令（可继续输入）
 - `Ctrl+O`：切换工具输出面板（回看本轮全部工具/子 agent 的真实输出）
 - `Shift+Tab`：循环切换模式（default → plan → auto → bypass）
-- `↑` / `↓`：输入历史导航
-- `Ctrl+V` / `Cmd+V`：粘贴图片（存为 `[image #N]`）或文本
+- `PgUp` / `PgDn`：翻页回看历史（应用内滚动视口，不依赖终端 scrollback）
+- `↑` / `↓`：输入历史导航；已滚离底部时优先向下滚回（回到底部自动恢复跟随新消息）
+- `Ctrl+V` / `Cmd+V`：粘贴图片（存为 `[image #N]`）；纯文本粘贴由括号粘贴模式自动处理
 - `Meta+Enter`（Option+Enter）：输入框内换行
 - `Ctrl+C`：第一次提示、2 秒内再按一次退出
 
 非 TTY（管道 / CI / 脚本）下自动退化为 readline 交互，语义保持一致；权限确认只消费 `y/n` 行。
+
+> **关于历史与滚动**：会话历史渲染在应用内的滚动视口里（不是终端 scrollback），
+> 因此**窗口缩放时不会错乱**——重排的是同一帧，不存在"按旧布局擦除新内容"。
+> 代价是退出后终端里看不到本次历史，用 `bcode --resume` 回看。
 
 ## 权限与模式
 
@@ -141,6 +146,37 @@ rm -rf / git reset --hard / sudo / mkfs
 批准（Yes / 本轮会话自动审批通过）后，该次授权写入 `{B_CODE_HOME}/settings.json` 的
 `permissions.allow`，下次启动依然生效（无需重复批准）。持久化键按语义取值——
 shell 按命令整串、文件类按 `工具:路径`（不按内容），避免"一次批准 = 永久放行整个工具"。
+
+### 各模式的实际边界
+
+| | plan | default | auto | bypass |
+|---|---|---|---|---|
+| `read` 工具 | ✅ 放行 | ✅ 放行 | ✅ 放行 | ✅ 放行 |
+| `write` / `shell` | ⛔ 拦截 | ❓ 确认 | 🤖 分类器裁决 | ✅ 放行 |
+| `external`（MCP） | ⛔ 拦截 | ❓ 确认 | ❓ **确认** | ✅ 放行 |
+| 危险命令（`rm -rf` 等） | ⛔ 拦截 | ⛔ 拦截 | ⛔ 拦截 | ⛔ **拦截** |
+| 敏感命令（`git push`） | ⛔ 拦截 | ❓ 确认 | ❓ **确认** | ❓ **确认** |
+
+两个容易被误解的点：
+
+- **bypass 不是"什么都放行"**：危险命令仍被 deny（写死在权限层，任何模式绕不过）；
+  `git push` 这类敏感命令即使 bypass 也仍要人工确认。bypass 跳过的是**普通确认框**。
+- **auto 模式不自动放行 MCP 工具**：auto 的分类器只裁决 `write` / `shell` 两类。
+  MCP 是 `external`，分类器对它的输入（JSON 参数）几乎没有判断力——
+  把 `mcp__jira__delete_issue` 交给它，与 `get_issue` 看不出区别，等于盲目放行。
+  这是刻意的 fail-closed。
+
+### 让 MCP 工具免确认的两条路
+
+1. **在 `mcp.json` 里声明只读**（推荐给纯读 server）：
+   ```json
+   { "mcpServers": { "docs": { "command": "npx", "args": ["-y", "@x/docs"], "mode": "read" } } }
+   ```
+   该 server 所有工具按 `read` 处理：plan 模式放行、任何模式都免确认。
+
+2. **确认一次，授权整个 server**：在确认框选批准后，MCP 工具的持久化键折叠为
+   `mcp__<server>__*` 写入白名单——同一个 server 的其他工具不再问（包括 server
+   升级后新增的工具）。别的 server 不受影响。
 
 ## 技能（Skills）
 

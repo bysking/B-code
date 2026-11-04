@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { CapabilityItem, CapabilityKind } from './controller.js';
-import { clampByLines, isCompactTerminal, terminalCols } from './scroll-budget.js';
+import { isCompactTerminal, terminalCols, terminalRows } from './scroll-budget.js';
+import { scrollWindow } from './viewport/viewport.js';
 
 /**
  * 能力面板（/skills、/mcp）：可交互的启停开关。
@@ -10,20 +11,36 @@ import { clampByLines, isCompactTerminal, terminalCols } from './scroll-budget.j
  *
  * 键位：↑↓/jk 选择 · 空格 启停 · R 重连（仅 MCP）· Esc 关闭。
  *
- * 为什么不用 Select/多选组件：那些是「一次性提交」语义，而这里每次空格都要
- * 立即生效并落盘（用户边看边调）。持续编辑形态与 UserTodoEditor 一致。
+ * ## 为什么用"滚动窗口"而不是"头部裁切"
  *
- * 高度约束：面板撑超终端行数会触发 ink 整屏清屏（连 scrollback 一起清），
- * 项目里反复踩过——因此用 clampByLines 按**渲染行数**裁切，不是按条数。
+ * 早先的做法是 `clampByLines` 从头截断到面板高度上限，再显示"还有 N 项"。
+ * 那意味着**被截掉的项永远看不到、也选不到**——用户装了 20 个技能就永远调不了后面 8 个。
+ * 正确语义是窗口随光标滚动：光标到哪，哪一项就保证在可见区内。
+ *
+ * ## 条数怎么定
+ *
+ * 按**终端行数**推（外部已知量），不用 `useBoxMetrics` 实测——那会形成自指反馈环：
+ * 测量值小 → 只渲染 1 行 → 测量值仍小 → 永远 1 行。高度必须由外部常量推出。
  */
 
-/** 面板最多占用的行数（含边框/标题/提示行） */
-const MAX_PANEL_LINES = 16;
-/** 矮终端下的上限：正文才是主体，面板得让位 */
-const MAX_PANEL_LINES_COMPACT = 8;
+/** 面板最多展示的条数上限（再多就挤占正文了；配合窗口滚动足够） */
+const MAX_VISIBLE = 12;
+/** 矮终端上限 */
+const MAX_VISIBLE_COMPACT = 5;
 
-/** 面板固定占用：上下边框 2 + 标题 1 + 空行 1 + 键位提示 1 */
-const PANEL_CHROME_LINES = 5;
+/**
+ * 面板自身除候选项外的固定占用：
+ * 上下边框 2 + 标题 1 + 滚动提示 1 + 键位提示 1 + marginTop 1
+ */
+const PANEL_CHROME_LINES = 6;
+
+/** 当前终端下最多展示几条 */
+function maxVisibleRows(): number {
+  const cap = isCompactTerminal() ? MAX_VISIBLE_COMPACT : MAX_VISIBLE;
+  // 给视口留至少 3 行，其余才归面板
+  const avail = terminalRows() - PANEL_CHROME_LINES - 3;
+  return Math.max(1, Math.min(cap, avail));
+}
 
 export function CapabilityPanel({
   kind,
@@ -44,28 +61,21 @@ export function CapabilityPanel({
   onRefresh?: () => void;
 }) {
   const [idx, setIdx] = useState(0);
-  const cols = terminalCols();
-  const maxLines = isCompactTerminal() ? MAX_PANEL_LINES_COMPACT : MAX_PANEL_LINES;
+  const rows = maxVisibleRows();
 
   const enabledCount = items.filter((it) => it.enabled).length;
   const title = kind === 'skill' ? '🔧 技能' : '🔌 MCP Server';
 
-  // 按渲染行数裁切：每项可能因描述过长折成 2 行，只限条数会撑爆面板
-  const { visible, hidden } = clampByLines(
-    items,
-    (it) => (it.detail ? `${it.name}  ${it.detail}` : it.name),
-    maxLines,
-    { cols, reservedLines: PANEL_CHROME_LINES },
-  );
-
-  // 选择收敛在可见区内：裁剪窗口变化（列表变短）后光标不能落到看不见的行上
-  const clamped = visible.length === 0 ? 0 : Math.min(idx, visible.length - 1);
+  // 光标收敛在 [0, len)：列表变短（启停后重建）时不能越界
+  const active = items.length === 0 ? 0 : Math.min(idx, items.length - 1);
+  // 滚动窗口：保证 active 落在窗口内（这就是"最后隐藏的项也能看到"的关键）
+  const [start, end] = scrollWindow(active, items.length, rows);
 
   const move = (delta: number) => {
-    if (visible.length === 0) return;
+    if (items.length === 0) return;
     setIdx((i) => {
-      const cur = Math.min(i, visible.length - 1);
-      return (cur + delta + visible.length) % visible.length;
+      const cur = Math.min(i, items.length - 1);
+      return (cur + delta + items.length) % items.length;
     });
   };
 
@@ -83,7 +93,7 @@ export function CapabilityPanel({
       return;
     }
     if (input === ' ') {
-      const cur = visible[clamped];
+      const cur = items[active];
       if (cur) {
         onToggle(cur.name);
         onRefresh?.();
@@ -92,7 +102,7 @@ export function CapabilityPanel({
     }
     // R：仅 MCP 有「重连」语义（技能是本地文件，没有连接可言）
     if ((input === 'r' || input === 'R') && kind === 'mcp') {
-      const cur = visible[clamped];
+      const cur = items[active];
       if (cur) {
         onReconnect?.(cur.name);
         onRefresh?.();
@@ -101,6 +111,10 @@ export function CapabilityPanel({
     }
   });
 
+  const visibleItems = items.slice(start, end);
+  const above = start;
+  const below = items.length - end;
+
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1}>
       <Text bold color="cyan">
@@ -108,21 +122,19 @@ export function CapabilityPanel({
       </Text>
 
       {items.length === 0 ? (
-        <Text dimColor>
-          ({kind === 'skill' ? '没有可用技能' : '没有配置 MCP server'})
-        </Text>
+        <Text dimColor>({kind === 'skill' ? '没有可用技能' : '没有配置 MCP server'})</Text>
       ) : (
-        visible.map((it, i) => {
-          const active = i === clamped;
+        visibleItems.map((it, i) => {
+          const isActive = start + i === active;
           return (
             <Box key={it.name}>
-              <Text color={active ? 'cyan' : undefined} bold={active}>
-                {active ? '❯ ' : '  '}
+              <Text color={isActive ? 'cyan' : undefined} bold={isActive}>
+                {isActive ? '❯ ' : '  '}
               </Text>
               {/* 勾选框：与 /todo 编辑器同一套视觉语言 */}
               <Text color={it.enabled ? 'green' : undefined}>{it.enabled ? '☑' : '☐'} </Text>
               <Text
-                color={active ? 'cyan' : undefined}
+                color={isActive ? 'cyan' : undefined}
                 dimColor={!it.enabled}
                 strikethrough={!it.enabled}
               >
@@ -140,10 +152,13 @@ export function CapabilityPanel({
         })
       )}
 
-      {hidden > 0 ? (
+      {/* 滚动位置：上面/下面各有几项，比"还有 N 项"信息更全（用户可以往回翻） */}
+      {above > 0 || below > 0 ? (
         <Text dimColor>
           {' '}
-          … 还有 {hidden} 项（面板高度受限）
+          {above > 0 ? `↑ ${above} ` : ''}
+          {active + 1}/{items.length}
+          {below > 0 ? ` ↓ ${below}` : ''}
         </Text>
       ) : null}
 
@@ -157,26 +172,22 @@ export function CapabilityPanel({
 }
 
 /**
- * 面板实际渲染行数（供 live 预算扣除，与 capability-panel 渲染同口径）。
+ * 面板实际渲染行数（供布局预算与测试断言）。
  *
- * 必须与渲染端算式一致：预算端少算了面板高度，正文就会按虚高的可用空间分配，
- * 整帧冲出终端 → ink 整屏清屏。
+ * 面板自身是 `flexShrink={0}` 的底栏内容，实际不会被压缩；这个函数给出的是
+ * "按当前终端高度，面板会占多少行"，用于验证不会挤占正文。
  */
-export function capabilityPanelHeight(
-  items: CapabilityItem[],
-  opts: { cols?: number; compact?: boolean } = {},
-): number {
-  const cols = opts.cols ?? terminalCols();
-  // 空列表：固定 chrome + 一行"(没有可用技能)"
+export function capabilityPanelHeight(items: CapabilityItem[]): number {
   if (items.length === 0) return PANEL_CHROME_LINES + 1;
-  const maxLines = opts.compact ? MAX_PANEL_LINES_COMPACT : MAX_PANEL_LINES;
-  const { lines, hidden } = clampByLines(
-    items,
-    (it) => (it.detail ? `${it.name}  ${it.detail}` : it.name),
-    maxLines,
-    { cols, reservedLines: PANEL_CHROME_LINES },
-  );
-  // chrome（含键位提示行）+ 内容行 + 省略提示行（有隐藏项时才出现）
-  return PANEL_CHROME_LINES + lines + (hidden > 0 ? 1 : 0);
+  const rows = maxVisibleRows();
+  // chrome + 可见条数 + （有滚动提示时 +1）
+  return PANEL_CHROME_LINES + Math.min(items.length, rows) + (items.length > rows ? 1 : 0);
 }
 
+/** 供测试断言：当前终端下最多可见几条 */
+export function capabilityVisibleRows(): number {
+  return maxVisibleRows();
+}
+
+/** 供测试断言：面板固定 chrome 行数 */
+export const CAPABILITY_CHROME_LINES = PANEL_CHROME_LINES;

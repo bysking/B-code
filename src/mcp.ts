@@ -98,8 +98,24 @@ export async function connectMcp(
 
   // stdio 声明为 pipe 后 stdout/stdin 类型非空，无需强转
   const proc = spawn(command, args, {
-    stdio: ['pipe', 'pipe', 'inherit'],
+    // stderr 必须 pipe 而不是 inherit。
+    //
+    // inherit 会让 server 的 stderr **直连我们的终端**——而 TTY 下终端已被 ink 接管
+    // （光标定位、同步更新序列）。子进程随便吐一行日志就能打乱 ink 的帧；重连时
+    // 被杀进程残留的未刷出字节会被强制写出来，屏幕上就出现 `^[[A^[[B^M` 这类乱码，
+    // 看起来像"输入被中断、一直输出特殊字符"。
+    //
+    // 改为 pipe 后统一收进日志系统（Ctrl+O 的"日志"页可查），既保留可诊断性，又不污染画面。
+    stdio: ['pipe', 'pipe', 'pipe'],
     env: env ? { ...process.env, ...env } : process.env,
+  });
+
+  // server 的 stderr 转成日志行（不写终端）。按行切，避免半行打断排版。
+  proc.stderr?.setEncoding('utf8');
+  proc.stderr?.on('data', (chunk: string) => {
+    for (const line of chunk.split('\n')) {
+      if (line.trim()) log.info(`[mcp] ${line.trim()}`);
+    }
   });
 
   // spawn 失败（ENOENT 等）是异步 error 事件，必须有人接，否则 uncaughtException 炸整个进程
@@ -209,11 +225,33 @@ export async function connectMcp(
     },
     close() {
       try {
+        // 先关 stdin 让 server 有机会优雅收尾（多数实现收到 EOF 就退出）
         proc.stdin.end();
       } catch {
         // 已关闭
       }
-      proc.kill();
+      // 断开 readline，避免残留在途的 stdout 数据继续被解析成响应
+      try {
+        rl.close();
+      } catch {
+        // 忽略
+      }
+      // SIGTERM 给一个收尾机会，超时再 SIGKILL。重连是"先关旧再开新"，
+      // 旧进程若没死干净会和新进程争抢同一份配置资源（端口、锁文件）。
+      const killTimer = setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // 已退出
+        }
+      }, 2000);
+      killTimer.unref?.();
+      proc.once('exit', () => clearTimeout(killTimer));
+      try {
+        proc.kill();
+      } catch {
+        // 已退出
+      }
     },
   };
 

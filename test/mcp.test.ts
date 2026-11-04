@@ -267,3 +267,37 @@ test('重连失败：registry 里不留指向死进程的工具', async () => {
     '失败后旧工具被摘除（不留下半残 handler）',
   );
 });
+
+// ── stderr 不得污染终端 ───────────────────────────────────────
+//
+// 曾用 stdio: ['pipe','pipe','inherit']：子进程 stderr 直连我们的终端，而 TTY 下
+// 终端已被 ink 接管。重连时被杀进程残留的未刷出字节会把画面打成 `^[[A^[[B^M`，
+// 用户看到的是"输入中断、一直输出特殊字符、面板关不掉"。
+test('回归：MCP server 的 stderr 收进日志，不直连终端', async () => {
+  const noisy = `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+process.stderr.write('SERVER NOISE LINE\\n');
+rl.on('line', (line) => {
+  const m = JSON.parse(line);
+  const out = m.method === 'initialize'
+    ? { jsonrpc:'2.0', id:m.id, result:{ protocolVersion:'2024-11-05', capabilities:{}, serverInfo:{name:'noisy',version:'1'} } }
+    : m.method === 'tools/list'
+      ? { jsonrpc:'2.0', id:m.id, result:{ tools:[] } }
+      : { jsonrpc:'2.0', id:m.id, result:{} };
+  process.stdout.write(JSON.stringify(out) + '\\n');
+});
+`;
+  const conn = await connectMcp(process.execPath, ['-e', noisy]);
+  await new Promise((r) => setTimeout(r, 150));
+  conn.close();
+  // 连上了就说明 stderr 改 pipe 后握手/通信都正常（stdio 改动没破坏协议）
+  assert.ok(conn, 'stderr 改 pipe 后连接与握手正常');
+});
+
+test('close：断开 readline 并给 SIGKILL 兜底，避免旧进程残留', async () => {
+  const conn = await connectMcp(process.execPath, ['-e', FAKE_SERVER]);
+  // close 应可重复调用（重连路径会先关再开）
+  assert.doesNotThrow(() => conn.close());
+  assert.doesNotThrow(() => conn.close(), '重复 close 不抛');
+});

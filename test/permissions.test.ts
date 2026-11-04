@@ -17,6 +17,7 @@ import {
   normalizeCommand,
   persistAllowlist,
   persistedKey,
+  mcpServerKey,
   type ExecutionContext,
   type AllowlistStore,
 } from '../src/permissions.js';
@@ -551,4 +552,58 @@ test('loadAllowlist：载入时清洗历史垃圾（一次性/超长条目被剔
   assert.deepEqual([...set].sort(), ['save_memory', 'shell:ls -la'].sort(), '只留可复用条目');
   assert.deepEqual(stored.sort(), ['save_memory', 'shell:ls -la'].sort(), '清洗结果回写落盘');
   assert.ok(JSON.stringify(stored).length < before, '配置文件体积显著缩小');
+});
+
+// ── MCP 工具：一次确认 = 授权整个 server ─────────────────────
+//
+// MCP 的一个 server 就是"一个整体能力"（如 github 集成），其 tool 列表会随
+// server 版本变化。若按 tool 粒度记白名单，server 升级新增 tool 后用户又要
+// 逐个重新确认。因此 MCP 的持久化键折叠成 mcp__<server>__*。
+
+test('mcpServerKey：从工具名提取 server 级通配键；非 MCP 返回 null', () => {
+  assert.equal(mcpServerKey('mcp__github__create_issue'), 'mcp__github__*');
+  assert.equal(mcpServerKey('mcp__my-server__do_thing'), 'mcp__my-server__*');
+  assert.equal(mcpServerKey('write_file'), null);
+  assert.equal(mcpServerKey('mcp__malformed'), null, '缺 tool 段不算');
+});
+
+test('persistedKey：MCP 工具折叠成 server 级通配键', () => {
+  const tool = (name: string): MountPoint => ({
+    name,
+    description: '',
+    inputSchema: {},
+    kind: 'mcp',
+    mode: 'external',
+    handler: () => '',
+  });
+  assert.equal(persistedKey(tool('mcp__github__create_issue'), {}), 'mcp__github__*');
+  assert.equal(persistedKey(tool('mcp__github__get_issue'), {}), 'mcp__github__*', '同 server 同键');
+});
+
+test('MCP 授权一次后，同 server 其他工具免问；别的 server 仍要问', () => {
+  const allowlist = new Set<string>();
+  const tool = (name: string): MountPoint => ({
+    name,
+    description: '',
+    inputSchema: {},
+    kind: 'mcp',
+    mode: 'external',
+    handler: () => '',
+  });
+  // 用户在 create_issue 上确认了一次
+  allowlist.add(persistedKey(tool('mcp__github__create_issue'), {}));
+  assert.ok(allowlistHas(allowlist, persistedKey(tool('mcp__github__get_issue'), {})), '同 server 免问');
+  assert.ok(!allowlistHas(allowlist, persistedKey(tool('mcp__jira__get_issue'), {})), '别的 server 仍要问');
+});
+
+test('persistedKey：非 MCP 的 kind 即使名字带 mcp__ 前缀也不折叠', () => {
+  const weird: MountPoint = {
+    name: 'mcp__x__y',
+    description: '',
+    inputSchema: {},
+    kind: 'builtin',
+    mode: 'read',
+    handler: () => '',
+  };
+  assert.equal(persistedKey(weird, {}), 'mcp__x__y', '按 kind 判定，不按名字猜');
 });
