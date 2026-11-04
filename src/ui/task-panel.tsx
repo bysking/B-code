@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { TaskPanelState } from './controller.js';
 import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
-import { clampByLines } from './scroll-budget.js';
+import { clampByLines, isCompactTerminal } from './scroll-budget.js';
 
 /** 子项状态文案：由 verb 派生（待读取 / 读取中 / 读取完成 …） */
 function statusText(verb: string, status: TaskPanelState['items'][number]['status']): string {
@@ -26,6 +26,13 @@ const MAX_VISIBLE_ITEMS = 8;
  * 不需要全量；完整输出走 Ctrl+O。
  */
 export const TASK_MAX_LINES = 8;
+/** 矮终端下的行数上限：给正文让位（任务面板是即时视图，细节走 Ctrl+O） */
+export const TASK_MAX_LINES_COMPACT = 2;
+
+/** 当前终端下该用的行数上限 */
+function maxLines(): number {
+  return isCompactTerminal() ? TASK_MAX_LINES_COMPACT : TASK_MAX_LINES;
+}
 
 /** 面板固定占用（边框上下 + 标题行 + 省略提示行） */
 const PANEL_CHROME_LINES = 4;
@@ -42,7 +49,7 @@ function candidates(task: TaskPanelState): TaskPanelState['items'] {
 /** 面板实际渲染高度（行）：供上层从 live 预算里扣掉真实占用 */
 export function taskPanelHeight(task: TaskPanelState | null): number {
   if (!task) return 0;
-  const { visible, lines } = clampByLines(candidates(task), (it) => itemLine(task.verb, it), TASK_MAX_LINES, {
+  const { visible, lines } = clampByLines(candidates(task), (it) => itemLine(task.verb, it), maxLines(), {
     reservedLines: PANEL_CHROME_LINES,
   });
   const omitted = task.items.length - visible.length;
@@ -55,7 +62,7 @@ export function taskPanelHeight(task: TaskPanelState | null): number {
  * 面板只在任务进行中存在 —— 全部完成后 controller 直接移除，这里恒为进行中。
  */
 export function TaskPanel({ task }: { task: TaskPanelState }) {
-  const { visible } = clampByLines(candidates(task), (it) => itemLine(task.verb, it), TASK_MAX_LINES, {
+  const { visible } = clampByLines(candidates(task), (it) => itemLine(task.verb, it), maxLines(), {
     reservedLines: PANEL_CHROME_LINES,
   });
   const omitted = task.items.length - visible.length;

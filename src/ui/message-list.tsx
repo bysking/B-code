@@ -406,15 +406,24 @@ export function MessageList({
         }}
       </Static>
       <Box flexDirection="column">
-        {liveItems.map((it) =>
-          it.kind === 'output' ? (
-            <OutputView key={`lo${it.id}`} text={it.text} />
-          ) : hasChunks(it.turn) ? (
-            <TurnRemainder key={it.turn.id} turn={it.turn} />
-          ) : (
-            <TurnView key={it.turn.id} turn={it.turn} />
-          ),
-        )}
+        {(() => {
+          // live 区工具块用**全局**预算：跨 turn 累计，总和不超过 LIVE_TOOL_ROWS_MAX。
+          // 每个 turn 各自限 4 个是不够的——5 个未落定 turn 就是 20+ 行，
+          // 足以把整帧顶过终端高度（触发 ink 整屏清屏）。
+          let toolBudget = LIVE_TOOL_ROWS_MAX;
+          return liveItems.map((it) => {
+            if (it.kind === 'output') return <OutputView key={`lo${it.id}`} text={it.text} />;
+            const pending = Math.max(it.turn.tools.length - (it.turn.toolsCommitted ?? 0), 0);
+            const allow = Math.min(pending, Math.max(toolBudget, 0));
+            toolBudget -= allow;
+            const turn = allow === pending ? it.turn : { ...it.turn, tools: it.turn.tools.slice(0, allow) };
+            return hasChunks(turn) ? (
+              <TurnRemainder key={it.turn.id} turn={turn} />
+            ) : (
+              <TurnView key={it.turn.id} turn={turn} />
+            );
+          });
+        })()}
         {busy && since !== null ? (
           <Box marginTop={1}>
             <BusyLine

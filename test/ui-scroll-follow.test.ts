@@ -673,3 +673,47 @@ test('live 帧：正文流式期间待办突然出现，也要重新收敛（ref
   });
   assert.equal(cleared, false, '面板变高后残留正文必须被切走，否则整帧溢出');
 });
+
+// ── 闭环校验：实测帧高回灌后强制收敛 ─────────────────────────────
+
+test('闭环：reconcileLiveHeight 把超标帧的内容切走，且内容不丢', () => {
+  const ctrl = new AppController();
+  ctrl.pushUser('x');
+  ctrl.streamText('X'.repeat(5000)); // 无换行超长单行
+  const turn = ctrl.turns.at(-1)!;
+  const before = turn.text.length + turn.chunks.reduce((n, c) => n + c.length, 0);
+  assert.equal(before, 5000, '切分前总内容完整');
+
+  // 模拟 ink 报告了一个远超终端高度的帧
+  ctrl.reconcileLiveHeight(200);
+
+  const after = turn.text.length + turn.chunks.reduce((n, c) => n + c.length, 0);
+  assert.equal(after, before, '切分不得丢内容（只是从 live 移到 <Static>）');
+});
+
+test('闭环：多批未落定 turn 累积时也能收敛（只切尾部不够）', () => {
+  const ctrl = new AppController();
+  const restore = withTerminal(24, 50);
+  try {
+    for (let b = 0; b < 5; b++) {
+      ctrl.pushUser(`第${b}轮`);
+      ctrl.streamText(`回复 ${b}\n正文\n正文\n`);
+      const tools = Array.from({ length: 6 }, (_, i) => ({
+        id: `b${b}t${i}`,
+        name: 'read_file',
+        input: { file_path: `/f${b}-${i}.tsx` },
+      }));
+      ctrl.planTools(tools);
+      ctrl.toolStart(tools[0]!.id, tools[0]!.name, tools[0]!.input);
+    }
+    const totalBefore = ctrl.turns.reduce((n, t) => n + (t.role === 'assistant' ? t.text.length : 0), 0);
+    ctrl.reconcileLiveHeight(60);
+    const totalAfter = ctrl.turns.reduce((n, t) => n + (t.role === 'assistant' ? t.text.length : 0), 0);
+    assert.ok(totalAfter < totalBefore, `应当切走部分正文（${totalBefore} → ${totalAfter}）`);
+    // 内容仍完整（移到了 chunks）
+    const chunks = ctrl.turns.reduce((n, t) => n + t.chunks.reduce((m, c) => m + c.length, 0), 0);
+    assert.ok(chunks > 0, '切走的内容进入 chunks，不丢失');
+  } finally {
+    restore();
+  }
+});

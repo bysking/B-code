@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { clampByLines } from './scroll-budget.js';
+import { clampByLines, isCompactTerminal } from './scroll-budget.js';
 
 /** 待办状态符号与配色 */
 const TODO_SYMBOL: Record<string, string> = { pending: '☐', in_progress: '◐', completed: '☑' };
@@ -21,8 +21,19 @@ const MAX_VISIBLE = 10;
  */
 export const TODO_MAX_LINES = 10;
 
+/**
+ * 矮终端下的行数上限：终端一屏本来就小，面板再占十几行，正文就没地方了。
+ * 此时只保留 3 行待办——足够看出"在做什么"，细节可滚上去看。
+ */
+export const TODO_MAX_LINES_COMPACT = 3;
+
 /** 面板固定占用（边框上下 + 标题行 + 省略提示行） */
 const PANEL_CHROME_LINES = 4;
+
+/** 当前终端下该用的行数上限 */
+function maxLines(): number {
+  return isCompactTerminal() ? TODO_MAX_LINES_COMPACT : TODO_MAX_LINES;
+}
 
 export interface TodoItem {
   content: string;
@@ -40,7 +51,7 @@ function todoLine(t: TodoItem): string {
  */
 export function todoPanelHeight(todos: TodoItem[]): number {
   if (todos.length === 0) return 0;
-  const { visible, lines } = clampByLines(sliceCandidates(todos), todoLine, TODO_MAX_LINES, {
+  const { visible, lines } = clampByLines(sliceCandidates(todos), todoLine, maxLines(), {
     reservedLines: PANEL_CHROME_LINES,
   });
   // lines 是已计入软换行的渲染行数（clampByLines 内部用 estimateLines）
@@ -60,7 +71,7 @@ function sliceCandidates(todos: TodoItem[]): TodoItem[] {
  */
 export function TodoPanel({ todos }: { todos: TodoItem[] }) {
   if (todos.length === 0) return null;
-  const { visible, hidden } = clampByLines(sliceCandidates(todos), todoLine, TODO_MAX_LINES, {
+  const { visible, hidden } = clampByLines(sliceCandidates(todos), todoLine, maxLines(), {
     reservedLines: PANEL_CHROME_LINES,
   });
   const omitted = todos.length - visible.length;

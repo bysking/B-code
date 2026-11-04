@@ -24,11 +24,17 @@ export function terminalCols(): number {
 }
 
 /**
- * live 区为**固定**底部元素预留的行数：输入行 / busy 行 / 模式栏。
- * 面板（任务清单 / 待办）高度是浮动的，不写在这里——由调用方用
- * liveLineBudget(动态占用) 把它们各自的实测高度传进来。
+ * live 区为**固定**底部元素预留的行数：busy 行 / 输入行 / 模式栏 / 换行余量。
+ *
+ * 只算这三样（各自 1 行）+ 3 行余量 = 8。**面板高度不算在这里**——
+ * 待办/任务面板随条数与折行浮动（窄终端下两个面板能占 18 行），
+ * 用固定常量预留必然估偏；调用方通过 liveLineBudget(动态占用) 把实测高度传进来。
+ *
+ * 历史教训：这个值曾是 16，隐含把面板也算了进去。一旦实际面板更高
+ * （长待办折行 + 多工具面板），预算就系统性高估可用空间，live 帧必然溢出
+ * → ink 整屏清屏（连 scrollback 一起清）。
  */
-export const CHROME_RESERVED_ROWS = 16;
+export const CHROME_RESERVED_ROWS = 8;
 /** live 预算下限（极小终端也至少留 8 行给流式尾部） */
 export const MIN_LIVE_BUDGET = 8;
 

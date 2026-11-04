@@ -13,6 +13,7 @@ import {
   LIVE_TOOL_ROWS_MAX,
   liveLineBudget,
   terminalCols,
+  terminalRows,
 } from './scroll-budget.js';
 import { todoPanelHeight } from './todo-panel.js';
 import { taskPanelHeight } from './task-panel.js';
@@ -349,7 +350,7 @@ export class AppController {
         thinkingChunks: [],
         toolsCommitted: 0,
       });
-    this.enforceLiveHeight(this.turns[this.turns.length - 1]!);
+    this.reflowLive();
     this.bump();
   }
 
@@ -428,6 +429,9 @@ export class AppController {
     // 任务面板同步：对应子项 → running
     const item = this.task?.items.find((t) => t.id === id);
     if (item) item.status = 'running';
+    // 工具块进入 live 区 → 正文预算变小，必须重估；否则一次批量工具
+    // （首个 toolStart 落地整批 queued 工具）就把帧顶过终端高度。
+    this.reflowLive();
     this.bump();
   }
 
@@ -494,7 +498,7 @@ export class AppController {
         toolsCommitted: 0,
       });
     }
-    this.enforceLiveHeight(this.turns[this.turns.length - 1]!);
+    this.reflowLive();
     this.bump();
   }
 
@@ -529,35 +533,159 @@ export class AppController {
    * 与 message-list 的 LIVE_TOOL_ROWS_MAX 保持一致：实际渲染是"上限内逐个 + 一行汇总"。
    */
   private liveToolBlockRows(): number {
-    const last = this.turns[this.turns.length - 1];
-    if (!last || last.role !== 'assistant') return 0;
-    const pending = Math.max(last.tools.length - last.toolsCommitted, 0);
-    if (pending === 0) return 0;
-    return Math.min(pending, LIVE_TOOL_ROWS_MAX) + (pending > LIVE_TOOL_ROWS_MAX ? 1 : 0);
+    // 统计**所有**未落定 turn 的工具块行数（多批工具会各建一个 assistant turn）。
+    // 注意：每个 turn 各自"最多 4 个"是不够的——5 个 turn 就是 20+ 行。
+    // 这里给的是**全局**预算：live 区所有工具块加起来不超过 LIVE_TOOL_ROWS_MAX。
+    let rows = 0;
+    for (let i = 0; i < this.turns.length; i++) {
+      const t = this.turns[i];
+      if (!t || t.role !== 'assistant') continue;
+      if (this.isCommittableTurn(t, i)) continue; // 已落定 → 进 <Static>，不占 live
+      const pending = Math.max(t.tools.length - t.toolsCommitted, 0);
+      if (pending === 0) continue;
+      rows += Math.min(pending, LIVE_TOOL_ROWS_MAX) + 1; // 工具块 + B Code 标题行
+    }
+    // 全局封顶：渲染端也按同一上限截断（见 message-list 的 liveToolBudgetRows）
+    return Math.min(rows, LIVE_TOOL_ROWS_MAX + 1);
   }
 
-  private enforceLiveHeight(turn: Turn) {
+  /**
+   * 闭环校验：把"实测帧高"喂回来，强制收敛到终端高度以内。
+   *
+   * 为什么需要它：enforceLiveHeight 是**开环估算**——用 estimateLines 估行数、
+   * 用 CHROME_RESERVED_ROWS 常量预留底部元素。一旦估偏（软换行、CJK 宽度、
+   * 面板实际高度、markdown 渲染膨胀），live 帧就会超出终端，ink 判定溢出后走
+   * 整屏清屏分支（ESC[2J+3J+H），ESC[3J 连 scrollback 一起清 → 用户回看位置丢失。
+   *
+   * 这里不再猜：拿 ink 实际写出的帧高，只要超过安全线就继续把正文/thinking 的
+   * 前缀提交进 <Static>，直到帧高真正降下来。是"量了再切"，而不是"算了就信"。
+   *
+   * @param frameRows 上一帧实测高度（行）
+   * @returns 是否做了切分（调用方据此决定是否触发重渲染）
+   */
+  reconcileLiveHeight(frameRows: number): boolean {
+    const safe = Math.max(terminalRows() - 1, 1); // 留 1 行余量：等于终端高度也会触发清屏
+    if (frameRows <= safe) return false;
+
+    // 不只切最后一个 turn：多批工具会各建一个 assistant turn，前面那些若未落定
+    // （工具没全 done）同样滞留在 live 区，只切尾部根本降不下来。
+    // 从最新往回，逐个把「未落定 turn」的内容强制提交，直到总缺口补上。
+    const excess = frameRows - safe + 1;
     const cols = terminalCols();
+    let changed = false;
+    // 从最新往回遍历，每个未落定的 turn 都要缩——只切尾部补不上总缺口
+    for (let i = this.turns.length - 1; i >= 0; i--) {
+      const t = this.turns[i];
+      if (!t || t.role !== 'assistant') continue;
+      if (this.isCommittableTurn(t, i)) continue; // 已可提交，无需处理
+      changed = this.shrinkTurn(t, excess, cols) || changed;
+    }
+    if (changed) this.bump();
+    return changed;
+  }
+
+  /** 该 turn 现在是否已落定（可整体提交进 <Static>） */
+  private isCommittableTurn(t: Turn, index: number): boolean {
+    if (t.streaming) return false;
+    if (t.tools.some((x) => x.status !== 'done')) return false;
+    if (index === this.turns.length - 1 && t.usage === undefined && this.busy !== null) return false;
+    return true;
+  }
+
+  /** 把单个 turn 的内容按 excess 行切走（thinking 优先，其次正文，最后工具块） */
+  private shrinkTurn(turn: Turn, excess: number, cols: number): boolean {
+    let changed = false;
+
+    // 先切 thinking（纯文本，切分无 markdown 约束），不够再切正文
+    const th = estimateLines(turn.thinking ?? '', cols);
+    if (th > 0) {
+      const keepTh = Math.max(th - excess, 0);
+      const sp = findStreamSplit(turn.thinking ?? '', keepTh, { cols, markdown: false });
+      if (sp) {
+        turn.thinkingChunks.push(turn.thinking!.slice(0, sp.cut));
+        turn.thinking = turn.thinking!.slice(sp.cut);
+        changed = true;
+      } else if (turn.thinking) {
+        // 切不动行边界 → 按字符硬切到预算内
+        const perLine = Math.max(cols, 10);
+        const cutChars = Math.min(keepTh * perLine, turn.thinking.length);
+        turn.thinkingChunks.push(turn.thinking.slice(0, cutChars));
+        turn.thinking = turn.thinking.slice(cutChars);
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      const tx = estimateLines(turn.text, cols);
+      if (tx > 0) {
+        const keepTx = Math.max(tx - excess, 0);
+        const sp = findStreamSplit(turn.text, keepTx, { cols, markdown: true });
+        if (sp) {
+          let prefix = turn.text.slice(0, sp.cut);
+          let rest = turn.text.slice(sp.cut);
+          if (sp.closeFence) prefix += sp.closeFence;
+          if (sp.openFence) rest = sp.openFence + rest;
+          turn.chunks.push(prefix);
+          turn.text = rest;
+          changed = true;
+        } else if (turn.text) {
+          // 切不动行边界 → 按字符硬切到预算内（不做整块清空）
+          const perLine = Math.max(cols, 10);
+          const cutChars = Math.min(keepTx * perLine, turn.text.length);
+          turn.chunks.push(turn.text.slice(0, cutChars));
+          turn.text = turn.text.slice(cutChars);
+          changed = true;
+        }
+      }
+    }
+
+    // 正文/thinking 都切不动（空）→ 退而求其次：把工具块全部提交
+    if (!changed) {
+      const pending = turn.tools.length - turn.toolsCommitted;
+      if (pending > 0) {
+        turn.toolsCommitted = turn.tools.length;
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  /** 单轮切分；返回 true 表示切了（还需要再检查） */
+  private enforceLiveHeightOnce(turn: Turn, cols: number, budget: number): boolean {
     const th = estimateLines(turn.thinking ?? '', cols);
     const tx = estimateLines(turn.text, cols);
-    // 预算要扣掉两部分的**实测**高度：
-    //   ① 底部面板（待办/任务）——随条数与折行浮动；
-    //   ② live 区工具块——未完成的那批工具也渲染在 live 里，各占一行。
-    // 用固定常量预留会在面板/工具变多时让整帧溢出终端 → ink 整屏清屏
-    // （ESC[3J 连 scrollback 一起清），用户回看位置被重置。
-    const budget = liveLineBudget(this.footerChromeRows() + this.liveToolBlockRows());
-    if (th + tx <= budget) return;
-    const keep = Math.max(Math.floor(budget * 0.6), 4);
+    if (th + tx <= budget) return false;
+    // 硬上限：切完必须真的 ≤ budget。旧实现用 budget*0.6 作滞回保留量，
+    // 当 th/tx 远超 budget（如一次性灌入数百行）时，切一次仍然超——而 ink
+    // 只在本帧就判定溢出，来不及等下一次。所以这里直接切到 ≤ budget 为止。
+    // 滞回只用于"小幅超出"的常规流式，避免逐 token 频繁提交。
+    const softKeep = Math.max(Math.floor(budget * 0.6), 4);
+    const hardKeep = Math.max(budget - 1, 1);
+    // 超出不多 → 用滞回（少切一点，减少提交次数）；超出很多 → 直接切到硬上限
+    const keep = th + tx > budget * 2 ? hardKeep : softKeep;
     const thKeep = tx === 0 ? keep : Math.min(th, Math.floor(keep * 0.3));
     const txKeep = th === 0 ? keep : keep - thKeep;
+    let changed = false;
     if (th > thKeep && turn.thinking) {
       const sp = findStreamSplit(turn.thinking, thKeep, { cols, markdown: false });
       if (sp) {
         turn.thinkingChunks.push(turn.thinking.slice(0, sp.cut));
         turn.thinking = turn.thinking.slice(sp.cut);
+        changed = true;
+      } else if (turn.thinking) {
+        // 找不到可切的行边界（整块无换行的超长文本）→ 按字符硬切，
+        // 不做"整块清空"（那会让正文区瞬间空白）
+        const perLine = Math.max(cols, 10);
+        const cutChars = Math.min(thKeep * perLine, turn.thinking.length);
+        if (cutChars > 0) {
+          turn.thinkingChunks.push(turn.thinking.slice(0, cutChars));
+          turn.thinking = turn.thinking.slice(cutChars);
+          changed = true;
+        }
       }
     }
-    if (tx > txKeep) {
+    if (tx > txKeep && turn.text) {
       const sp = findStreamSplit(turn.text, txKeep, { cols, markdown: true });
       if (sp) {
         let prefix = turn.text.slice(0, sp.cut);
@@ -567,15 +695,25 @@ export class AppController {
         if (sp.openFence) rest = sp.openFence + rest;
         turn.chunks.push(prefix);
         turn.text = rest;
+        changed = true;
+      } else {
+        // 找不到行边界（极长单行、无换行）→ 按**字符**硬切
+        const perLine = Math.max(cols, 10);
+        const cutChars = Math.min(txKeep * perLine, turn.text.length);
+        if (cutChars > 0) {
+          turn.chunks.push(turn.text.slice(0, cutChars));
+          turn.text = turn.text.slice(cutChars);
+          changed = true;
+        }
       }
     }
+    return changed;
   }
 
   /** 终端窗口变化：重新评估防溢出（缩小终端可能让原本合规的尾部超预算）；
    * 流式追加时也会自动重估，这里兜住"缩小后无新 delta"的空窗。 */
   handleResize() {
-    const last = this.turns[this.turns.length - 1];
-    if (last) this.enforceLiveHeight(last);
+    this.reflowLive();
     this.bump();
   }
 
@@ -721,8 +859,48 @@ export class AppController {
    * 用户回看位置被重置。这是"任务清单一出现就跳到最底部"的直接原因。
    */
   private reflowLive() {
-    const last = this.turns[this.turns.length - 1];
-    if (last) this.enforceLiveHeight(last);
+    // 关键：按**所有 live turn 的总量**收敛，而不是逐个 turn 各自按全额预算判断。
+    // 每个 turn 单独看都"没超"，加起来就爆了（5 个未落定 turn × 4 行正文 = 20 行，
+    // 而 24 行终端只剩 4 行可用）。所以从**最旧**的 live turn 开始切，
+    // 切到总量真的 ≤ 预算为止——旧内容先走（用户本来也看不到了）。
+    const cols = terminalCols();
+    const budget = liveLineBudget(this.footerChromeRows() + this.liveToolBlockRows());
+    for (let guard = 0; guard < 64; guard++) {
+      let total = 0;
+      const live: Turn[] = [];
+      for (let i = 0; i < this.turns.length; i++) {
+        const t = this.turns[i];
+        if (!t || t.role !== 'assistant') continue;
+        if (this.isCommittableTurn(t, i)) continue; // 已落定 → 进 <Static>，不占 live
+        total += estimateLines(t.thinking ?? '', cols) + estimateLines(t.text, cols);
+        live.push(t);
+      }
+      if (total <= budget) return;
+      // 从最旧的 live turn 开始处理（用户不再关注的那部分先让位）。
+      // 首个 turn 通常已经切到不能再切（只剩几行），此时"逐刀切"收敛太慢：
+      // 直接把整个 turn 的文本搬进 <Static>（chunks），让它变可提交。
+      const oldest = live[0]!;
+      if (!this.enforceLiveHeightOnce(oldest, cols, budget)) {
+        // 切不动 → 整块清空（内容进 chunks，不丢），使该 turn 立即满足提交条件
+        let moved = false;
+        if (oldest.thinking) {
+          oldest.thinkingChunks.push(oldest.thinking);
+          oldest.thinking = '';
+          moved = true;
+        }
+        if (oldest.text) {
+          oldest.chunks.push(oldest.text);
+          oldest.text = '';
+          moved = true;
+        }
+        if (!moved) {
+          // 文本已空但 turn 仍不可提交 → 只能把工具块全提交，再退出避免死循环
+          const pending = oldest.tools.length - oldest.toolsCommitted;
+          if (pending > 0) oldest.toolsCommitted = oldest.tools.length;
+          return;
+        }
+      }
+    }
   }
 
   // ── 用户自管待办（/todo）────────────────────────────────────

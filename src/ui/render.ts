@@ -3,6 +3,7 @@ import { render, type Instance } from 'ink';
 import { App } from './app.js';
 import { createScrollFollow, type ScrollFollow } from './scroll-follow.js';
 import { setLogSink } from '../utils/log.js';
+import { terminalRows } from './scroll-budget.js';
 import type { AppController } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
@@ -32,6 +33,8 @@ export function mountTtyApp(
     onSetMode?: (mode: Mode) => void;
   },
   initialOutput?: string[],
+  /** 输出/输入流（缺省 process.stdout / process.stdin）。注入供测试与未来复用。 */
+  streams?: { stdout?: NodeJS.WriteStream; stdin?: NodeJS.ReadStream },
 ): TtyMount {
   /**
    * 接管系统日志：TTY 下不写 stderr，而是收进 controller 供 Ctrl+O 的"日志"页查看。
@@ -43,7 +46,60 @@ export function mountTtyApp(
    */
   const restoreLogSink = setLogSink((line) => ctrl.pushLog(line));
 
-  const scrollFollow = createScrollFollow();
+  /**
+   * 实测帧高并回灌（闭环校验）。
+   *
+   * ink 的 onRender 只给 renderTime，拿不到高度；而它写 stdout 的内容里带着完整的
+   * 帧文本，所以直接旁路统计：每当一笔写入含"内容"（非纯控制序列），就按该笔的
+   * 行数当作本帧高度。
+   *
+   * 为什么必须实测而不能只靠估算：enforceLiveHeight 用 estimateLines + 常量预留，
+   * 一旦估偏（软换行/CJK 宽度/面板浮动/markdown 膨胀），live 帧超出终端后 ink 会
+   * 整屏清屏（ESC[3J 连 scrollback 一起清），用户回看位置直接丢失。实测回灌把
+   * "猜"换成"量"，超了就继续切，直到真的降下来。
+   */
+  const observed = { rows: 0 };
+  // 观测对象必须是 **ink 真正写入的那条流**（下方显式传给 render），而不是
+  // 假定 process.stdout——测试/未来切换输出流时两者可能不是同一个对象，
+  // 那样观测不到任何写入，闭环校验会静默失效。
+  const out = streams?.stdout ?? process.stdout;
+  const originalWrite = out.write.bind(out) as (chunk: any, ...a: any[]) => boolean;
+  let reconciling = false;
+  (out as { write: unknown }).write = (chunk: any, ...rest: any[]): boolean => {
+    const s = typeof chunk === 'string' ? chunk : String(chunk);
+    const result = originalWrite(chunk, ...rest);
+    // 只统计真正含内容的写入：纯 CSI（同步更新/光标/CPR）不动画面，不构成帧
+    const visible = s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+    if (visible.trim()) {
+      const rows = visible.split('\n').length;
+      // 防重入：reconcile 里会 bump() → 触发下一帧 → 又会写 stdout
+      if (!reconciling && rows > 0) {
+        observed.rows = rows;
+        if (rows > Math.max(terminalRows() - 1, 1)) {
+          // 必须在**渲染帧之外**收敛：此处正处于 ink 的 renderInteractiveFrame
+          // 内部，同步 bump() 会让 React 在渲染期间更新状态并抛错。
+          // 用 setImmediate 推到下一轮事件循环，让 ink 先完成本次提交。
+          reconciling = true;
+          setImmediate(() => {
+            try {
+              ctrl.reconcileLiveHeight(rows);
+            } finally {
+              reconciling = false;
+            }
+          });
+        }
+      }
+    }
+    return result;
+  };
+  const restoreStdout = (): void => {
+    (out as { write: unknown }).write = originalWrite;
+  };
+
+  const scrollFollow = createScrollFollow({
+    ...(streams?.stdin ? { stdin: streams.stdin } : {}),
+    ...(streams?.stdout ? { stdout: streams.stdout } : {}),
+  });
   const instance = render(
     React.createElement(App, {
       ctrl,
@@ -56,13 +112,14 @@ export function mountTtyApp(
     }),
     // 关闭 ink 默认 exitOnCtrlC：否则 Ctrl+C 被 ink 吞掉，我们自己的
     // "第一次提示 / 第二次退出 / 打印恢复命令" 协议永远收不到事件
-    { exitOnCtrlC: false, stdin: scrollFollow.input },
+    { exitOnCtrlC: false, stdin: scrollFollow.input, stdout: out },
   );
   return {
     instance,
     unmount: () => {
       scrollFollow.dispose();
       instance.unmount();
+      restoreStdout(); // 解除帧高观测
       restoreLogSink(); // 交还 stderr，退出期日志要能正常打到终端
     },
     scrollFollow,
