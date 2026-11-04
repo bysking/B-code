@@ -5,8 +5,9 @@ import type { Registry } from './registry.js';
 import { clearSessionFile, loadSession, saveSession } from './session.js';
 import { resolveSkill, discoverSkills } from './skills.js';
 import { saveMemory } from './memory.js';
-import { closeAllMcpConnections } from './mcp.js';
+import { closeAllMcpConnections, isMcpConnected } from './mcp.js';
 import { formatMcpList, resolveMcpConfigs } from './mcp-config.js';
+import type { CapabilityItem, CapabilityKind } from './ui/controller.js';
 import { AppController } from './ui/controller.js';
 import type { WizardStep } from './ui/controller.js';
 import { createSettingsAllowlistStore, loadSettings } from './config.js';
@@ -31,21 +32,8 @@ import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
 import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
 import type { SpinnerLike } from './ui.js';
 import type { Mode } from './permissions.js';
-import { readClipboardImage, type ClipboardImage } from './utils/clipboard.js';
+import type { ClipboardImage } from './utils/clipboard.js';
 import { checkForUpdate, localVersion } from './version-check.js';
-
-/**
- * 聊天输入封装：自动检测剪贴板图片，如果存在则与文本一起发送给模型。
- * 纯文本（无图片）时行为与直接调用 agent.chat(text) 一致。
- */
-async function chatWithClipboard(agent: Agent, text: string): Promise<void> {
-  const clipboardImage = readClipboardImage();
-  if (clipboardImage) {
-    await agent.chat({ text, images: [clipboardImage] });
-  } else {
-    await agent.chat(text);
-  }
-}
 
 /**
  * CLI 外壳（施工图 L1 cli.ts）
@@ -146,7 +134,8 @@ const HELP_TEXT = [
   '  /rewind          回退本次会话的文件改动',
   '  /todos           查看任务清单',
   '  /plan /auto /yolo /default   切换权限模式',
-  '  /skills /mcp     列出技能 / MCP server',
+  '  /skills          技能面板（空格启用/禁用）',
+  '  /mcp             MCP 面板（空格启用/禁用，R 重连）',
   '  /remember <事实> 保存长期记忆',
   '  exit | quit      退出',
   '快捷键:',
@@ -186,10 +175,54 @@ export function groupsAsWizard(
   }));
 }
 
-/** /mcp：某 MCP server 在 registry 中已挂载的工具数（0 = 启动时连接失败，fail-open） */
+/**
+ * /mcp：某 MCP server 在 registry 中已挂载的工具数（0 = 启动时连接失败，fail-open）。
+ * 用 includeDisabled=true：管理视图要看真实挂载量，禁用只是"不发给模型"。
+ */
 function countMcpTools(registry: Registry, serverName: string): number | null {
-  const n = registry.list().filter((mp) => mp.name.startsWith(`mcp__${serverName}__`)).length;
+  const n = registry
+    .list((mp) => mp.name.startsWith(`mcp__${serverName}__`), true)
+    .length;
   return n > 0 ? n : null;
+}
+
+/**
+ * 构建能力面板的列表数据（技能 / MCP）。
+ *
+ * 单一数据源：启用状态一律从 Agent 的快照读，不在 UI 侧另存一份——
+ * 否则「空格切换」后两处状态会漂移（面板显示启用、实际已禁用）。
+ */
+export function buildCapabilityItems(
+  kind: CapabilityKind,
+  agent: Agent,
+  cwd: string = process.cwd(),
+): CapabilityItem[] {
+  const disabled = agent.disabledSnapshot();
+  if (kind === 'skill') {
+    return discoverSkills(cwd)
+      .filter((s) => s.userInvocable)
+      .map((s) => ({
+        name: s.name,
+        enabled: !disabled.skills.includes(s.name),
+        detail: s.description || undefined,
+      }));
+  }
+  const configs = resolveMcpConfigs(cwd);
+  return Object.keys(configs).map((name) => {
+    const cfg = configs[name]!;
+    const count = countMcpTools(agent.registry, name);
+    const connected = isMcpConnected(name);
+    const parts = [[cfg.command, ...(cfg.args ?? [])].join(' ')];
+    if (!connected) parts.push('未连接');
+    else if (count !== null) parts.push(`${count} 工具`);
+    if (cfg.mode === 'read') parts.push('(read)');
+    return {
+      name,
+      enabled: !disabled.mcpServers.includes(name),
+      detail: parts.join(' · '),
+      connected,
+    };
+  });
 }
 
 /**
@@ -351,6 +384,13 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   };
   let unmount: (() => void) | null = null;
 
+  /** 能力面板：用 Agent 的最新状态回灌列表（每次操作后都调，UI 永远等于真源） */
+  const refreshCapability = (): void => {
+    const panel = ctrl.capabilityPanel;
+    if (!panel) return;
+    ctrl.setCapabilityItems(buildCapabilityItems(panel.kind, agent));
+  };
+
   const { unmount: unmountApp } = mountTtyApp(
     ctrl,
     {
@@ -361,6 +401,34 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         agent.setMode(mode);
         ctrl.pushOutput(`(mode → ${mode})`);
       },
+      // 空格：切换启停。切换后立即回灌（勾选框 + 行内提示同步刷新）
+      onToggleCapability: (name) => {
+        const panel = ctrl.capabilityPanel;
+        if (!panel) return;
+        if (panel.kind === 'skill') {
+          const enabled = agent.toggleSkill(name);
+          ctrl.setCapabilityNotice(name, enabled ? '✓ 已启用' : '✓ 已禁用（不再发送给模型）');
+        } else {
+          const enabled = agent.toggleMcpServer(name);
+          ctrl.setCapabilityNotice(
+            name,
+            enabled ? '✓ 已启用' : '✓ 已禁用（工具不再发送给模型，进程保持）',
+          );
+        }
+        refreshCapability();
+      },
+      // R：重连（仅 MCP）。异步：先挂"重连中…"，完成后换成结果提示
+      onReconnectCapability: (name) => {
+        ctrl.setCapabilityNotice(name, '重连中…');
+        void agent.reconnectMcp(name).then((r) => {
+          ctrl.setCapabilityNotice(
+            name,
+            r.ok ? `✓ 已重连（${r.toolCount ?? 0} 工具）` : `✗ 重连失败：${r.error ?? '未知错误'}`,
+          );
+          refreshCapability();
+        });
+      },
+      refreshCapability,
     },
     initialOutput,
   );
@@ -405,17 +473,12 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         return;
       }
       if (trimmed === '/skills') {
-        const skills = discoverSkills()
-          .filter((s) => s.userInvocable)
-          .map((s) => `/${s.name}: ${s.description}`)
-          .join('\n');
-        // 走 ctrl.pushOutput（而非 console.log 直写 stdout）——直写会与 Ink 的
-        // live 帧抢占同一片终端区域，导致输出错位/被覆盖。
-        ctrl.pushOutput(skills ? `Available skills:\n${skills}` : '(no skills)');
+        // 交互面板（空格启停）；非 TTY 走不了面板，那里仍打印文本
+        ctrl.openCapability('skill', buildCapabilityItems('skill', agent));
         return;
       }
       if (trimmed === '/mcp') {
-        ctrl.pushOutput(formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name)));
+        ctrl.openCapability('mcp', buildCapabilityItems('mcp', agent));
         return;
       }
       if (trimmed === '/help') {
@@ -491,7 +554,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         quit(0);
         return;
       }
-      await chatWithClipboard(agent, effective);
+      await agent.chat(effective);
       await saveSession(agent.history(), sessionId);
 
       if (agent.interruptedByUser) {
@@ -707,17 +770,19 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         return;
       }
       if (input === '/skills') {
-        const skills = discoverSkills()
-          .filter((s) => s.userInvocable)
-          .map((s) => `/${s.name}: ${s.description}`)
-          .join('\n');
-        process.stdout.write(skills ? `Available skills:\n${skills}\n` : '(no skills)\n');
+        // 非 TTY 无交互能力：退回纯文本，但带上禁用标记
+        // （管道/CI 场景没有空格键，至少让 /skills | cat 能看出当前状态）
+        const items = buildCapabilityItems('skill', agent);
+        const lines = items.map(
+          (it) => `${it.enabled ? '✓' : '✗'} /${it.name}${it.enabled ? '' : ' (disabled)'}: ${it.detail ?? ''}`,
+        );
+        process.stdout.write(lines.length ? `Available skills:\n${lines.join('\n')}\n` : '(no skills)\n');
         created.prompt();
         return;
       }
       if (input === '/mcp') {
         process.stdout.write(
-          `${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name))}\n`,
+          `${formatMcpList(resolveMcpConfigs(), (name) => countMcpTools(agent.registry, name), agent.disabledSnapshot().mcpServers)}\n`,
         );
         created.prompt();
         return;
@@ -781,7 +846,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         busy = true;
         try {
           try {
-            await chatWithClipboard(agent, skillPrompt);
+            await agent.chat(skillPrompt);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
@@ -799,7 +864,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       busy = true;
       try {
         try {
-          await chatWithClipboard(agent, input);
+          await agent.chat(input);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
@@ -896,7 +961,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     busy = true;
     try {
       for (;;) {
-        await chatWithClipboard(agent, instruction);
+        await agent.chat(instruction);
         await new Promise((r) => setTimeout(r, loop * 1000));
       }
     } finally {
@@ -911,7 +976,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     busy = true; // 中途 stdin 可能 EOF（管道押完 y 就断），close 只标记不退出
     const effective = resolveSkill(instruction) ?? instruction; // 支持 one-shot 技能调用
     try {
-      await chatWithClipboard(agent, effective);
+      await agent.chat(effective);
     } finally {
       await saveSession(agent.history(), sessionId);
       busy = false;

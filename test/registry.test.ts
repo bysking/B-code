@@ -48,3 +48,44 @@ test('handler 经注册表可执行（read_file 完整路径）', async () => {
   const out = await mp.handler({ file_path: here }, ctx);
   assert.ok(String(out).includes('register/resolve/list'));
 });
+
+// ── 禁用前缀（技能/MCP 启停）────────────────────────────────
+test('setDisabledPrefixes：命中前缀的工具不出现在 toolsSchema / list', () => {
+  const r = new Registry();
+  r.register({ name: 'mcp__github__pr', description: 'd', inputSchema: {}, handler: () => '' });
+  r.register({ name: 'mcp__github__read_resource', description: 'd', inputSchema: {}, handler: () => '' });
+  r.register({ name: 'mcp__jira__issue', description: 'd', inputSchema: {}, handler: () => '' });
+  r.register({ name: 'read_file', description: 'd', inputSchema: {}, handler: () => '' });
+
+  r.setDisabledPrefixes(['mcp__github__']);
+
+  const names = r.toolsSchema().map((t) => t.name);
+  assert.ok(!names.includes('mcp__github__pr'), 'github 工具隐身');
+  assert.ok(!names.includes('mcp__github__read_resource'), 'github 资源工具一并隐身');
+  assert.ok(names.includes('mcp__jira__issue'), '别的 server 不受影响');
+  assert.ok(names.includes('read_file'), '内置工具不受影响');
+
+  assert.equal(r.list().length, 2, 'list 默认也过滤禁用项');
+  assert.equal(r.list(undefined, true).length, 4, 'includeDisabled 能看全量（管理视图用）');
+});
+
+test('禁用不影响 resolve：历史里已发出的 tool_use 仍可执行', () => {
+  const r = new Registry();
+  r.register({ name: 'mcp__github__pr', description: 'd', inputSchema: {}, handler: () => 'ok' });
+  r.setDisabledPrefixes(['mcp__github__']);
+  // 刻意保留：模型看不到（schema 隐身），但旧会话的 tool_use 不能因此崩掉
+  assert.ok(r.resolve('mcp__github__pr'), 'resolve 不做禁用过滤');
+  assert.equal(r.isDisabled('mcp__github__pr'), true);
+});
+
+test('unregisterByPrefix：一次性摘掉某 server 的全部工具', () => {
+  const r = new Registry();
+  r.register({ name: 'mcp__github__a', description: 'd', inputSchema: {}, handler: () => '' });
+  r.register({ name: 'mcp__github__b', description: 'd', inputSchema: {}, handler: () => '' });
+  r.register({ name: 'keep', description: 'd', inputSchema: {}, handler: () => '' });
+
+  const removed = r.unregisterByPrefix('mcp__github__');
+  assert.deepEqual(removed.sort(), ['mcp__github__a', 'mcp__github__b']);
+  assert.equal(r.resolve('mcp__github__a'), undefined, '已摘除');
+  assert.ok(r.resolve('keep'), '无关工具保留');
+});

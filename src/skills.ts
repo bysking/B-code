@@ -214,9 +214,20 @@ export function resolveSkill(input: string, cwd: string = process.cwd()): string
   return null;
 }
 
-/** 把 user-invocable 技能注入 system prompt（只暴露用户可主动调用的） */
-export function buildSkillDescriptions(cwd: string = process.cwd()): string {
-  const skills = discoverSkills(cwd).filter((s) => s.userInvocable);
+/**
+ * 把 user-invocable 技能注入 system prompt（只暴露用户可主动调用的）。
+ *
+ * disabled：被用户禁用的技能名集合——**不进上下文**（省 token，也避免模型主动推荐）。
+ * 注意只影响注入，不影响 `resolveSkill`：用户手打 `/commit` 依然照常执行，
+ * 语义是"不主动推给模型"而非"封死"。
+ */
+export function buildSkillDescriptions(
+  cwd: string = process.cwd(),
+  disabled?: ReadonlySet<string>,
+): string {
+  const skills = discoverSkills(cwd).filter(
+    (s) => s.userInvocable && !disabled?.has(s.name),
+  );
   if (skills.length === 0) return '';
   const lines = skills.map((s) => `- /${s.name}: ${s.description}`);
   return `\n\n# Available Skills\n${lines.join('\n')}`;

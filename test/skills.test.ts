@@ -80,6 +80,21 @@ test('discoverSkills 返回元信息', async () => {
   assert.ok(commit?.userInvocable);
 });
 
+test('buildSkillDescriptions：禁用集合里的技能不注入上下文', () => {
+  const desc = buildSkillDescriptions(proj, new Set(['commit']));
+  // 断言 "- /commit:"（行首的技能条目）而非裸 "/commit"：
+  // 别的技能描述里也常出现 "/commit" 字样（如"采集两分支/commit 之间的变更"），
+  // 裸子串匹配会把它们误判成"没禁用掉"。
+  assert.ok(!desc.includes('- /commit:'), '被禁用的技能不进 system prompt');
+  assert.ok(desc.includes('- /dup:') || desc.includes('- /portable:'), '其他技能照常注入');
+});
+
+test('禁用技能不影响 resolveSkill：手打 /commit 照常执行', () => {
+  // 语义是"不主动推给模型"，不是"封死"——用户明确调用必须还能用
+  const out = resolveSkill('/commit add login', proj);
+  assert.equal(out, 'Do the commit. Request: add login');
+});
+
 // ── B_CODE_HOME / B_CODE_SKILLS_DIR 兼容层 ─────────────────────
 
 test('B_CODE_HOME/skills 层：用户级技能随数据根迁移可发现', async () => {

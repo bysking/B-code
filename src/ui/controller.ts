@@ -17,6 +17,7 @@ import {
 } from './scroll-budget.js';
 import { todoPanelHeight } from './todo-panel.js';
 import { taskPanelHeight } from './task-panel.js';
+import { capabilityPanelHeight } from './capability-panel.js';
 import type { Mode } from '../permissions.js';
 import type { UserTodo } from '../user-todo.js';
 
@@ -169,6 +170,28 @@ export interface SlashItem {
   description: string;
 }
 
+/** 能力面板类型：技能列表 / MCP server 列表 */
+export type CapabilityKind = 'skill' | 'mcp';
+
+/** 能力面板的一行（技能或 MCP server） */
+export interface CapabilityItem {
+  name: string;
+  /** 启用中（false = 已禁用，不发给模型） */
+  enabled: boolean;
+  /** 副标题：技能放 description；MCP 放连接状态与工具数 */
+  detail?: string;
+  /** MCP 专用：是否持有活连接（决定 R 键重连是否有意义） */
+  connected?: boolean;
+  /** 行内一次性提示（如"重连中…"/"✓ 已重连"），渲染后由面板清除 */
+  notice?: string;
+}
+
+/** 能力面板状态（null = 未打开） */
+export interface CapabilityPanelState {
+  kind: CapabilityKind;
+  items: CapabilityItem[];
+}
+
 /**
  * 工具块里展示的参数摘要。
  *
@@ -253,6 +276,8 @@ export class AppController {
   userTodos: UserTodo[] = [];
   /** /todo 交互编辑器是否打开（TTY 下无参 /todo 进入；开时 App 让出键盘） */
   userTodoOpen = false;
+  /** /skills、/mcp 交互面板（null = 未打开；开时 App 让出键盘） */
+  capabilityPanel: CapabilityPanelState | null = null;
   /** 用户待办变更后的落盘钩子（cli 注入；缺省不落盘，便于单测纯内存跑） */
   persistUserTodos: ((todos: UserTodo[]) => void) | null = null;
   /** 文本输入提问（askText）：null = 无 */
@@ -520,7 +545,12 @@ export class AppController {
   private footerChromeRows(): number {
     // 与 app.tsx 的渲染保持一致：矮终端下任务面板不渲染，预算就不能算它
     const task = isCompactTerminal() ? 0 : taskPanelHeight(this.task);
-    return todoPanelHeight(this.todos) + task;
+    // 能力面板（/skills、/mcp）打开时同样占底部空间：少算它，正文就会按虚高的
+    // 可用空间分配，整帧冲出终端 → ink 整屏清屏（滚动位置被重置）
+    const capability = this.capabilityPanel
+      ? capabilityPanelHeight(this.capabilityPanel.items, { compact: isCompactTerminal() })
+      : 0;
+    return todoPanelHeight(this.todos) + task + capability;
   }
 
   /**
@@ -919,6 +949,41 @@ export class AppController {
   setUserTodoOpen(open: boolean) {
     if (this.userTodoOpen === open) return;
     this.userTodoOpen = open;
+    this.bump();
+  }
+
+  // ── 能力面板（/skills、/mcp）────────────────────────────────
+
+  /** 打开能力面板并灌入初始列表 */
+  openCapability(kind: CapabilityKind, items: CapabilityItem[]) {
+    this.capabilityPanel = { kind, items };
+    this.bump();
+  }
+
+  closeCapability() {
+    if (!this.capabilityPanel) return;
+    this.capabilityPanel = null;
+    this.bump();
+  }
+
+  /**
+   * 用最新数据覆盖面板列表。
+   * 面板不自己存启用状态——每次都从 Agent 拉快照覆盖，
+   * 保证「空格切换」后 UI 与真源一致（单一真源在 Agent）。
+   */
+  setCapabilityItems(items: CapabilityItem[]) {
+    if (!this.capabilityPanel) return;
+    this.capabilityPanel = { ...this.capabilityPanel, items };
+    this.bump();
+  }
+
+  /** 给某一行挂一次性提示（重连中/成功/失败）；不改动其余行 */
+  setCapabilityNotice(name: string, notice: string | undefined) {
+    if (!this.capabilityPanel) return;
+    this.capabilityPanel = {
+      ...this.capabilityPanel,
+      items: this.capabilityPanel.items.map((it) => (it.name === name ? { ...it, notice } : it)),
+    };
     this.bump();
   }
 

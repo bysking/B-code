@@ -100,8 +100,8 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 | `/yolo`            | 切换 Bypass 模式                             |
 | `/auto`            | 切换 Auto 模式（分类器管控写/shell）         |
 | `/default`         | 切换回默认模式                               |
-| `/skills`          | 列出可用技能                                 |
-| `/mcp`             | 列出已配置的 MCP server                      |                        |
+| `/skills`          | 技能面板：空格启用/禁用（禁用的不发给模型）  |
+| `/mcp`             | MCP 面板：空格启用/禁用，`R` 重连            |
 | `/remember <事实>` | 保存一条长期记忆                             |
 | `exit` / `quit`    | 退出                                         |
 
@@ -205,6 +205,11 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 3. `$B_CODE_HOME/skills` —— 用户级，随数据根迁移
 4. `~/.claude/skills` —— 兼容既有 Claude 生态的兜底
 
+**启用/禁用：** `/skills` 打开交互面板，`↑↓` 选择、`空格` 启停、`Esc` 关闭。
+禁用的技能**不进 system prompt**（省 token，模型也不会主动推荐），但手动
+`/commit` 依然照常执行——语义是"不主动推给模型"，不是封死。
+状态存在 `{B_CODE_HOME}/settings.json` 的 `disabled.skills`（全局生效，跨项目持久）。
+
 ## 记忆（Memory）
 
 跨会话长期记忆。模型通过 `save_memory` 工具主动沉淀（经用户确认后落盘），也可以在 REPL 里用 `/remember` 手动保存。
@@ -233,6 +238,15 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
     }
   }
 }
+```
+
+**启用/禁用与重连：** `/mcp` 打开交互面板，`↑↓` 选择、`空格` 启停、`R` 重连、`Esc` 关闭。
+
+- **禁用** = 该 server 的工具从模型可见的 `toolsSchema` 摘掉（不花 token）；**子进程保持存活**，
+  重新启用瞬时生效。与技能不同，MCP 没有"手动调用"通道，所以禁用即模型不可见。
+- **重连（`R`）** = 重开子进程 → 重新握手 → 重新注册工具。用于 server 进程崩了、
+  或配置文件改了想立刻生效的场景。失败时该 server 的工具会被完全摘除（不留指向死进程的 handler）。
+- 状态存在 `{B_CODE_HOME}/settings.json` 的 `disabled.mcpServers`（全局生效）。
 ```
 
 `mode: "read"` 声明该 server 所有工具按只读放行（免确认）；缺省 fail-closed → 需要确认。

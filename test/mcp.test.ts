@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { connectMcp, loadMcpServers } from '../src/mcp.js';
+import {
+  closeMcpConnection,
+  connectMcp,
+  connectMcpServer,
+  isMcpConnected,
+  loadMcpServers,
+  reconnectMcpServer,
+} from '../src/mcp.js';
 import { MCP_CONFIG_ENV } from '../src/mcp-config.js';
 import { Registry, type RuntimeContext } from '../src/registry.js';
 
@@ -180,5 +187,83 @@ rl.on('line', (line) => {
   await assert.rejects(
     () => connectMcp(process.execPath, ['-e', halfServer], undefined, { requestTimeoutMs: 200 }),
     /timed out after 200ms: tools\/list/,
+  );
+});
+
+// ── 单 server 连接 / 重连（/mcp 面板 R 键）────────────────────
+test('connectMcpServer：按名字记录连接，isMcpConnected 可查', async () => {
+  const registry = new Registry();
+  const r = await connectMcpServer(registry, 'unit', {
+    command: process.execPath,
+    args: ['-e', FAKE_SERVER],
+  });
+  try {
+    assert.equal(r.ok, true);
+    assert.equal(r.toolCount, 1, '一个 echo 工具');
+    assert.equal(isMcpConnected('unit'), true);
+    assert.ok(registry.resolve('mcp__unit__echo'), '已注册前缀工具');
+  } finally {
+    closeMcpConnection('unit');
+  }
+  assert.equal(isMcpConnected('unit'), false, '关闭后不再记录');
+});
+
+test('reconnectMcpServer：重连替换连接，工具不重复注册', async () => {
+  const cfg = join(dir, 'reconnect.json');
+  await writeFile(
+    cfg,
+    JSON.stringify({ mcpServers: { rc: { command: process.execPath, args: ['-e', FAKE_SERVER] } } }),
+  );
+  process.env[MCP_CONFIG_ENV] = cfg;
+
+  const registry = new Registry();
+  await connectMcpServer(registry, 'rc', {
+    command: process.execPath,
+    args: ['-e', FAKE_SERVER],
+  });
+  const before = registry.list(undefined, true).length;
+  assert.equal(before, 1, '首次只有 1 个工具');
+
+  const r = await reconnectMcpServer(registry, 'rc');
+  try {
+    assert.equal(r.ok, true, '重连成功');
+    assert.equal(r.toolCount, 1);
+    assert.equal(registry.list(undefined, true).length, 1, '工具没有重复累加');
+    const mp = registry.resolve('mcp__rc__echo');
+    assert.ok(mp);
+    // 重连后的 handler 必须指向新进程（旧进程已 kill）
+    const ctx = {} as RuntimeContext;
+    assert.equal(await mp.handler({ text: 'pong' }, ctx), 'echo:pong');
+  } finally {
+    closeMcpConnection('rc');
+  }
+});
+
+test('reconnectMcpServer：未配置的 server → 报错而不是静默成功', async () => {
+  process.env[MCP_CONFIG_ENV] = join(dir, 'reconnect.json'); // 只有 rc
+  const registry = new Registry();
+  const r = await reconnectMcpServer(registry, 'ghost');
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /未在 mcp\.json 中找到 ghost/);
+});
+
+test('重连失败：registry 里不留指向死进程的工具', async () => {
+  const cfg = join(dir, 'dead-reconnect.json');
+  await writeFile(
+    cfg,
+    JSON.stringify({ mcpServers: { dead: { command: 'definitely-not-a-command', args: [] } } }),
+  );
+  process.env[MCP_CONFIG_ENV] = cfg;
+
+  const registry = new Registry();
+  // 先塞一个"旧工具"，模拟之前连上过
+  registry.register({ name: 'mcp__dead__x', description: 'd', inputSchema: {}, handler: () => '' });
+
+  const r = await reconnectMcpServer(registry, 'dead');
+  assert.equal(r.ok, false);
+  assert.equal(
+    registry.resolve('mcp__dead__x'),
+    undefined,
+    '失败后旧工具被摘除（不留下半残 handler）',
   );
 });

@@ -45,3 +45,29 @@ test('readClipboardImage：有图片时返回 base64 数据', async () => {
     console.log('  ⚠  skipped: osascript not available');
   }
 });
+
+/**
+ * 回归：cli 层的发消息路径不能自动读剪贴板。
+ *
+ * 曾经 cli.ts 把 agent.chat 包成 chatWithClipboard——每次发消息都探测剪贴板，
+ * 只要有图就静默塞进上下文。用户启动 bcode 时若剪贴板里恰好有截图，第一句话
+ * 就会莫名带上图片。图片只能由用户在输入框里 Ctrl+V 显式粘贴（ui/app.tsx）。
+ *
+ * 这里直接扫源码断言：cli.ts 不得引用 readClipboardImage / chatWithClipboard。
+ * 静态检查而非行为测试，因为要防的正是"又加回自动读取"这个改动本身。
+ */
+test('回归：cli.ts 发消息路径不得自动读取剪贴板', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+  const src = readFileSync(cliPath, 'utf-8');
+
+  assert.ok(
+    !src.includes('readClipboardImage'),
+    'cli.ts 不应调用 readClipboardImage（图片只能由用户 Ctrl+V 显式粘贴）',
+  );
+  assert.ok(
+    !src.includes('chatWithClipboard'),
+    'cli.ts 不应存在 chatWithClipboard 包装（会自动附带剪贴板图片）',
+  );
+});

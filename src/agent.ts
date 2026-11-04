@@ -10,8 +10,15 @@ import { registerTodoTool, loadTodos, type TodoItem } from './todo.js';
 import { CheckpointStore, withCheckpoints } from './checkpoint.js';
 import { runSubAgent } from './subagent.js';
 import { FileStore } from './file-store.js';
-import { loadMcpServers } from './mcp.js';
+import { loadMcpServers, reconnectMcpServer, type McpConnectResult } from './mcp.js';
 import { Registry, type RuntimeContext, type UserOption } from './registry.js';
+import {
+  loadDisabled,
+  saveDisabled,
+  toggleInList,
+  mcpDisabledPrefixes,
+  type DisabledState,
+} from './toggles.js';
 import { buildSystemPrompt, type SystemBlock } from './prompt.js';
 import {
   truncateResult,
@@ -196,6 +203,8 @@ export interface AgentOptions {
   onTodos?: (todos: TodoItem[]) => void;
   /** Hooks 配置（UserPromptSubmit / PreToolUse / PostToolUse）；缺省无 hook */
   hooks?: HooksConfig;
+  /** 技能/MCP 启停状态的落盘文件（测试注入临时路径；缺省 settings.json） */
+  disabledFile?: string;
 }
 
 export class Agent {
@@ -230,6 +239,10 @@ export class Agent {
   public readonly registry = new Registry();
   private readonly ctx: RuntimeContext;
   private mcpLoaded = false;
+  /** 技能/MCP 启停状态（settings.json 的 disabled 字段；全局持久） */
+  private disabled: DisabledState = { skills: [], mcpServers: [] };
+  /** 禁用状态落盘位置（可注入便于测试隔离；缺省 settings.json） */
+  private readonly disabledFile?: string;
 
   constructor(opts: AgentOptions = {}) {
     this.call = opts.callModel ?? callModel;
@@ -241,9 +254,13 @@ export class Agent {
     this.mode = opts.mode ?? 'default';
     this.allowlistStore = opts.allowlistStore;
     this.hooks = opts.hooks ?? {};
+    this.disabledFile = opts.disabledFile;
 
     // 载入持久化白名单（settings.json permissions.allow）→ 上次"记住不再问"的授权本次生效
     if (this.allowlistStore) loadAllowlist(this.allowlistStore, this.allowlist);
+    // 载入技能/MCP 启停状态 → 上次禁用的本次依然隐身（全局生效）
+    this.disabled = loadDisabled(this.disabledFile);
+    this.registry.setDisabledPrefixes(mcpDisabledPrefixes(this.disabled));
     // 载入本项目待办清单（跨会话存续）
     this.todos = loadTodos();
 
@@ -298,6 +315,50 @@ export class Agent {
     if (this.mcpLoaded) return;
     this.mcpLoaded = true;
     await loadMcpServers(this.registry, cwd);
+  }
+
+  // ── 能力启停（技能 / MCP）──────────────────────────────────
+  //
+  // 唯一真源在这里：UI 面板每次重渲染都从 Agent 拉快照，避免两处状态漂移。
+  // 变更立即落盘 settings.json（全局生效，跨项目持久）。
+
+  /** 当前禁用状态快照（只读副本，外部改动不影响内部） */
+  disabledSnapshot(): DisabledState {
+    return { skills: [...this.disabled.skills], mcpServers: [...this.disabled.mcpServers] };
+  }
+
+  /** 切换技能启停，返回切换后的 enabled 状态；副作用：落盘 + 不注入后续 prompt */
+  toggleSkill(name: string): boolean {
+    this.disabled.skills = toggleInList(this.disabled.skills, name);
+    this.persistDisabled();
+    return !this.disabled.skills.includes(name);
+  }
+
+  /**
+   * 切换 MCP server 启停，返回切换后的 enabled 状态。
+   * 禁用只摘掉 toolsSchema 里的工具，**不杀子进程**（重新启用瞬时生效）。
+   */
+  toggleMcpServer(name: string): boolean {
+    this.disabled.mcpServers = toggleInList(this.disabled.mcpServers, name);
+    this.persistDisabled();
+    this.applyDisabledToRegistry();
+    return !this.disabled.mcpServers.includes(name);
+  }
+
+  /** 重连指定 MCP server（面板 R 键）；与启停正交，禁用状态下也能重连 */
+  async reconnectMcp(name: string, cwd = process.cwd()): Promise<McpConnectResult> {
+    const result = await reconnectMcpServer(this.registry, name, cwd);
+    this.applyDisabledToRegistry(); // 重连会重新注册工具，禁用前缀需重新生效
+    return result;
+  }
+
+  /** 把禁用前缀同步给 registry（工具隐身），并保证禁用项不进入后续 toolsSchema */
+  private applyDisabledToRegistry(): void {
+    this.registry.setDisabledPrefixes(mcpDisabledPrefixes(this.disabled));
+  }
+
+  private persistDisabled(): void {
+    saveDisabled(this.disabled, this.disabledFile);
   }
 
   setMode(mode: Mode): void {
@@ -462,7 +523,8 @@ export class Agent {
     // （近因效应让模型优先看到记忆；一次 chat 只召回一次，避免循环内重复 IO）
     const system = buildSystemPrompt({
       memory: recallMemories(text),
-      skills: buildSkillDescriptions(),
+      // 被禁用的技能不进上下文（省 token，模型也不会主动推荐）
+      skills: buildSkillDescriptions(process.cwd(), new Set(this.disabled.skills)),
     });
 
     while (true) {

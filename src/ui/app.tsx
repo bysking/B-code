@@ -19,6 +19,7 @@ import { isCompactTerminal, terminalRows } from './scroll-budget.js';
 import { TaskPanel } from './task-panel.js';
 import { TodoPanel } from './todo-panel.js';
 import { UserTodoEditor } from './user-todo-editor.js';
+import { CapabilityPanel } from './capability-panel.js';
 import { AskInput } from './ask-input.js';
 import { ModeBar } from './mode-bar.js';
 import { buildSlash, buildSubmitLine } from './slash.js';
@@ -36,6 +37,9 @@ export function App({
   onInterrupt,
   onExit,
   onSetMode,
+  onToggleCapability,
+  onReconnectCapability,
+  refreshCapability,
   initialOutput,
   scrollFollow,
 }: {
@@ -44,6 +48,12 @@ export function App({
   onInterrupt: () => void;
   onExit: () => void;
   onSetMode: (mode: Mode) => void;
+  /** 能力面板空格：切换技能/MCP 启停（cli 负责落盘并回灌列表） */
+  onToggleCapability?: (name: string) => void;
+  /** 能力面板 R：重连 MCP server（仅 kind === 'mcp' 时触发） */
+  onReconnectCapability?: (name: string) => void;
+  /** 面板刷新数据源（每次按键后重拉，避免列表过期） */
+  refreshCapability?: () => void;
   initialOutput?: string[];
   /** 智能跟随：视口在底部时才自动滚动，滚离后冻结画面让用户回看（可缺省 → 恒跟随） */
   scrollFollow?: ScrollFollow;
@@ -207,7 +217,7 @@ export function App({
         onInterrupt();
       }
     },
-    { isActive: !ctrl.userTodoOpen },
+    { isActive: !ctrl.userTodoOpen && !ctrl.capabilityPanel },
   );
 
   const handleChange = (value: string) => {
@@ -339,6 +349,17 @@ export function App({
         />
       ) : null}
 
+      {ctrl.capabilityPanel ? (
+        <CapabilityPanel
+          kind={ctrl.capabilityPanel.kind}
+          items={ctrl.capabilityPanel.items}
+          onToggle={(name) => onToggleCapability?.(name)}
+          onReconnect={(name) => onReconnectCapability?.(name)}
+          onRefresh={() => refreshCapability?.()}
+          onClose={() => ctrl.closeCapability()}
+        />
+      ) : null}
+
       {quitArmed ? (
         <Box>
           <Text dimColor>(再按一次 Ctrl+C 退出)</Text>
@@ -352,7 +373,13 @@ export function App({
           onChange={handleChange}
           onSubmit={handleSubmit}
           onPaste={handlePaste}
-          disabled={!!ctrl.askState || !!ctrl.askTextState || !!ctrl.askWizardState || ctrl.userTodoOpen}
+          disabled={
+            !!ctrl.askState ||
+            !!ctrl.askTextState ||
+            !!ctrl.askWizardState ||
+            ctrl.userTodoOpen ||
+            !!ctrl.capabilityPanel
+          }
           slashOpen={ctrl.slashOpen}
         />
         <ModeBar mode={ctrl.mode} updateInfo={ctrl.updateInfo} />

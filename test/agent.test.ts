@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, compactToolEcho } from '../src/agent.js';
@@ -636,4 +636,126 @@ test('compactToolEcho：非字符串参数走 JSON，非对象输入返回空串
   assert.equal(compactToolEcho(null), '');
   assert.equal(compactToolEcho(undefined), '');
   assert.equal(compactToolEcho('str'), '');
+});
+
+// ── 能力启停（技能 / MCP）────────────────────────────────────
+//
+// 核心不变量：**禁用项不进入发给模型的上下文**。
+// 技能走 system prompt 过滤，MCP 走 toolsSchema 过滤——两条路径分别验证。
+
+/** 捕获每次模型调用的 system / tools，便于断言"发了什么" */
+function makeCapturingBackend() {
+  const calls: ModelInput[] = [];
+  const fn = async (input: ModelInput): Promise<ModelOutput> => {
+    calls.push({ ...input, messages: [...input.messages] });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  };
+  return { fn, calls };
+}
+
+/** 把 system blocks 拼成可搜索的纯文本 */
+function systemText(input: ModelInput): string {
+  const sys = input.system;
+  if (typeof sys === 'string') return sys;
+  return (sys ?? []).map((b) => ('text' in b ? b.text : '')).join('\n');
+}
+
+/**
+ * 只取 `# Available Skills` 段。
+ *
+ * 必须切开看：动态上下文里还有 Git 状态（`?? .claude/skills/xxx.md`）等段落会
+ * 顺带提到技能文件名，直接在全文里搜 name 会误判"还注入着"。
+ */
+function skillsSection(input: ModelInput): string {
+  const text = systemText(input);
+  const idx = text.indexOf('# Available Skills');
+  if (idx === -1) return '';
+  const rest = text.slice(idx);
+  // 段落到下一个 "^\n# " 标题为止
+  const end = rest.search(/\n\n# /);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+test('禁用技能：不进 system prompt；启用后恢复', async () => {
+  const disabledFile = join(dir, 'settings-skills.json');
+  const { fn, calls } = makeCapturingBackend();
+  const agent = new Agent({ callModel: fn, print: () => {}, disabledFile });
+  await agent.initMcp();
+
+  // 先造一个可见技能：写进 cwd 的技能目录（discoverSkills 只扫 cwd 与共享目录）
+  // 用项目级目录，避免污染真实 ~/.claude/skills
+  const skillDir = join(process.cwd(), '.claude', 'skills');
+  const skillFile = join(skillDir, '__toggle_test_skill.md');
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    skillFile,
+    '---\nname: __toggle_test_skill\ndescription: toggle me\nuser-invocable: true\n---\nbody\n',
+  );
+  try {
+    await agent.chat('hello');
+    assert.ok(skillsSection(calls[0]!).includes('__toggle_test_skill'), '未禁用时注入');
+
+    assert.equal(agent.toggleSkill('__toggle_test_skill'), false, '切换后变为禁用');
+    await agent.chat('hello again');
+    assert.ok(
+      !skillsSection(calls[1]!).includes('__toggle_test_skill'),
+      '禁用后不再注入 system prompt',
+    );
+
+    assert.equal(agent.toggleSkill('__toggle_test_skill'), true, '再切回来变启用');
+    await agent.chat('third');
+    assert.ok(skillsSection(calls[2]!).includes('__toggle_test_skill'), '恢复注入');
+  } finally {
+    await rm(skillFile, { force: true });
+  }
+});
+
+test('禁用技能：状态落盘，新 Agent 读回依然禁用', async () => {
+  const disabledFile = join(dir, 'settings-persist.json');
+  const a1 = new Agent({ callModel: makeCapturingBackend().fn, print: () => {}, disabledFile });
+  a1.toggleSkill('commit');
+  a1.toggleMcpServer('github');
+
+  const a2 = new Agent({ callModel: makeCapturingBackend().fn, print: () => {}, disabledFile });
+  const snap = a2.disabledSnapshot();
+  assert.deepEqual(snap.skills, ['commit'], '技能禁用跨实例持久');
+  assert.deepEqual(snap.mcpServers, ['github'], 'MCP 禁用跨实例持久');
+});
+
+test('禁用 MCP：工具从 toolsSchema 摘掉；resolve 仍可执行（旧会话兜底）', async () => {
+  const disabledFile = join(dir, 'settings-mcp.json');
+  const { fn, calls } = makeCapturingBackend();
+  const agent = new Agent({ callModel: fn, print: () => {}, disabledFile });
+
+  // 手工挂一个 MCP 形态工具（不启动真实子进程）
+  agent.registry.register({
+    name: 'mcp__fake__echo',
+    description: 'echo',
+    inputSchema: { type: 'object', properties: {} },
+    kind: 'mcp',
+    mode: 'read',
+    handler: () => 'echo!',
+  });
+
+  agent.toggleMcpServer('fake'); // 禁用 → 立即同步 registry 前缀
+  await agent.chat('hi');
+  const tools = (calls[0]!.tools ?? []).map((t) => t.name);
+  assert.ok(!tools.includes('mcp__fake__echo'), '禁用后不发给模型');
+  assert.ok(agent.registry.resolve('mcp__fake__echo'), 'resolve 仍可达（历史 tool_use 不崩）');
+
+  agent.toggleMcpServer('fake'); // 恢复
+  await agent.chat('hi again');
+  const tools2 = (calls[1]!.tools ?? []).map((t) => t.name);
+  assert.ok(tools2.includes('mcp__fake__echo'), '启用后重新发给模型');
+});
+
+test('reconnectMcp：未配置的 server 返回失败结果，不抛', async () => {
+  const agent = new Agent({
+    callModel: makeCapturingBackend().fn,
+    print: () => {},
+    disabledFile: join(dir, 'settings-reconnect.json'),
+  });
+  const r = await agent.reconnectMcp('definitely-not-configured');
+  assert.equal(r.ok, false);
+  assert.ok(r.error);
 });

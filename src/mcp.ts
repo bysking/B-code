@@ -42,7 +42,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 // MCP server 是长驻子进程，若不 kill 会拖住主进程事件循环，导致 chat 完成后进程永不退出。
 // 关键：不能挂在 process "exit" 上——正是子进程句柄阻止进程退出，exit 事件根本不会触发。
 // 用 beforeExit（事件循环即将空时触发，杀掉子进程后循环才有机会真正变空）＋业务终点显式关闭。
-const activeConnections: McpConnection[] = [];
+/**
+ * server 名 → 连接。按 server 索引（而非扁平数组）是为了支持**单个 server 重连**：
+ * 重连时替换这一条即可，不必惊动其他 server。
+ */
+const serverConnections = new Map<string, McpConnection>();
 let cleanupInstalled = false;
 function installExitCleanup(): void {
   if (cleanupInstalled) return;
@@ -52,14 +56,31 @@ function installExitCleanup(): void {
 
 /** 显式关闭全部已连接 server（业务终点调用：one-shot 结束、REPL 关闭） */
 export function closeAllMcpConnections(): void {
-  while (activeConnections.length > 0) {
-    const conn = activeConnections.pop();
+  for (const conn of serverConnections.values()) {
     try {
-      conn?.close();
+      conn.close();
     } catch {
       // 已关闭
     }
   }
+  serverConnections.clear();
+}
+
+/** 关闭单个 server 的连接（重连前清理旧进程） */
+export function closeMcpConnection(serverName: string): void {
+  const conn = serverConnections.get(serverName);
+  if (!conn) return;
+  serverConnections.delete(serverName);
+  try {
+    conn.close();
+  } catch {
+    // 已关闭
+  }
+}
+
+/** 该 server 当前是否持有活连接（/mcp 面板展示状态用） */
+export function isMcpConnected(serverName: string): boolean {
+  return serverConnections.has(serverName);
 }
 
 export interface ConnectMcpOptions {
@@ -196,9 +217,98 @@ export async function connectMcp(
     },
   };
 
-  activeConnections.push(conn);
   installExitCleanup();
   return conn;
+}
+
+/** 单 server 连接结果（连接失败不抛，交由调用方决定提示方式） */
+export interface McpConnectResult {
+  ok: boolean;
+  /** 启动的进程 pid（重连后变化，便于用户确认真的换了进程） */
+  pid?: number;
+  /** 注册的工具数（含 read_resource） */
+  toolCount?: number;
+  error?: string;
+}
+
+/**
+ * 连接单个 server 并把它的工具注册进 registry。
+ *
+ * 重连复用同一函数：先摘旧工具、关旧进程，再走一遍完整握手。这样"首次连接"和
+ * "重连"共享一条代码路径，不会出现两套注册逻辑各写一半的情况。
+ */
+export async function connectMcpServer(
+  registry: Registry,
+  serverName: string,
+  cfg: { command: string; args?: string[]; env?: Record<string, string>; mode?: 'read' },
+): Promise<McpConnectResult> {
+  // 先清理：旧连接（若有）+ 旧工具，避免 handler 指向死进程或注册重复
+  closeMcpConnection(serverName);
+  registry.unregisterByPrefix(`mcp__${serverName}__`);
+
+  try {
+    const conn = await connectMcp(cfg.command, cfg.args ?? [], cfg.env);
+    serverConnections.set(serverName, conn);
+
+    // 外部工具默认 fail-closed → confirm；读类 server 可在 mcp.json 里显式标注
+    const toolMode = cfg.mode === 'read' ? 'read' : 'external';
+    for (const tool of conn.tools) {
+      registry.register({
+        name: `mcp__${serverName}__${tool.name}`,
+        description: tool.description || `[MCP:${serverName}] ${tool.name}`,
+        inputSchema: tool.inputSchema,
+        kind: 'mcp',
+        mode: toolMode,
+        handler: async (input) => conn.callTool(tool.name, input),
+      });
+    }
+
+    // 资源以只读工具暴露（mcp__<server>__read_resource）：uri 作为参数，
+    // 模型按需读取 server 提供的文件/数据（resources/read）。
+    if (conn.resources.length > 0) {
+      const catalog = conn.resources
+        .map((r) => `- ${r.uri}${r.description ? ` — ${r.description}` : ''}`)
+        .join('\n');
+      registry.register({
+        name: `mcp__${serverName}__read_resource`,
+        description: `[MCP:${serverName}] Read a resource by URI. Available resources:\n${catalog}`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            uri: { type: 'string', description: 'Resource URI to read' },
+          },
+          required: ['uri'],
+        },
+        kind: 'mcp',
+        mode: 'read', // 只读：plan 模式放行、免确认
+        handler: async (input) => conn.readResource(String(input.uri ?? '')),
+      });
+    }
+
+    const toolCount =
+      conn.tools.length + (conn.resources.length > 0 ? 1 : 0);
+    log.info(`mcp connected: ${serverName} (${toolCount} tools)`);
+    return { ok: true, toolCount };
+  } catch (err) {
+    const error = (err as Error).message;
+    log.warn(`mcp server failed to connect: ${serverName}`, error);
+    return { ok: false, error };
+  }
+}
+
+/**
+ * 重连单个 server（/mcp 面板的 R 键）：重开子进程 → 重新握手 → 重新注册工具。
+ * 失败时 registry 里不留该 server 的任何工具（等价"未连接"），
+ * 否则会留下指向上一个死进程的 handler，模型调用时得到一个诡异的挂起。
+ */
+export async function reconnectMcpServer(
+  registry: Registry,
+  serverName: string,
+  cwd = process.cwd(),
+): Promise<McpConnectResult> {
+  const cfg = resolveMcpConfigs(cwd)[serverName];
+  if (!cfg) return { ok: false, error: `未在 mcp.json 中找到 ${serverName}` };
+  return connectMcpServer(registry, serverName, cfg);
 }
 
 /**
@@ -209,48 +319,6 @@ export async function loadMcpServers(registry: Registry, cwd = process.cwd()): P
   const configs = resolveMcpConfigs(cwd);
   // 并行连接：N 个 server 的挂载总耗时 ≈ 最慢者，且单个失败不影响其余与主流程
   await Promise.all(
-    Object.entries(configs).map(async ([serverName, cfg]) => {
-      try {
-        const conn = await connectMcp(cfg.command, cfg.args ?? [], cfg.env);
-        for (const tool of conn.tools) {
-          const prefixed = `mcp__${serverName}__${tool.name}`;
-          registry.register({
-            name: prefixed,
-            description: tool.description || `[MCP:${serverName}] ${tool.name}`,
-            inputSchema: tool.inputSchema,
-            kind: 'mcp',
-            // 外部工具默认 fail-closed → confirm；读类 server 可在 mcp.json 里显式标注
-            mode: cfg.mode === 'read' ? 'read' : 'external',
-            handler: async (input) => conn.callTool(tool.name, input),
-          });
-        }
-        log.info(`mcp connected: ${serverName} (${conn.tools.length} tools)`);
-
-        // 资源以只读工具暴露（mcp__<server>__read_resource）：uri 作为参数，
-        // 模型按需读取 server 提供的文件/数据（resources/read）。
-        if (conn.resources.length > 0) {
-          const catalog = conn.resources
-            .map((r) => `- ${r.uri}${r.description ? ` — ${r.description}` : ''}`)
-            .join('\n');
-          registry.register({
-            name: `mcp__${serverName}__read_resource`,
-            description: `[MCP:${serverName}] Read a resource by URI. Available resources:\n${catalog}`,
-            inputSchema: {
-              type: 'object',
-              properties: {
-                uri: { type: 'string', description: 'Resource URI to read' },
-              },
-              required: ['uri'],
-            },
-            kind: 'mcp',
-            mode: 'read', // 只读：plan 模式放行、免确认
-            handler: async (input) => conn.readResource(String(input.uri ?? '')),
-          });
-          log.info(`mcp resources: ${serverName} (${conn.resources.length} resources)`);
-        }
-      } catch (err) {
-        log.warn(`mcp server failed to connect: ${serverName}`, (err as Error).message);
-      }
-    }),
+    Object.entries(configs).map(([serverName, cfg]) => connectMcpServer(registry, serverName, cfg)),
   );
 }

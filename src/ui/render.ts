@@ -31,6 +31,12 @@ export function mountTtyApp(
     onInterrupt: () => void;
     onExit: () => void;
     onSetMode?: (mode: Mode) => void;
+    /** 能力面板（/skills、/mcp）：空格启停 */
+    onToggleCapability?: (name: string) => void;
+    /** 能力面板 R：重连 MCP server */
+    onReconnectCapability?: (name: string) => void;
+    /** 能力面板：重拉列表数据 */
+    refreshCapability?: () => void;
   },
   initialOutput?: string[],
   /** 输出/输入流（缺省 process.stdout / process.stdin）。注入供测试与未来复用。 */
@@ -107,6 +113,9 @@ export function mountTtyApp(
       onInterrupt: hooks.onInterrupt,
       onExit: hooks.onExit,
       onSetMode: hooks.onSetMode ?? (() => {}),
+      onToggleCapability: hooks.onToggleCapability,
+      onReconnectCapability: hooks.onReconnectCapability,
+      refreshCapability: hooks.refreshCapability,
       initialOutput,
       scrollFollow,
     }),

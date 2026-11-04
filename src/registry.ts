@@ -65,17 +65,55 @@ export interface MountPoint {
 
 export class Registry {
   private mountPoints = new Map<string, MountPoint>();
+  /**
+   * 被禁用的名字前缀（如 `mcp__github__`）。
+   * 命中即在 `list` / `toolsSchema` 里隐身——模型看不到、也不花 token。
+   * 用前缀而非整名，是因为 MCP 的禁用粒度是 **server**，而工具名是 `mcp__<server>__<tool>`。
+   */
+  private disabledPrefixes: string[] = [];
 
   register(mp: MountPoint): void {
     this.mountPoints.set(mp.name, mp);
+  }
+
+  /** 摘除一个挂载点（MCP 重连前清理旧工具，避免 handler 指向死进程） */
+  unregister(name: string): void {
+    this.mountPoints.delete(name);
+  }
+
+  /** 按前缀整体摘除（MCP 断开某 server 时一次性清掉它的全部工具） */
+  unregisterByPrefix(prefix: string): string[] {
+    const removed: string[] = [];
+    for (const name of [...this.mountPoints.keys()]) {
+      if (name.startsWith(prefix)) {
+        this.mountPoints.delete(name);
+        removed.push(name);
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * 设置禁用前缀。**刻意不影响 resolve()**：
+   * 被禁用的工具不会出现在 schema 里，模型无从调用；但历史消息里已经发出的
+   * tool_use 仍要能执行——否则"工具突然消失"会让旧会话直接崩掉。
+   */
+  setDisabledPrefixes(prefixes: readonly string[]): void {
+    this.disabledPrefixes = [...prefixes];
+  }
+
+  isDisabled(name: string): boolean {
+    return this.disabledPrefixes.some((p) => p !== '' && name.startsWith(p));
   }
 
   resolve(name: string): MountPoint | undefined {
     return this.mountPoints.get(name);
   }
 
-  list(filter?: (mp: MountPoint) => boolean): MountPoint[] {
-    const all = [...this.mountPoints.values()];
+  /** 列出挂载点（禁用项默认排除；includeDisabled 供 /mcp /skills 这类管理视图使用） */
+  list(filter?: (mp: MountPoint) => boolean, includeDisabled = false): MountPoint[] {
+    let all = [...this.mountPoints.values()];
+    if (!includeDisabled) all = all.filter((mp) => !this.isDisabled(mp.name));
     return filter ? all.filter(filter) : all;
   }
 
