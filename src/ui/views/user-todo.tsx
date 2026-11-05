@@ -145,7 +145,7 @@ export function UserTodoEditor({
             value={draft}
             focused
             placeholder="输入待办内容"
-            placeholderColor={COLORS.muted}
+            placeholderColor={COLORS.placeholder}
             textColor={COLORS.text}
             focusedTextColor={COLORS.text}
             onInput={(v: string) => setDraft(v)}

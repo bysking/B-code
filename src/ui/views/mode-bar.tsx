@@ -27,11 +27,11 @@ export function ModeBar({
   return (
     <box flexDirection="column">
       <box flexDirection="row">
-        <text fg={COLORS.muted}>当前权限审批模式（Shift+Tab 切换）：── </text>
+        <text fg={COLORS.statusText}>当前权限审批模式（Shift+Tab 切换）：── </text>
         <text fg={color} attributes={attrs('bold')}>
           {label}
         </text>
-        <text fg={COLORS.muted}> ──</text>
+        <text fg={COLORS.statusText}> ──</text>
       </box>
       {updateInfo ? (
         <box flexDirection="row">

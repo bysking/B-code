@@ -27,9 +27,13 @@
 export const COLORS = {
   /** 主文本（editor.foreground） */
   text: '#BBBEBF',
-  /** 次要文本：说明、提示、行号（editorLineNumber.foreground） */
+  /** 次要文本：说明、行号（editorLineNumber.foreground） */
   muted: '#858889',
-  /** 强调：标题、选中态（focusBorder 的同色系提亮） */
+  /** 占位符：比 muted 更暗（input.placeholderForeground #555555） */
+  placeholder: '#555555',
+  /** 状态栏文字：比 muted 稍亮（statusBar.foreground #8C8C8C） */
+  statusText: '#8C8C8C',
+  /** 强调：B Code（助手）标题、选中态（focusBorder 的同色系提亮） */
   accent: '#4FA8CE',
   /** 成功（语法高亮的字符串绿） */
   success: '#7EE787',
@@ -37,8 +41,15 @@ export const COLORS = {
   warning: '#FFA657',
   /** 错误（语法高亮的关键字红） */
   error: '#FF7B72',
-  /** 用户输入（语法高亮的函数蓝） */
-  user: '#79C0FF',
+  /**
+   * 用户角色标题。
+   *
+   * 刻意用**绿**而不是蓝：原来 accent（B Code）和 user 都是蓝色系
+   * （#4FA8CE vs #79C0FF），两个角色标题挨在一起时几乎分不出来。
+   * 现在拉开色相——助手用蓝（品牌/思考），用户用绿（输入/原始信息），
+   * 一眼能看出谁说的话。取语法高亮的字符串绿 #7EE787，与主题同源。
+   */
+  user: '#7EE787',
   /** 边框：侧边栏与编辑器的分界 */
   border: '#2A2B2D',
   /** 边框（聚焦态，取自 focusBorder #3994BCB3 的实色化） */

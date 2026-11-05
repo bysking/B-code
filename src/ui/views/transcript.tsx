@@ -40,10 +40,12 @@ function ToolLine({ tool }: { tool: ToolCallDisplay }) {
 
 function UsageLine({ turn }: { turn: Turn }) {
   if (!turn.usage) return null;
+  // 用量元信息用 statusText（#8C8C8C）而非 muted（#858889）：
+  // VS Code 的状态栏文字就是这个亮度，比行号稍亮一档——原来偏暗，几乎看不清。
   return (
-    <text fg={COLORS.muted} attributes={attrs('dim')}>
-      (⏱ {Math.round((turn.elapsedMs ?? 0) / 1000)}s · ↓{' '}
-      {formatTokens(turn.usage.input_tokens)} · ↑ {formatTokens(turn.usage.output_tokens)} tokens)
+    <text fg={COLORS.statusText}>
+      (⏱ {Math.round((turn.elapsedMs ?? 0) / 1000)}s · ↓ {formatTokens(turn.usage.input_tokens)} · ↑{' '}
+      {formatTokens(turn.usage.output_tokens)} tokens)
     </text>
   );
 }
@@ -61,9 +63,7 @@ function TurnView({ turn }: { turn: Turn }) {
   }
 
   const hasContent =
-    turn.text.trim().length > 0 ||
-    turn.tools.length > 0 ||
-    (turn.thinking ?? '').trim().length > 0;
+    turn.text.trim().length > 0 || turn.tools.length > 0 || (turn.thinking ?? '').trim().length > 0;
   if (!hasContent) return null;
 
   return (
@@ -136,9 +136,7 @@ export function Transcript({
   /** 当前版本号（横幅展示用） */
   version?: string;
 }) {
-  type Item =
-    | { id: number; kind: 'output'; text: string }
-    | { id: number; kind: 'turn'; turn: Turn };
+  type Item = { id: number; kind: 'output'; text: string } | { id: number; kind: 'turn'; turn: Turn };
 
   const items: Item[] = [
     ...output.map((o) => ({ id: o.id, kind: 'output' as const, text: o.text })),

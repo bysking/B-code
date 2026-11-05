@@ -54,7 +54,7 @@ export function PromptInput({
         style={{ flexGrow: 1 }}
         value={value}
         placeholder={disabled ? '……' : '输入指令，/ 唤起命令'}
-        placeholderColor={COLORS.muted}
+        placeholderColor={COLORS.placeholder}
         textColor={COLORS.text}
         focusedTextColor={COLORS.text}
         focusedBackgroundColor={COLORS.surfaceDeep}

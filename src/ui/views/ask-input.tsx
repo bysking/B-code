@@ -37,7 +37,7 @@ export function AskInput({
           style={{ flexGrow: 1 }}
           focused
           placeholder="输入后回车提交"
-          placeholderColor={COLORS.muted}
+          placeholderColor={COLORS.placeholder}
           textColor={COLORS.text}
           focusedTextColor={COLORS.text}
           focusedBackgroundColor={COLORS.surfaceDeep}

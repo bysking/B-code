@@ -357,14 +357,14 @@ export function App({
         />
       ) : null}
 
-      {quitArmed ? (
-        <box>
-          <text fg="#e0af68">(再按一次 Ctrl+C 退出)</text>
-        </box>
-      ) : null}
-
-      {/* ── 底部：输入框 + 模式栏 ── */}
+      {/* ── 底部固定区：退出提示 + 输入框 + 模式栏 ──
+          提示必须在这里（flexShrink=0 的底栏内部），不能放在滚动区后面：
+          斜杠菜单/输出面板一展开就把滚动区顶高，提示会被挤出可见区
+          （实测 22 行终端下完全看不到，用户以为 Ctrl+C 没反应）。 */}
       <box flexDirection="column" flexShrink={0}>
+        {quitArmed ? (
+          <text fg={COLORS.warning}>(再按一次 Ctrl+C 退出)</text>
+        ) : null}
         <PromptInput
           value={input}
           onChange={handleChange}

@@ -181,9 +181,7 @@ export function groupsAsWizard(
  * 用 includeDisabled=true：管理视图要看真实挂载量，禁用只是"不发给模型"。
  */
 function countMcpTools(registry: Registry, serverName: string): number | null {
-  const n = registry
-    .list((mp) => mp.name.startsWith(`mcp__${serverName}__`), true)
-    .length;
+  const n = registry.list((mp) => mp.name.startsWith(`mcp__${serverName}__`), true).length;
   return n > 0 ? n : null;
 }
 
@@ -236,7 +234,10 @@ export function applyUserTodoCommand(
   args: string,
 ): { todos: UserTodo[]; output: string; open: boolean } {
   const cmd = parseUserTodoCommand(args);
-  const withList = (next: UserTodo[], head?: string): { todos: UserTodo[]; output: string; open: boolean } => ({
+  const withList = (
+    next: UserTodo[],
+    head?: string,
+  ): { todos: UserTodo[]; output: string; open: boolean } => ({
     todos: next,
     output: head ? `${head}\n${renderUserTodos(next)}` : renderUserTodos(next),
     open: false,
@@ -328,9 +329,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
 
   // 绿色欢迎文案（末尾附版本号，读不到时省略）
   const version = localVersion();
-  process.stderr.write(
-    `\x1b[32m🚀 每一个伟大的背后，都来源于一次勇敢的尝试。您的AI编程助手，B Code 已就绪${version ? ` v${version}` : ''}\x1b[0m\n\n`,
-  );
+  process.stderr.write(`\x1b[32m🚀 您的AI编程助手，B Code 已就绪${version ? ` v${version}` : ''}\x1b[0m\n\n`);
 
   await agent.initMcp();
 
@@ -385,8 +384,18 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
    * 终端停在鼠标追踪模式，用户回到 shell 后一动鼠标就是满屏的 `35;41;30M`。
    */
   const quit = async (code: number): Promise<void> => {
-    printResumeHint(sessionId);
+    /**
+     * 顺序很重要：**先卸载再打印提示**。
+     *
+     * OpenTUI 用备用屏（alternate screen）做全屏渲染。待在备用屏里打印的内容
+     * 会随着退出备用屏一起被丢弃——用户回到 shell 后什么都看不到，
+     * 于是"session id 打不出来，没法 --resume"。
+     *
+     * unmount() 内部会 `await renderer.closed`，等备用屏切回主屏、
+     * 终端状态完全恢复后才返回；之后写 stdout 才是打在用户真实终端上的。
+     */
     await unmount?.();
+    printResumeHint(sessionId);
     closeAllMcpConnections();
     process.exit(code);
   };
@@ -418,10 +427,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           ctrl.setCapabilityNotice(name, enabled ? '✓ 已启用' : '✓ 已禁用（不再发送给模型）');
         } else {
           const enabled = agent.toggleMcpServer(name);
-          ctrl.setCapabilityNotice(
-            name,
-            enabled ? '✓ 已启用' : '✓ 已禁用（工具不再发送给模型，进程保持）',
-          );
+          ctrl.setCapabilityNotice(name, enabled ? '✓ 已启用' : '✓ 已禁用（工具不再发送给模型，进程保持）');
         }
         refreshCapability();
       },
@@ -782,7 +788,8 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         // （管道/CI 场景没有空格键，至少让 /skills | cat 能看出当前状态）
         const items = buildCapabilityItems('skill', agent);
         const lines = items.map(
-          (it) => `${it.enabled ? '✓' : '✗'} /${it.name}${it.enabled ? '' : ' (disabled)'}: ${it.detail ?? ''}`,
+          (it) =>
+            `${it.enabled ? '✓' : '✗'} /${it.name}${it.enabled ? '' : ' (disabled)'}: ${it.detail ?? ''}`,
         );
         process.stdout.write(lines.length ? `Available skills:\n${lines.join('\n')}\n` : '(no skills)\n');
         created.prompt();

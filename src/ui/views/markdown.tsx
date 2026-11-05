@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useRenderer } from '@opentui/react';
 import { SyntaxStyle } from '@opentui/core';
+import { COLORS } from '../primitives/theme.js';
 
 /**
  * Markdown 渲染（OpenTUI 原生 `<markdown>`）。
@@ -37,5 +38,7 @@ export function MarkdownText({ content }: { content: string }) {
   }, [renderer]);
 
   if (!content.trim()) return null;
-  return <markdown content={content} syntaxStyle={style} />;
+  // fg 必须显式传：不传时 markdown 组件用**纯白**（#ffffff），
+  // 在 VS Code 深色背景下比正文的 #BBBEBF 亮一大截，看着刺眼。
+  return <markdown content={content} syntaxStyle={style} fg={COLORS.text} />;
 }

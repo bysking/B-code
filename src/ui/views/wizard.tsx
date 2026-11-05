@@ -265,7 +265,7 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
                   value={draft}
                   focused
                   placeholder="输入你的答案..."
-                  placeholderColor={COLORS.muted}
+                  placeholderColor={COLORS.placeholder}
                   textColor={COLORS.text}
                   onInput={(v: string) => setDraft(v)}
                   onSubmit={() => commitTyped(draft)}
