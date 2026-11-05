@@ -11,6 +11,7 @@ import type { CapabilityItem, CapabilityKind } from './ui/controller.js';
 import { AppController } from './ui/controller.js';
 import type { WizardStep } from './ui/controller.js';
 import { createSettingsAllowlistStore, loadSettings } from './config.js';
+import { writeFileSync } from 'node:fs';
 import { formatCost } from './cost.js';
 import { renderTodos } from './todo.js';
 import {
@@ -30,6 +31,12 @@ import { loadHooks } from './hooks.js';
 import { mountTtyApp } from './ui/render.js';
 import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
 import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
+import {
+  collectTurns,
+  defaultExportPath,
+  renderMarkdown,
+  renderForTerminal,
+} from './session-export.js';
 import type { SpinnerLike } from './ui.js';
 import type { Mode } from './permissions.js';
 import type { ClipboardImage } from './utils/clipboard.js';
@@ -133,6 +140,7 @@ const HELP_TEXT = [
   '  /compact         立即压缩上下文',
   '  /rewind          回退本次会话的文件改动',
   '  /todos           查看任务清单',
+  '  /export [路径]   导出会话为 markdown',
   '  /plan /auto /yolo /default   切换权限模式',
   '  /skills          技能面板（空格启用/禁用）',
   '  /mcp             MCP 面板（空格启用/禁用，R 重连）',
@@ -416,6 +424,21 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     await unmount?.();
     // 先补打 one-shot 的结果（用户主要想看这个），再打 resume 提示
     if (afterExit) process.stdout.write(`${afterExit}\n`);
+
+    /**
+     * 交互退出时补打最近几轮对话。
+     *
+     * 备用屏退出即销毁——用户和助手聊了半天，回到 shell 什么都没留下。
+     * 这里把最后 N 轮打到真实终端，用户至少能看到刚才聊了什么。
+     * 完整历史仍可用 `--resume` 恢复，也可以用 `/export` 存成文件。
+     *
+     * one-shot 不重复打（afterExit 已经带了最终回复）。
+     */
+    if (!afterExit) {
+      const recent = renderForTerminal(collectTurns(agent.history()), 3);
+      if (recent) process.stdout.write(`\n${recent}\n`);
+    }
+
     printResumeHint(sessionId);
     closeAllMcpConnections();
     process.exit(code);
@@ -524,6 +547,30 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       }
       if (trimmed === '/cost') {
         ctrl.pushOutput(formatCost(agent.usageTotals()));
+        return;
+      }
+      if (trimmed === '/export' || trimmed.startsWith('/export ')) {
+        const arg = trimmed.slice('/export'.length).trim();
+        const target = arg || defaultExportPath(sessionId);
+        const turns = collectTurns(agent.history());
+        if (turns.length === 0) {
+          ctrl.pushOutput('(会话还没有内容可导出)');
+          return;
+        }
+        try {
+          writeFileSync(
+            target,
+            renderMarkdown(turns, {
+              sessionId,
+              model: agent.model,
+              exportedAt: new Date(),
+            }),
+            'utf-8',
+          );
+          ctrl.pushOutput(`(已导出 ${turns.filter((t) => t.role === 'user').length} 轮到 ${target})`);
+        } catch (err) {
+          ctrl.pushOutput(`(导出失败: ${err instanceof Error ? err.message : String(err)})`);
+        }
         return;
       }
       if (trimmed === '/todos') {
@@ -858,6 +905,30 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       }
       if (input === '/todos') {
         process.stdout.write(`任务清单:\n${renderTodos(agent.todoList())}\n`);
+        created.prompt();
+        return;
+      }
+      if (input === '/export' || input.startsWith('/export ')) {
+        // 非 TTY 同样支持导出——管道/脚本场景更需要把结果落成文件
+        const arg = input.slice('/export'.length).trim();
+        const target = arg || defaultExportPath(sessionId);
+        const turns = collectTurns(agent.history());
+        if (turns.length === 0) {
+          process.stdout.write('(会话还没有内容可导出)\n');
+        } else {
+          try {
+            writeFileSync(
+              target,
+              renderMarkdown(turns, { sessionId, model: agent.model, exportedAt: new Date() }),
+              'utf-8',
+            );
+            process.stdout.write(
+              `(已导出 ${turns.filter((t) => t.role === 'user').length} 轮到 ${target})\n`,
+            );
+          } catch (err) {
+            process.stdout.write(`(导出失败: ${err instanceof Error ? err.message : String(err)})\n`);
+          }
+        }
         created.prompt();
         return;
       }

@@ -482,17 +482,19 @@ test('回归：历史撑满视口后，斜杠菜单第一项仍可见且选中�
 
 test('回归：斜杠菜单可见条数随终端高度自适应（不硬编码 12）', async () => {
   const ctrl = new AppController();
-  ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
+  const items = [...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS];
+  ctrl.setSlashItems(items);
   const frame = await renderApp(ctrl);
   await wait(50);
   await frame.flush();
   ctrl.openSlash('');
   await waitForFrame(frame, '滚动', '菜单滚动提示');
 
-  // 可见项数应小于候选总数（在测试终端高度下装不下 15 项），
-  // 且必须给出滚动位置提示，否则用户不知道还有更多
+  // 可见项数应小于候选总数（测试终端高度装不下全部），
+  // 且必须给出滚动位置提示，否则用户不知道还有更多。
+  // 总数用 items.length 而非硬编码——新增内置命令时不该连带改断言。
   const out = frameText(frame);
-  assert.match(out, /… \d+\/15/, '有滚动位置提示');
+  assert.match(out, new RegExp(`… \\d+/${items.length}`), '有滚动位置提示');
   await frame.cleanup();
 });
 

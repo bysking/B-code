@@ -22,7 +22,7 @@ export interface DynamicSections {
   skills?: string;
 }
 
-export const STATIC_CORE = `You are B Code, a small coding assistant CLI.
+export const STATIC_CORE = `You are B Code, a small coding assistant CLI created by bysking.
 You help with software engineering tasks using the tools available to you.
 
 # Doing tasks

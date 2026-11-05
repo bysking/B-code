@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -43,6 +43,32 @@ export interface ClipboardImage {
   data: string;
   /** MIME 类型 */
   media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+}
+
+/**
+ * 写入剪贴板文本（跨平台）。
+ *
+ * 用 pbcopy (macOS) / xclip / wl-copy (Linux)。Windows 走 clip。
+ * 失败抛错——调用方（/copy）要能告诉用户"没复制成功"。
+ */
+export function writeClipboardText(text: string): void {
+  const run = (cmd: string, args: string[]): void => {
+    execFileSync(cmd, args, { input: text, timeout: 3000 });
+  };
+  if (process.platform === 'darwin') {
+    run('pbcopy', []);
+    return;
+  }
+  if (process.platform === 'win32') {
+    run('clip', []);
+    return;
+  }
+  // Linux：X11 优先，降级 Wayland
+  try {
+    run('xclip', ['-selection', 'clipboard']);
+  } catch {
+    run('wl-copy', []);
+  }
 }
 
 /**
