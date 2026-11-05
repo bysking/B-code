@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { OutputLine, ToolCallDisplay, Turn } from '../controller.js';
 import { COLORS, TOOL_SYMBOL, TOOL_TONE, attrs, tone } from '../primitives/theme.js';
 import { MarkdownText } from './markdown.js';
+import { Welcome } from './welcome.js';
+import { localVersion } from '../../version-check.js';
 
 /**
  * 会话流渲染（OpenTUI 原生）。
@@ -123,12 +125,16 @@ export function Transcript({
   turns,
   output,
   initialOutput,
+  cols,
+  version,
 }: {
   turns: Turn[];
   output: OutputLine[];
   initialOutput?: string[];
-  /** 终端列宽（保留参数：目前 markdown 由组件自己处理宽度，不需要外部传入） */
+  /** 终端列宽（欢迎横幅按它自适应宽/窄形态） */
   cols?: number;
+  /** 当前版本号（横幅展示用） */
+  version?: string;
 }) {
   type Item =
     | { id: number; kind: 'output'; text: string }
@@ -139,8 +145,12 @@ export function Transcript({
     ...turns.map((t) => ({ id: t.id, kind: 'turn' as const, turn: t })),
   ].sort((a, b) => a.id - b.id);
 
+  /** 无历史时展示欢迎横幅——空屏不该是"什么都没有" */
+  const empty = turns.length === 0 && (initialOutput ?? []).length === 0;
+
   return (
     <box flexDirection="column">
+      {empty ? <Welcome cols={cols ?? 80} version={version ?? localVersion()} /> : null}
       {(initialOutput ?? []).map((line, i) => (
         <text key={`init-${i}`} fg={COLORS.muted}>
           {line}

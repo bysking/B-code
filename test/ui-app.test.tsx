@@ -642,3 +642,33 @@ test('回归：askText 输入框输入后回车必须提交', async () => {
   assert.equal(ctrl.askTextState, null, '提交后提问框关闭');
   await frame.cleanup();
 });
+
+// ── 启动欢迎横幅 ────────────────────────────────────────────────
+//
+// 全新会话时历史区是一大片空白，扎眼且没信息。空态应告诉用户"这是哪、能干什么"。
+// 横幅只在**没有历史**时显示，一旦有对话内容就让位（不占可视区）。
+test('空态：无历史时展示欢迎横幅', async () => {
+  const ctrl = new AppController();
+  const frame = await renderApp(ctrl);
+  await waitForFrame(frame, '勇敢的尝试', '欢迎横幅');
+
+  const out = frameText(frame);
+  assert.ok(out.includes('每一个伟大的背后'), 'slogan 可见');
+  assert.ok(out.includes('Shift+Tab'), '快捷键提示可见');
+  assert.ok(out.includes('/'), '命令提示可见');
+  await frame.cleanup();
+});
+
+test('空态：有历史后横幅让位（不再占用空间）', async () => {
+  const ctrl = new AppController();
+  const frame = await renderApp(ctrl);
+  await waitForFrame(frame, '勇敢的尝试', '横幅先出现');
+
+  ctrl.pushUser('你好');
+  await wait(150);
+  await frame.flush();
+  const out = frameText(frame);
+  assert.ok(!out.includes('每一个伟大的背后'), '有对话后横幅消失');
+  assert.ok(out.includes('你好'), '对话内容可见');
+  await frame.cleanup();
+});
