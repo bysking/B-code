@@ -6,3 +6,6 @@ dist/
 .DS_Store
 *.log
 .codegraph/
+
+# 平台包产物（发布用，不入库）
+dist-pkg/

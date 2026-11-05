@@ -58,7 +58,7 @@ test('门禁：业务代码不得直连未来的其他引擎包', () => {
 });
 
 test('适配层契约：引擎实现导出完整接口', async () => {
-  const { inkEngine } = await import('../src/ui/ui/index.js');
+  const { inkEngine } = await import('../src/ui/ui/ink/index.js');
   const required = [
     'Box',
     'Text',

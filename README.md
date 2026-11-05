@@ -129,6 +129,56 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 > 代价是退出后终端里看不到本次历史，用 `bcode --resume` 回看。另外开启鼠标追踪后
 > 终端的原生选中复制会被接管，按住 `Shift` 拖动即可恢复。
 
+## 安装与分发
+
+```bash
+npm install -g @bysking/b-code
+bcode
+```
+
+**无需安装 Node 或 Bun** —— 发布版是 `bun build --compile` 出的单文件可执行程序，
+Bun 运行时已嵌入。
+
+### 支持平台
+
+| 平台 | 包名 | 说明 |
+|---|---|---|
+| macOS (Apple Silicon) | `@bysking/b-code-darwin-arm64` | |
+| macOS (Intel) | `@bysking/b-code-darwin-x64` | |
+| Linux (glibc) | `@bysking/b-code-linux-x64` | Ubuntu/Debian/CentOS 等 |
+| Windows (x64) | `@bysking/b-code-win32-x64` | |
+
+npm 通过 `os`/`cpu` 字段自动只装匹配的平台包，用户只下载自己那份（~75MB）。
+
+### 两套渲染引擎
+
+| | ink（回退） | OpenTUI（默认） |
+|---|---|---|
+| 运行时 | Node | Bun（已嵌入） |
+| 产物 | `dist/cli.mjs` 1.9MB | `dist/bcode` ~75MB |
+| 滚动 | 应用内视口（手写虚拟滚动） | 原生 `scrollbox` |
+| 鼠标 | 手写 SGR 解析 | 原生 `useRawMouse` |
+| markdown | marked + marked-terminal | 原生组件 |
+
+业务组件通过 `src/ui/ui/` 适配层访问渲染能力，与具体引擎解耦。
+切换引擎只改适配层的实现，业务代码不动。
+
+**为什么保留 ink**：OpenTUI 的原生 FFI 只实现了 Bun 绑定（Node 26 实测也不行）。
+开发态用 Node 跑测试时走 ink 更省事；发布版二进制里用 OpenTUI。
+
+### 构建
+
+```bash
+npm run build        # ink 版（Node，1.9MB）— 开发与回退
+npm run build:bun    # OpenTUI 版（Bun，~75MB）— 发布
+node scripts/pack-platform.js   # 生成平台包
+```
+
+**各平台必须原生编译**：OpenTUI 的动态 import 让打包器把所有平台的
+`@opentui/core-<platform>` 都当必需依赖，而这些包带 `os`/`cpu` 字段，
+npm 只允许装当前平台的 → 交叉编译会因缺包失败。全平台发布由
+`.github/workflows/release.yml` 的 CI 矩阵完成。
+
 ## 权限与模式
 
 四种模式：`default` / `plan` / `bypass` / `auto`。

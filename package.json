@@ -5,10 +5,11 @@
   "type": "module",
   "main": "dist/cli.mjs",
   "bin": {
-    "bcode": "./dist/cli.mjs"
+    "bcode": "./bin/bcode.js"
   },
   "files": [
-    "dist"
+    "bin",
+    "dist/cli.mjs"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -17,7 +18,9 @@
     "test": "node --import tsx --test --test-force-exit --test-concurrency=1 test/*.test.ts test/*.test.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
-    "prepublishOnly": "npm run build && npm run typecheck"
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "build:bun": "node build-bun.js",
+    "build:all-check": "node build-bun.js --all-check"
   },
   "engines": {
     "node": ">=18"
@@ -47,6 +50,8 @@
     "@anthropic-ai/sdk": "^0.117.1",
     "@devhub-io/latex-to-unicode": "^2.0.1",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@opentui/core": "0.8.2",
+    "@opentui/react": "0.8.2",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "ink": "^8.0.0",
@@ -65,5 +70,16 @@
     "prettier": "^3.9.6",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
-  }
+  },
+  "optionalDependencies": {
+    "@bysking/b-code-darwin-arm64": "2.0.2",
+    "@bysking/b-code-darwin-x64": "2.0.2",
+    "@bysking/b-code-linux-x64": "2.0.2",
+    "@bysking/b-code-win32-x64": "2.0.2"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ]
 }
