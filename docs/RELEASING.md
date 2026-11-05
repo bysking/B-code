@@ -82,7 +82,7 @@ Workflow filename:    release.yml
 ### 首次发布是例外——必须用 token
 
 npm 目前**不支持用 OIDC 发布一个尚不存在的包**
-（[npm/cli#8544#8544](https://github.com/npm/cli/issues/8544)，仍 open；PyPI 支持，npm 不支持）。
+（[npm/cli#8544#8544#8544#8544](https://github.com/npm/cli/issues/8544)，仍 open；PyPI 支持，npm 不支持）。
 
 4 个平台包在 3.0.0 之前从未发布过（registry 全是 404），所以**首次发版必须有 token**。
 
