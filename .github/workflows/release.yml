@@ -161,18 +161,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # download-artifact 把每个 artifact 放进 dist-pkg/<artifact-name>/ 下，
+          # 所以 tar 位于 dist-pkg/bcode-<platform>/<platform>.tar.gz。
+          # ⚠️ 不能先 rm -rf 目标目录：tar 文件本身就在里面，会把自己删掉再解包必失败。
+          # 先解到临时目录，再整体替换目标。
+          found=0
           for f in dist-pkg/*/*.tar.gz; do
             [ -f "$f" ] || continue
-            platform=$(basename "$(dirname "$f")")
-            target="dist-pkg/$platform"
+            found=$((found + 1))
+            # artifact 目录名 = bcode-<platform>（download-artifact 按 artifact 名建目录），
+            # 目标必须用它，不能只用 <platform>，否则后续 dist-pkg/bcode-*/ 匹配不到
+            target=$(dirname "$f")
             echo "解包 $f → $target"
+
+            tmp=$(mktemp -d)
+            tar -xzf "$f" -C "$tmp"
             rm -rf "$target"
             mkdir -p "$target"
-            tar -xzf "$f" -C "$target"
-            rm -f "$f"
+            # tar 用 `-C dir .` 打的，内容形如 ./bcode ./package.json
+            cp -a "$tmp"/. "$target"/
+            rm -rf "$tmp" "$f"
           done
 
-          # 双保险：无论 tar 是否正确保留，显式重设二进制可执行位并校验
+          if [ "$found" -eq 0 ]; then
+            echo "::error::没找到任何 tar.gz，检查 build job 的 upload 路径"
+            find dist-pkg -maxdepth 3 | sort
+            exit 1
+          fi
+
+          # 双保险：无论 tar 是否正确保留，显式重设二进制可执行位
           for dir in dist-pkg/bcode-*/; do
             for exe in "$dir"bcode "$dir"bcode.exe; do
               [ -f "$exe" ] || continue
@@ -181,7 +198,8 @@ jobs:
           done
 
           echo "--- 解包结果与权限 ---"
-          ls -l dist-pkg/bcode-*/ | grep -vE '^total'
+          ls -l dist-pkg/bcode-*/
+          ls -l dist-pkg/bcode-*/* 2>/dev/null || true
 
       - name: Verify exec bit preserved
         shell: bash
