@@ -25,6 +25,9 @@
     解包并显式 `chmod +x`，再加一步 `Verify exec bit preserved` 硬校验。
   - `pack-platform.js` 打包后立即检查 mode 含 `0o111`，本地就把问题挡住。
   - 已发布的 `3.0.1` 需要重新发一个版本修复（npm 不允许覆盖已发布版本）。
+  - 解包步骤修正：不能先 `rm -rf` 目标目录（tar 文件本身就在里面，会把自己删掉），
+    改为解到临时目录再整体替换；且目标路径必须用 artifact 目录名
+    `bcode-<platform>`（而不是 `<platform>`），否则后续 `dist-pkg/bcode-*/` 匹配不到。
 - **两个测试只在 CI（Linux）上失败**——都是测试自身对平台/速度的脆弱假设，与业务代码无关：
   - `grep_search 返回 path:行号:内容 且命中正确行`：断言 `out.startsWith('a.txt:2:')`，
     但它搜的是**共享的** `dir`，而前面 `edit_file` 的用例已往该目录写入同样含
