@@ -35,9 +35,10 @@ const MIN_WIDTH_FOR_BANNER = BANNER_WIDTH + 6;
 /** 上手提示（按顺序展示，帮助新用户快速开始） */
 const TIPS: { key: string; desc: string }[] = [
   { key: '/', desc: '唤起命令菜单' },
-  { key: 'Shift+Tab', desc: '切换权限模式' },
+  { key: 'Shift+Tab', desc: '切换工具权限模式' },
   { key: 'Ctrl+O', desc: '查看工具输出' },
   { key: 'Esc', desc: '中断当前对话' },
+  { key: 'Ctrl+C', desc: '连续按下组合键，退出终端' },
 ];
 
 export function Welcome({ cols, version }: { cols: number; version?: string }) {
