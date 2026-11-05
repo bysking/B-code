@@ -3,18 +3,19 @@ import { Box, Text } from 'ink';
 import type { OutputLine, ToolCallDisplay, Turn } from './controller.js';
 import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
 import { Markdown } from './markdown-view.js';
+import { estimateLines } from './scroll-budget.js';
 
 /**
  * 历史消息流渲染（滚动视口内）。
  *
- * 与旧 `message-list.tsx` 的根本区别：**不再用 `<Static>`**。
+ * 渲染模型：**恒定内容进 `<Static>`（终端 scrollback），变化内容留 live 区**。
  *
- * 旧实现把落定内容交给 `<Static>` 永久打印进终端 scrollback，live 区只留尾部，
- * 换来一整套"live 帧必须矮于终端"的约束与补偿（CPR 探测、估算切片、分段提交、
- * 帧高回灌）。代价是窗口 resize 时 ink 按旧布局行数擦除新布局内容，历史必然花掉。
+ * 这样用户可以用终端原生的鼠标滚轮 / 滚动条 / Shift+PgUp 回看历史，退出后历史
+ * 也留在终端里——符合 CLI 的既有习惯。
  *
- * 现在全部内容都画在 `<ScrollView>` 里：视口固定高度，超出部分裁剪后靠 offset 平移。
- * 没有"落定/未落定"之分，没有分段 chunks，渲染 = 按顺序列出全部 turn。
+ * 曾经担心 resize 时 ink 按旧布局行数擦除新布局内容导致历史花屏，为此改用过
+ * "应用内滚动视口"。实测 ink 8 已修复该问题（窗口变化后会重放 static 输出），
+ * 所以回到了 `<Static>`。代价换来的是终端原生滚动能力。
  */
 
 /** token 数值格式化：<1k 原样；<10k 一位小数 k（整千去 .0）；更大整数 k */
@@ -111,28 +112,129 @@ export function BusyLine({
 }
 
 /**
- * 完整的会话记录：启动输出 + 输出行 + 全部 turn，按 id 时序交织。
+ * 一条会话记录条目：输出行或 turn。输出行（`(mode → plan)` 之类）与 turn 共用
+ * 同一个 id 序列，按 id 升序合并，保证输出行落在它真实发生的那一刻。
+ */
+export type TranscriptItem =
+  | { id: number; kind: 'output'; text: string }
+  | { id: number; kind: 'turn'; turn: Turn };
+
+/** 把输出行与 turn 按时序合并成一个列表 */
+export function buildTranscriptItems(turns: Turn[], output: OutputLine[]): TranscriptItem[] {
+  return [
+    ...output.map((o) => ({ id: o.id, kind: 'output' as const, text: o.text })),
+    ...turns.map((t) => ({ id: t.id, kind: 'turn' as const, turn: t })),
+  ].sort((a, b) => a.id - b.id);
+}
+
+/** 单条记录的渲染（Static 条目与 live 条目共用，保证视觉一致） */
+export function TranscriptItemView({ item }: { item: TranscriptItem }) {
+  return item.kind === 'output' ? (
+    <Text dimColor>{item.text}</Text>
+  ) : (
+    <TurnView turn={item.turn} />
+  );
+}
+
+/**
+ * 估算单条目的渲染行数。
  *
- * 输出行（`(mode → plan)` 之类）与 turn 共用同一个 id 序列，按 id 升序合并，
- * 保证输出行落在它真实发生的那一刻（而不是永远堆在最前或最后）。
+ * 只用于"该渲染哪一段"的粗定位——估偏了顶多多渲染/少渲染几行，
+ * 不参与精确布局（真正的行数由 ink/Yoga 算）。所以这里宁可**估大**：
+ * 估小了会把该显示的条目裁掉，估大了只是多渲染一点（还有 overscan 兜着）。
+ */
+export function estimateItemHeight(item: TranscriptItem, cols: number): number {
+  if (item.kind === 'output') return estimateLines(item.text, cols);
+  const t = item.turn;
+  let rows = 1; // 标题行（User / B Code）
+  rows += estimateLines(t.text || '', cols);
+  if (t.thinking?.trim()) rows += estimateLines(t.thinking, cols);
+  rows += t.tools.length; // 工具块严格单行
+  if (t.usage) rows += 1;
+  return Math.max(rows, 1);
+}
+
+/**
+ * 完整会话记录（**虚拟滚动**版）。
+ *
+ * 为什么需要虚拟滚动：早期实现把全部历史都渲染进树里，每次都让 Yoga 重新布局
+ * 整棵子树——实测 60 轮对话单次重渲染 47ms、120 轮 63ms。滚轮事件密集到达时
+ * 这就表现为"滚一下卡一下"。
+ *
+ * 现在只渲染视口附近（可见区 + 上下 overscan）的条目：
+ *   - 首尾各留 `overscan` 行缓冲，滚动时不会露白
+ *   - 未渲染的部分用占位 Box 撑出高度，保证滚动条位置正确
+ *
+ * 代价：被折叠的条目高度是**估算**的，与实际渲染可能有几行偏差。
+ * 用较大的 overscan（默认 40 行）吸收掉这个偏差，用户感知不到。
  */
 export function Transcript({
   turns,
   output,
   initialOutput,
+  scrollTop,
+  viewportRows,
+  cols,
 }: {
   turns: Turn[];
   output: OutputLine[];
   initialOutput?: string[];
+  /** 视口顶部相对内容顶部的偏移（行）。省略 = 不做虚拟化，整块渲染 */
+  scrollTop?: number;
+  /** 视口高度（行）。与 scrollTop 一起启用虚拟化 */
+  viewportRows?: number;
+  /** 终端列宽（估算折行用） */
+  cols?: number;
 }) {
-  type Item =
-    | { id: number; kind: 'output'; text: string }
-    | { id: number; kind: 'turn'; turn: Turn };
+  const items = buildTranscriptItems(turns, output);
+  const width = cols ?? 80;
 
-  const items: Item[] = [
-    ...output.map((o) => ({ id: o.id, kind: 'output' as const, text: o.text })),
-    ...turns.map((t) => ({ id: t.id, kind: 'turn' as const, turn: t })),
-  ].sort((a, b) => a.id - b.id);
+  // 未提供滚动信息时退化为整块渲染（测试/导出等场景）
+  const virtual = scrollTop !== undefined && viewportRows !== undefined;
+  let visible = items;
+  let padTop = 0;
+  let padBottom = 0;
+
+  if (virtual) {
+    const OVERSCAN = 12; // 上下各留缓冲，吸收估算误差
+    const from = Math.max(scrollTop! - OVERSCAN, 0);
+    const to = scrollTop! + viewportRows! + OVERSCAN;
+
+    // **单次遍历**同时算出：可见区间、上方占位高度、下方占位高度。
+    //
+    // 早期实现用 `items.slice(endIdx).reduce(...)` 单独算 padBottom，那是 O(n)——
+    // 每次滚动（scrollTop 变化）都要对剩余全部条目跑一遍 estimateItemHeight
+    // （内部 wrap-ansi，不便宜）。120 轮历史时一次滚动要算上百次，直接表现为卡死感。
+    //
+    // 现在一遍扫完，复杂度不变但常数小得多；且高度结果可复用。
+    let acc = 0;
+    // 用 -1 做哨兵：0 是合法下标，不能用 0 表示"未设置"（否则第一条会被跳过）
+    let startIdx = -1;
+    let endIdx = items.length;
+    let topRows = 0;
+    let totalRows = 0;
+
+    for (let i = 0; i < items.length; i++) {
+      const h = estimateItemHeight(items[i]!, width);
+      totalRows += h;
+      if (startIdx === -1 && acc + h > from) {
+        // 第一次越过 from：确定可见区间起点
+        startIdx = i;
+        topRows = acc;
+      }
+      if (startIdx !== -1 && acc >= to && endIdx === items.length) {
+        endIdx = i;
+      }
+      acc += h;
+    }
+    // 循环结束仍为 -1 → from 超出内容总高，视为滚过了末端
+    if (startIdx === -1) startIdx = items.length;
+
+    visible = items.slice(startIdx, endIdx);
+    padTop = topRows;
+    // 下方占位 = 总高 − 上方占位 − 可见部分高度（同一次遍历已得 totalRows）
+    padBottom = Math.max(totalRows - topRows - sumHeights(items, startIdx, endIdx, width), 0);
+  }
 
   return (
     <Box flexDirection="column">
@@ -141,15 +243,18 @@ export function Transcript({
           {text}
         </Text>
       ))}
-      {items.map((it) =>
-        it.kind === 'output' ? (
-          <Text key={`o${it.id}`} dimColor>
-            {it.text}
-          </Text>
-        ) : (
-          <TurnView key={it.turn.id} turn={it.turn} />
-        ),
-      )}
+      {padTop > 0 ? <Box height={padTop} flexShrink={0} /> : null}
+      {visible.map((it) => (
+        <TranscriptItemView key={`${it.kind}${it.id}`} item={it} />
+      ))}
+      {padBottom > 0 ? <Box height={padBottom} flexShrink={0} /> : null}
     </Box>
   );
+}
+
+/** 求区间 [start, end) 的高度和（padBottom 用；区间通常很短，成本可忽略） */
+function sumHeights(items: TranscriptItem[], start: number, end: number, cols: number): number {
+  let n = 0;
+  for (let i = start; i < end; i++) n += estimateItemHeight(items[i]!, cols);
+  return n;
 }

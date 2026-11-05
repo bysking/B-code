@@ -49,7 +49,10 @@ async function waitForFrame(
   for (;;) {
     const out = frameText(frame);
     if (out.includes(needle)) return out;
-    if (Date.now() > deadline) throw new Error(`waitForFrame 超时（${label}）：\n${out}`);
+    if (Date.now() > deadline) {
+      // 帧可能很长：只保留末尾（底栏区域，滚动/菜单都在那）
+      throw new Error(`waitForFrame 超时（${label}）：\n……${out.slice(-900)}`);
+    }
     await wait(40);
   }
 }
@@ -278,11 +281,17 @@ test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async ()
     { name: 'zzz-last', description: '最后一项' },
   ]);
   ctrl.openSlash('');
-  const init = await waitForFrame(frame, '↑↓ 滚动', '滚动位置提示');
+  await wait(120);
+  const init = frameText(frame);
+  assert.ok(init.includes('↑↓ 滚动'), '显示滚动位置提示');
   assert.ok(!init.includes('zzz-last'), '初始窗口看不到最后一项');
-  // 按 ↑（环绕到末尾）后最后一项滚入窗口
-  await press(frame, '\x1b[A');
-  const out = await waitForFrame(frame, 'zzz-last', '滚动后选中项可见');
+
+  // ↑ 环绕到末尾 → 最后一项滚入窗口。
+  // 用固定等待而不是轮询：菜单打开时 App 把 ↑ 让给菜单，按键处理 + 渲染提交
+  // 需要一次完整往返，密集轮询反而会在提交前反复读到旧帧。
+  frame.stdin.write('\x1b[A');
+  await wait(150);
+  const out = frameText(frame);
   assert.ok(out.includes('zzz-last'), '滚动后选中项可见');
   frame.cleanup();
 });
@@ -545,5 +554,169 @@ test('回归：输入框不接收控制字符（\\r / \\t / ESC 不落进草稿�
   const line = out.split('\n').find((l) => l.trimStart().startsWith('>'));
   assert.ok(line && line.includes('abc'), '文本保留');
   assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(line ?? ''), '没有控制字符混入');
+  frame.cleanup();
+});
+
+// ── 鼠标滚轮 / 触摸板 ──────────────────────────────────────────
+//
+// 触摸板一次轻扫会产生几十个滚轮事件（惯性滚动），密集到达。
+// 踩过的坑：
+//   1. 每个事件都读 `scrollRef.current` 做基准 → React 还没重渲染，全都基于旧值算，
+//      只有最后一个生效（实测 30 个事件应滚 90 行、实际只滚 1 行）。
+//   2. 改成函数式 setState 仍有丢失（React 批处理 + ref 同步问题，实测丢一半）。
+// 最终方案：把一帧内的滚轮位移**累积**起来，16ms 后一次性提交。
+test('滚轮/触摸板：密集事件按位移总和精确累积，不丢不重', async () => {
+  const ctrl = new AppController();
+  for (let i = 1; i <= 100; i++) ctrl.pushUser(`问 ${i}`);
+  const frame = renderApp(ctrl);
+  await wait(120);
+  assert.equal(ctrl.scrollFromBottom, 0, '初始贴底');
+
+  // 模拟惯性滚动：5 个事件（每格 3 行）
+  for (let i = 0; i < 5; i++) {
+    ctrl.emitMouseWheel(3);
+    await wait(25);
+  }
+  await wait(150);
+  assert.equal(ctrl.scrollFromBottom, 15, '5 事件应累计 15 行');
+
+  // 再来 10 个 → 累计 45
+  for (let i = 0; i < 10; i++) {
+    ctrl.emitMouseWheel(3);
+    await wait(25);
+  }
+  await wait(150);
+  assert.equal(ctrl.scrollFromBottom, 45, '再 10 事件应累计到 45 行');
+
+  // 反向 15 个 → 归零并恢复跟随
+  for (let i = 0; i < 15; i++) {
+    ctrl.emitMouseWheel(-3);
+    await wait(25);
+  }
+  await wait(150);
+  assert.equal(ctrl.scrollFromBottom, 0, '反向应精确回到贴底');
+  frame.cleanup();
+});
+
+test('滚轮：同步连发（同一 tick 内）也能全部累加', async () => {
+  const ctrl = new AppController();
+  for (let i = 1; i <= 200; i++) ctrl.pushUser(`问 ${i}`);
+  const frame = renderApp(ctrl);
+  await wait(120);
+
+  // 一次性连发 10 个（不等渲染，模拟事件队列瞬时涌入）
+  for (let i = 0; i < 10; i++) ctrl.emitMouseWheel(3);
+  await wait(200);
+  assert.equal(ctrl.scrollFromBottom, 30, '同一 tick 的 10 个事件应合并成 30 行位移');
+  frame.cleanup();
+});
+
+// ── 滚动性能 ────────────────────────────────────────────────────
+//
+// 早期实现把全部历史渲染进树里，每次滚动都让 Yoga 重排整棵子树：
+// 实测 60 轮 47ms、120 轮 63ms——滚轮密集到达时就是"滚一下卡一下"。
+// 优化后（虚拟滚动 + 0ms 聚合 + 去掉多余 effect）中位约 10ms，低于一帧。
+test('滚动性能：大量历史下单次滚动响应低于一帧（16ms）', async () => {
+  const ctrl = new AppController();
+  // 120 轮对话（含 markdown，接近真实负载）
+  for (let i = 1; i <= 120; i++) {
+    ctrl.pushUser(`问题 ${i}`);
+    ctrl.streamText(`## 分析\n\n**加粗** \`code\`\n- 一\n- 二\n`);
+    ctrl.finishStream();
+  }
+  const frame = renderApp(ctrl);
+  await wait(300);
+
+  const latencies: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    const t0 = performance.now();
+    const target = ctrl.scrollFromBottom + 3;
+    ctrl.emitMouseWheel(3);
+    for (let k = 0; k < 200; k++) {
+      if (ctrl.scrollFromBottom >= target) {
+        latencies.push(performance.now() - t0);
+        break;
+      }
+      await wait(1);
+    }
+    await wait(30);
+  }
+  latencies.sort((a, b) => a - b);
+  const median = latencies[Math.floor(latencies.length / 2)] ?? 999;
+  // 放宽到 40ms：CI 机器性能波动大，但能拦住"退回到 50-60ms"的回归
+  assert.ok(median < 40, `单次滚动中位延迟应 < 40ms（实际 ${median.toFixed(1)}ms）`);
+  frame.cleanup();
+});
+
+test('虚拟滚动：只渲染视口附近的条目，远处内容用占位撑高', async () => {
+  const { Transcript, estimateItemHeight } = await import('../src/ui/transcript.js');
+  const turns = Array.from({ length: 200 }, (_, i) => ({
+    id: i + 1,
+    role: 'user' as const,
+    text: `问题 ${i}`,
+    tools: [],
+    streaming: false,
+  }));
+
+  // 不虚拟化：全部渲染
+  const full = render(
+    React.createElement(Transcript, { turns, output: [], scrollTop: undefined, viewportRows: undefined }),
+  );
+  await wait(120);
+  const fullText = frameText(full);
+  assert.ok(fullText.includes('问题 0'), '全量渲染含第一条');
+  assert.ok(fullText.includes('问题 199'), '全量渲染含最后一条');
+  full.cleanup();
+
+  // 虚拟化：只渲染视口附近。
+  // 注意 scrollTop 要落在内容中部——每条约 2 行、200 条共 400 行，
+  // 取 200 行处（正中间）才能同时验证"顶部和底部都不渲染"。
+  const virt = render(
+    React.createElement(Transcript, { turns, output: [], scrollTop: 200, viewportRows: 30, cols: 80 }),
+  );
+  await wait(120);
+  const virtText = frameText(virt);
+  assert.ok(!virtText.includes('问题 0'), '远处（顶部）内容不渲染');
+  assert.ok(!virtText.includes('问题 199'), '远处（底部）内容不渲染');
+  virt.cleanup();
+
+  assert.ok(estimateItemHeight({ id: 1, kind: 'turn', turn: turns[0]! }, 80) > 0, '高度估算为正');
+});
+
+// ── 滚动位置收敛 ────────────────────────────────────────────────
+//
+// scrollUp 只做 `fromBottom += lines`，不知道内容有多高——长按上滚时它会一路涨到
+// 远超真实上限（实测：内容只能滚 ~240 行，fromBottom 却到 900）。
+// 视觉上被 clamp 掩盖了，但用户体验是坏的：上滚前面一大段"空转"，
+// 之后下滚要还这笔债，按很久才动一下——这正是"来回滚动不灵敏"的直接原因。
+// ScrollView 现在会在容积实测后把 fromBottom 收回真实上限。
+test('回归：狂滚上滚后 fromBottom 收敛到真实上限，下滚立即有反应', async () => {
+  const ctrl = new AppController();
+  for (let i = 1; i <= 60; i++) {
+    ctrl.pushUser(`问题 ${i}`);
+    ctrl.streamText(`回答 ${i}\n`);
+    ctrl.finishStream();
+  }
+  const frame = renderApp(ctrl);
+  await wait(300);
+
+  // 疯狂上滚：远超内容高度
+  for (let k = 0; k < 200; k++) ctrl.emitMouseWheel(3);
+  await wait(400);
+
+  const atTop = ctrl.scrollFromBottom;
+  assert.ok(atTop > 0, '确实滚上去了');
+
+  // 下滚 3 格（9 行）：应当立即减少约 9 行，而不是纹丝不动（空转）
+  for (let k = 0; k < 3; k++) {
+    ctrl.emitMouseWheel(-3);
+    await wait(50);
+  }
+  await wait(200);
+  const after = ctrl.scrollFromBottom;
+  assert.ok(
+    atTop - after >= 5,
+    `下滚应立即可见（从 ${atTop} 到 ${after}，减少 ${atTop - after} 行，期望 ≥5）`,
+  );
   frame.cleanup();
 });

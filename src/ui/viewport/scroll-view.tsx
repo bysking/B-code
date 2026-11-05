@@ -36,7 +36,13 @@ export function ScrollView({
   scroll: ScrollState;
   /** 需要修正滚动状态时回传（跟随贴底 / resize 后保位置） */
   onScroll?: (next: ScrollState) => void;
-  children: React.ReactNode;
+  /**
+   * 内容。可以是函数形式 `({ scrollTop, viewportRows }) => ReactNode`——
+   * 这样内容能知道自己该渲染哪一段（虚拟滚动用），避免把全部历史都塞进树里。
+   */
+  children:
+    | React.ReactNode
+    | ((info: { scrollTop: number; viewportRows: number }) => React.ReactNode);
 }) {
   const viewportRef = useRef(null);
   const contentRef = useRef(null);
@@ -60,7 +66,33 @@ export function ScrollView({
     if (next !== scrollRef.current) onScrollRef.current?.(next);
   }, [clientHeight, viewportMeasured]);
 
-  // 内容长高（新消息/工具块）→ 若仍在跟随态，继续贴底
+  /**
+   * 收敛超限的滚动位置。
+   *
+   * `scrollUp` 只做 `fromBottom += lines`，不知道内容有多高——所以长按/连滚上滚时
+   * `fromBottom` 会一路涨到远超真实上限（实测：内容只能滚 240 行，fromBottom 却到了 900）。
+   * 视觉上没问题（`scrollTopFor` 会把 offset clamp 回合法区间），但**用户体验是坏的**：
+   * 上滚时前面一大段是"空转"，之后往下滚要还这笔债——按很久才动一下，
+   * 这正是"来回滚动感觉不灵敏"的直接原因。
+   *
+   * 这里在容积确定后主动把 fromBottom 收回真实上限，让它永远等于"实际的距底行数"。
+   * 依赖 `content.height` 与 `clientHeight`，二者都由 useBoxMetrics 实测，已含虚拟滚动的占位高度。
+   */
+  useEffect(() => {
+    if (!content.hasMeasured || clientHeight <= 0) return;
+    const realMax = maxScrollTop(content.height, clientHeight);
+    const cur = scrollRef.current;
+    // 跟随态由别的 effect 管；这里只管"超限但仍在手动滚动"的情形
+    if (cur.following || cur.fromBottom <= realMax) return;
+    onScrollRef.current?.({ fromBottom: realMax, following: realMax === 0 });
+  }, [content.height, content.hasMeasured, clientHeight]);
+
+  // 内容长高（新消息/工具块）→ 若仍在跟随态，继续贴底。
+  //
+  // 注意：只在**真的需要**时调用（fromBottom > 0 且 following）。若不加这个条件，
+  // 虚拟滚动导致的 content.height 微变会反复触发 scrollToBottom（每次都是新对象），
+  // 造成持续重渲染。scrollToBottom 返回常量形状的对象，但 fromBottom 已是 0 时
+  // 调用等于空转，必须提前返回。
   useEffect(() => {
     const cur = scrollRef.current;
     if (!cur.following || cur.fromBottom === 0 || !content.hasMeasured) return;
@@ -68,20 +100,46 @@ export function ScrollView({
   }, [content.height, content.hasMeasured]);
 
   const viewportH = height ?? clientHeight;
-  const offset = scrollTopFor(scroll.fromBottom, content.height, viewportH);
-  const max = maxScrollTop(content.height, viewportH);
+  /**
+   * 滚动偏移。
+   *
+   * ## 为什么死循环曾发生在这里
+   *
+   * 原实现把 `clamp(offset, 0, max)` 同时用于 `contentOffsetY` **和** 传给 children
+   * 的 `scrollTop`。而 children（虚拟滚动）按 scrollTop 决定渲染哪几条，
+   * 渲染出来的内容高度又反过来影响 `max`/`offset`：
+   *
+   *   offset → children 渲染窗口 → content.height 变 → offset 重算 → children …
+   *
+   * 虚拟滚动的占位高度是**估算**的，与实际渲染有偏差，于是每轮算出的 offset
+   * 都略有不同，形成永不收敛的渲染循环——表现就是来回滚动时卡死。
+   *
+   * ## 现在的做法
+   *
+   * 让**滚动位置的唯一真源是 `scroll.fromBottom`**（用户意图），不再混入实测高度：
+   *   - contentOffsetY 用实测高度 clamp（保证不滚过内容末端）
+   *   - 但传给 children 的 scrollTop 用**请求值**（fromBottom 反推），不随实测高度抖动
+   *
+   * 这样 children 的渲染窗口只跟着用户操作变，不跟着自己的渲染结果变，闭环被打断。
+   */
+  const measuredMax = maxScrollTop(content.height, viewportH);
+  const requestedOffset = scrollTopFor(scroll.fromBottom, content.height, viewportH);
+  const offset = clamp(requestedOffset, 0, measuredMax);
 
   return (
     <Box
       ref={viewportRef}
       {...(height !== undefined ? { height } : { flexGrow: 1, flexShrink: 1 })}
       overflow="hidden"
-      contentOffsetY={clamp(offset, 0, max)}
+      contentOffsetY={offset}
       flexDirection="column"
     >
       {/* flexShrink=0：保持内容自然高度才能溢出并滚动（否则被压进视口，无内容可滚） */}
       <Box ref={contentRef} flexDirection="column" flexShrink={0}>
-        {children}
+        {typeof children === 'function'
+          ? // scrollTop 传请求值（基于 fromBottom，不依赖实测高度），打断反馈环
+            children({ scrollTop: requestedOffset, viewportRows: viewportH })
+          : children}
       </Box>
     </Box>
   );

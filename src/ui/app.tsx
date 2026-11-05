@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput, usePaste } from 'ink';
-import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
+import type { AppController, SlashItem, ToolCallDisplay, Turn } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
 import { readClipboardImage } from '../utils/clipboard.js';
@@ -19,7 +19,7 @@ import { Wizard } from './wizard.js';
 import { SlashMenu } from './slash-menu.js';
 import { InputBox } from './input-box.js';
 import { OutputPanel, outputPanelMaxScroll, type PanelTab } from './output-panel.js';
-import { isCompactTerminal, terminalRows } from './scroll-budget.js';
+import { isCompactTerminal, useTerminalSize } from './scroll-budget.js';
 import { TaskPanel } from './task-panel.js';
 import { TodoPanel } from './todo-panel.js';
 import { UserTodoEditor } from './user-todo-editor.js';
@@ -34,10 +34,12 @@ import { buildSlash, buildSubmitLine } from './slash.js';
  * 布局：滚动视口（历史 + 底部状态行） → 交互区（确认/向导/菜单/面板） → 输入框 → 模式栏。
  *
  * 与旧实现的关键差别：
- *   1. 历史不再交给终端 scrollback，而是画在 `<ScrollView>` 里。resize 时重排的是
- *      **同一帧**，不存在"按旧布局行数擦除新内容"这种必然花屏的路径。
- *   2. 视口高度由 flexGrow 让 Yoga 算，不再用 estimateLines 猜底栏占几行。
- *   3. 滚动状态是我们自己的（距底行数 + 是否跟随），取代向终端发 CPR 问光标位置。
+ *   1. 历史走 `<Static>` 永久打印进终端 scrollback —— 用户可用终端原生的
+ *      鼠标滚轮 / 滚动条 / Shift+PgUp 回看，退出后历史也留在终端里。
+ *      （ink 8 已修复 resize 时 static 输出被擦错的问题，实测多轮尺寸变化不失真。）
+ *   2. live 区只放"还在变"的内容（最后一条 turn + busy 行），每帧重绘不影响历史。
+ *   3. 尺寸统一从 `useTerminalSize()` 取（读 ink 的渲染流，而非 process.stdout）——
+ *      读错对象会让帧高与终端高度不一致，触发 ink 整屏清屏、历史全丢。
  */
 
 /** 汇总本轮会话全部工具调用（供 Ctrl+O 面板展示） */
@@ -72,23 +74,112 @@ export function App({
   const [, force] = useState(0);
   useEffect(() => ctrl.subscribe(() => force((v) => v + 1)), [ctrl]);
 
-  // ── 滚动状态 ──────────────────────────────────────────────
+  /**
+   * 终端尺寸必须从 ink 的渲染上下文取（useWindowSize），不能读 process.stdout.rows。
+   *
+   * 踩过的坑：根盒子用 process.stdout.rows 算高度（测试/非默认流下兜底成 40），
+   * 而 ink 实际渲染流只有 30 行 → 帧比终端高 → ink 整屏清屏 → 历史被清掉且滚不动。
+   * 用户看到的就是"对话后历史看不全、无法向上滚动"。
+   */
+  const { rows: termRows, columns: termCols } = useTerminalSize();
+
+  // 滚动状态：距底部行数 + 是否跟随（新内容到来时自动贴底）。
+  // 这是固定视口方案的核心——位置由我们自己管，不依赖终端。
   const [scroll, setScrollState] = useState<ScrollState>(INITIAL_SCROLL);
   const scrollRef = useRef(scroll);
   scrollRef.current = scroll;
+
+  /**
+   * 滚轮事件累积器。
+   *
+   * 触摸板一次轻扫会产生几十个滚轮事件，密集到达（惯性滚动）。必须**攒起来一次性提交**，
+   * 不能每个事件都 setState：
+   *   - 每个事件都 setState → React 批处理会把它们合并，但因为我们同时读 `scrollRef.current`
+   *     做基准，后到的事件会基于陈旧值计算 → 大量事件被吃掉（实测：10 个事件应滚 30 行，
+   *     实际只滚 15 行，恰好丢一半）。
+   *   - 攒一帧再提交 → 一帧内的所有事件按位移总和累加，不丢不重。
+   *
+   * 用 `requestAnimationFrame` 对齐渲染节奏：一帧最多提交一次，既保证精度也避免狂重渲染。
+   */
+  const wheelAccum = useRef(0);
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushWheel = useCallback(() => {
+    wheelTimer.current = null;
+    const delta = wheelAccum.current;
+    wheelAccum.current = 0;
+    if (delta === 0) return;
+    setScrollState((prev) => {
+      const next = delta > 0 ? scrollUp(prev, delta) : scrollDown(prev, -delta);
+      scrollRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const queueWheel = useCallback(
+    (delta: number) => {
+      wheelAccum.current += delta;
+      if (wheelTimer.current === null) {
+        // 用 **0ms**（下一个宏任务）而不是 16ms：
+        // 目标只是把"同一 tick 涌入的多个事件"合并成一次 setState，
+        // 不需要等一整帧——等 16ms 等于给每次滚动凭空加 16ms 延迟（用户能感觉到迟滞）。
+        // 0ms 让同 tick 的事件先全部入账，下一个宏任务立即提交。
+        wheelTimer.current = setTimeout(flushWheel, 0);
+      }
+    },
+    [flushWheel],
+  );
+
+  // 卸载时把未提交的位移补上，避免丢失
+  useEffect(() => {
+    return () => {
+      if (wheelTimer.current !== null) {
+        clearTimeout(wheelTimer.current);
+        wheelTimer.current = null;
+      }
+    };
+  }, []);
+
+  // 把滚动位置回写到 controller（供测试/调试观察）。
+  // 直接赋值而非 useEffect：effect 会在每次渲染后多跑一轮，
+  // 滚动是高频操作，能省一次就省一次。
+  ctrl.scrollFromBottom = scroll.fromBottom;
+
+  /** 键盘等即时路径：函数式更新，立即生效 */
+  const scrollBy = useCallback((fn: (prev: ScrollState) => ScrollState) => {
+    setScrollState((prev) => {
+      const next = fn(prev);
+      scrollRef.current = next;
+      return next;
+    });
+  }, []);
+
+  /** 需要"立刻拿到最新值"的场景（键盘同帧连按）直接改 ref + state */
   const setScroll = useCallback((next: ScrollState) => {
-    if (next === scrollRef.current) return; // 同引用 = 无需更新
+    if (next === scrollRef.current) return;
+    scrollRef.current = next;
     setScrollState(next);
   }, []);
+
+  // 鼠标滚轮 → 视口滚动。
+  // 事件来自 render 层的 stdin 过滤流（ink 会丢弃鼠标控制序列，拿不到），
+  // 经 controller 中转到这里。用 ref 读最新滚动状态，避免闭包捕获旧值。
+  useEffect(() => {
+    return ctrl.onMouseWheel((delta) => {
+      // 累积后一帧统一提交：触摸板惯性滚动会连发几十个事件（见 queueWheel 注释）
+      queueWheel(delta);
+    });
+  }, [ctrl, queueWheel]);
 
   // 需要用户当场作答的交互（确认/向导/文本提问）必须可见 → 强制回到底部
   const needsAnswer = Boolean(ctrl.askState || ctrl.askWizardState || ctrl.askTextState);
   useEffect(() => {
-    if (needsAnswer && !scrollRef.current.following) setScroll(scrollToBottom());
-  }, [needsAnswer, setScroll]);
+    // 需要作答时确保内容可见：交给终端滚到底（Static 内容已在 scrollback 里）
+    if (needsAnswer) force((v) => v + 1);
+  }, [needsAnswer]);
 
-  // 终端 resize：触发一次重渲染让 flexGrow 重新布局。ScrollView 内部用 useBoxMetrics
-  // 感知高度变化并修正距底行数（保持用户看到的内容不跳）。
+  // 终端 resize：触发一次重渲染，让依赖终端尺寸的面板（菜单/能力面板/输出面板）
+  // 重新计算可见条数。历史本身在 scrollback 里，由终端自己重排。
   useEffect(() => {
     const onResize = () => force((v) => v + 1);
     process.stdout.on('resize', onResize);
@@ -110,9 +201,6 @@ export function App({
   const [historyIdx, setHistoryIdx] = useState(-1);
   // 粘贴的图片数据：[image #N] 占位符 → N-1 索引
   const imagesRef = useRef<ClipboardImage[]>([]);
-
-  /** 翻页步长：视口的 3/4，留几行上下文便于连续阅读 */
-  const pageLines = () => Math.max(Math.floor(terminalRows() * 0.75), 3);
 
   useInput((_input, key) => {
     // Ctrl+C：有选择框/向导/文本输入 → 取消；执行中 → 双击才真正退出
@@ -146,10 +234,10 @@ export function App({
         setPanelScroll(0);
         return;
       }
-      const step = key.pageUp || key.pageDown ? Math.max(terminalRows() - 12, 5) : 1;
+      const step = key.pageUp || key.pageDown ? Math.max(termRows - 12, 5) : 1;
       if (key.upArrow || key.pageUp) {
         setPanelScroll((s) =>
-          Math.min(s + step, outputPanelMaxScroll(allToolOutputs(ctrl), panelTab, ctrl.logs)),
+          Math.min(s + step, outputPanelMaxScroll(allToolOutputs(ctrl), panelTab, ctrl.logs, termRows)),
         );
         return;
       }
@@ -175,18 +263,21 @@ export function App({
       return;
     }
 
-    // ── 滚动（替代旧的 CPR 探测：视口是我们自己的，不必问终端） ──
-    // ↑↓ 是"共享按键"：斜杠菜单/确认框/向导都要用，所以这些交互打开时必须让位
-    // （它们各自有 useInput，这里提前 return 就不会拦截）。PgUp/PgDn 是滚动专用，随时可接管。
+    // 历史滚动交给终端原生处理（内容在 scrollback 里，鼠标滚轮/滚动条/Shift+PgUp 都可用）。
+    // 这里只保留"共享按键"的让位判断：↑↓ 属于菜单/确认框/向导。
     const uiBusy = Boolean(
       ctrl.slashOpen || ctrl.askState || ctrl.askWizardState || ctrl.askTextState,
     );
+
+    // ── 滚动（视口是我们自己的，不必问终端） ──
+    // PgUp/PgDn 是滚动专用键，随时可接管；↑↓ 是"共享按键"，菜单/确认框打开时让位。
+    const pageLines = () => Math.max(Math.floor(termRows * 0.75), 3);
     if (key.pageUp && !uiBusy) {
-      setScroll(scrollUp(scrollRef.current, pageLines()));
+      scrollBy((prev) => scrollUp(prev, pageLines()));
       return;
     }
     if (key.pageDown && !uiBusy) {
-      setScroll(scrollDown(scrollRef.current, pageLines()));
+      scrollBy((prev) => scrollDown(prev, pageLines()));
       return;
     }
 
@@ -194,7 +285,7 @@ export function App({
       if (uiBusy) return; // 让给菜单/选择框
       // 已滚离底部 → ↑ 继续上滚（回看历史优先）
       if (!scrollRef.current.following) {
-        setScroll(scrollUp(scrollRef.current, 1));
+        scrollBy((prev) => scrollUp(prev, 1));
         return;
       }
       // 贴底态下 ↑ 走输入历史导航
@@ -209,9 +300,9 @@ export function App({
     }
     if (key.downArrow && !key.ctrl && !key.meta) {
       if (uiBusy) return; // 让给菜单/选择框
-      // 已滚离底部 → ↓ 优先往下滚回来（回到底部即自动恢复跟随）
+      // 已滚离底部 → ↓ 优先往下滚回来（回到底部自动恢复跟随）
       if (!scrollRef.current.following) {
-        setScroll(scrollDown(scrollRef.current, 1));
+        scrollBy((prev) => scrollDown(prev, 1));
         return;
       }
       if (historyIdx > 0) {
@@ -308,8 +399,6 @@ export function App({
   };
 
   const compact = isCompactTerminal();
-  // 底部状态行只在贴底时显示（滚上去看历史时不打扰）
-  const atBottom = isAtBottom(scroll.fromBottom);
 
   /**
    * 底栏容器：**必须 flexShrink={0}**。
@@ -321,26 +410,45 @@ export function App({
    * 正确的模型：视口是唯一的弹性区（flexGrow=1 + flexShrink=1），底栏各块固定高度、
    * 绝不压缩。这样无论历史多长，菜单/面板总是完整展示。
    */
+  // ── 固定窗口滚动视口 ──────────────────────────────────────
+  //
+  // 历史全部画在应用内的滚动视口里（ink 8 的 contentOffsetY + overflow），
+  // 滚动位置是我们自己的状态。相比 <Static> 交给终端 scrollback：
+  //   - 窗口 resize 时重排的是**同一帧**，不存在"按旧布局擦除新内容"的风险
+  //   - 流式输出再长也只是滚动，不会出现擦除行数对不上导致的内容重复
+  // 代价是历史不进终端 scrollback，用视口自己的滚动（键盘 + 鼠标滚轮）回看。
   return (
-    <Box flexDirection="column" height={terminalRows()}>
-      {/* 滚动视口：唯一可伸缩的区块 */}
+    <Box flexDirection="column" height={termRows}>
+      {/* 视口：唯一可伸缩区。高度由 flexGrow 让 Yoga 算，不猜底栏占几行 */}
       <ScrollView scroll={scroll} onScroll={setScroll}>
-        <Transcript turns={ctrl.turns} output={ctrl.output} initialOutput={initialOutput} />
-        {ctrl.busy && ctrl.busySince !== null && atBottom ? (
-          <Box marginTop={1}>
-            <BusyLine
-              text={ctrl.busy}
-              since={ctrl.busySince}
-              thinking={ctrl.busyThinking}
-              inputTokens={ctrl.busyInputTokens}
+        {({ scrollTop, viewportRows }: { scrollTop: number; viewportRows: number }) => (
+          <>
+            {/* 虚拟滚动：只渲染视口附近的条目。全量渲染时 Yoga 要重排整棵树，
+                实测 60 轮对话单次 47ms、120 轮 63ms——滚轮密集到达时就是"卡顿"。 */}
+            <Transcript
+              turns={ctrl.turns}
+              output={ctrl.output}
+              initialOutput={initialOutput}
+              scrollTop={scrollTop}
+              viewportRows={viewportRows}
+              cols={termCols}
             />
-          </Box>
-        ) : null}
+            {ctrl.busy && ctrl.busySince !== null ? (
+              <Box marginTop={1}>
+                <BusyLine
+                  text={ctrl.busy}
+                  since={ctrl.busySince}
+                  thinking={ctrl.busyThinking}
+                  inputTokens={ctrl.busyInputTokens}
+                />
+              </Box>
+            ) : null}
+          </>
+        )}
       </ScrollView>
 
       {/* ── 底栏：固定高度，绝不压缩（flexShrink=0） ──
-          每一块都是"用户必须看全"的内容：菜单少了第一项就没法选，确认框截断就读不懂在问什么。
-          把它们包进 flexShrink=0 的容器，让所有压缩都落在上面那个可滚动的视口上。 */}
+          每一块都是"用户必须看全"的内容：菜单少了第一项就没法选，确认框截断就读不懂在问什么。 */}
       <Box flexDirection="column" flexShrink={0}>
         {/* 交互区（同时最多一种） */}
         {ctrl.askWizardState ? (
@@ -361,6 +469,7 @@ export function App({
             onSubmitRaw={() => handleSubmit(input)}
             onComplete={handleComplete}
             onClose={() => ctrl.closeSlash()}
+            termRows={termRows}
           />
         ) : null}
 

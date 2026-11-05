@@ -2,6 +2,12 @@ import React from 'react';
 import { render, type Instance } from 'ink';
 import { App } from './app.js';
 import { setLogSink } from '../utils/log.js';
+import {
+  createMouseFilteredInput,
+  MOUSE_DISABLE,
+  MOUSE_ENABLE,
+  type MouseEvent,
+} from './mouse.js';
 import type { AppController } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
@@ -42,6 +48,8 @@ export function mountTtyApp(
     onReconnectCapability?: (name: string) => void;
     /** 能力面板：重拉列表数据 */
     refreshCapability?: () => void;
+    /** 鼠标滚轮：滚动历史视口（±1 = 滚一行，通常 ±3） */
+    onMouseWheel?: (delta: number) => void;
   },
   initialOutput?: string[],
   /** 输出/输入流（缺省 process.stdout / process.stdin）。注入供测试与未来复用。 */
@@ -58,6 +66,25 @@ export function mountTtyApp(
   const restoreLogSink = setLogSink((line) => ctrl.pushLog(line));
 
   const out = streams?.stdout ?? process.stdout;
+  const realStdin = streams?.stdin ?? process.stdin;
+
+  /**
+   * 鼠标滚轮：必须在喂给 ink **之前**拦下。
+   *
+   * ink 8 会主动丢弃未识别的控制序列（含鼠标报告），所以拿不到这些事件；
+   * 我们在 stdin 上挂一层过滤流，把 `\x1b[<64;x;yM` 这类序列摘出来转成滚动，
+   * 其余输入原样转发给 ink。
+   */
+  const mouse = createMouseFilteredInput(realStdin, (ev: MouseEvent) => {
+    if (!ev.wheel) return;
+    // 一格滚轮 ≈ 3 行，与常见终端行为一致
+    hooks.onMouseWheel?.(ev.wheel === 'up' ? 3 : -3);
+  });
+
+  // 开启鼠标追踪：只在真实 TTY 下做，非 TTY（管道/CI）会污染输出
+  const mouseEnabled = Boolean(process.stdout.isTTY && realStdin.isTTY);
+  if (mouseEnabled) out.write(MOUSE_ENABLE);
+
   const instance = render(
     React.createElement(App, {
       ctrl,
@@ -72,12 +99,21 @@ export function mountTtyApp(
     }),
     // 关闭 ink 默认 exitOnCtrlC：否则 Ctrl+C 被 ink 吞掉，我们自己的
     // "第一次提示 / 第二次退出 / 打印恢复命令" 协议永远收不到事件
-    { exitOnCtrlC: false, stdin: streams?.stdin ?? process.stdin, stdout: out },
+    { exitOnCtrlC: false, stdin: mouse.input, stdout: out },
   );
   return {
     instance,
     unmount: () => {
       instance.unmount();
+      // 关掉鼠标追踪并摘掉过滤流：否则退出后终端仍在鼠标模式下（原生选中失效）
+      if (mouseEnabled) {
+        try {
+          out.write(MOUSE_DISABLE);
+        } catch {
+          // 流已关闭
+        }
+      }
+      mouse.dispose();
       restoreLogSink(); // 交还 stderr，退出期日志要能正常打到终端
     },
   };

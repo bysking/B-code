@@ -617,6 +617,32 @@ export class AppController {
     this.bump();
   }
 
+  // ── 鼠标滚轮 → 视口滚动 ────────────────────────────────────
+  //
+  // 鼠标事件在 render 层的 stdin 过滤流里解析（ink 会丢弃这些控制序列），
+  // 但滚动状态在 App 组件内部。用 controller 做中转：render 收到滚轮就调
+  // `emitMouseWheel`，App 订阅后转成滚动动作。
+  //
+  // 为什么不让 App 自己监听：鼠标序列必须在喂给 ink 之前拦下，而 App 拿到的
+  // 已经是 ink 解析后的事件（此时鼠标报告已被丢弃）。
+  private mouseWheelListeners = new Set<(delta: number) => void>();
+
+  /** render 层解析到滚轮时调用（delta > 0 向上滚，< 0 向下） */
+  emitMouseWheel(delta: number): void {
+    for (const l of this.mouseWheelListeners) l(delta);
+  }
+
+  /** 当前滚动距底部行数（测试/调试用；App 每帧回写） */
+  scrollFromBottom = 0;
+
+  /** App 订阅滚轮事件；返回取消订阅函数 */
+  onMouseWheel(cb: (delta: number) => void): () => void {
+    this.mouseWheelListeners.add(cb);
+    return () => {
+      this.mouseWheelListeners.delete(cb);
+    };
+  }
+
   // ── 能力面板（/skills、/mcp）────────────────────────────────
 
   /** 打开能力面板并灌入初始列表 */

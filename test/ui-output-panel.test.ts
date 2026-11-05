@@ -34,12 +34,16 @@ test('面板：输出很多时贴底显示的是**最新**内容（旧实现从�
   f.cleanup();
 });
 
+const PANEL_TEST_ROWS = 40;
+
 test('面板：翻页后能看到最早的内容（完整日志可达）', async () => {
   const tools = Array.from({ length: 5 }, (_, i) => tool(`t${i}`, 40));
-  const max = outputPanelMaxScroll(tools);
+  // 显式给 termRows：组件内 useWindowSize 取的是 ink 渲染流尺寸（测试里可能与
+  // 纯函数的默认 40 不同），两边必须用同一口径算 max，否则 scroll 会越界被夹掉
+  const max = outputPanelMaxScroll(tools, 'tools', [], PANEL_TEST_ROWS);
   assert.ok(max > 0, '内容超一屏 → 可翻页');
 
-  const f = render(React.createElement(OutputPanel, { tools, scroll: max }));
+  const f = render(React.createElement(OutputPanel, { tools, scroll: max, termRows: PANEL_TEST_ROWS }));
   await wait(120);
   const frame = f.lastFrame() ?? '';
   assert.ok(frame.includes('tool_t0'), '翻到最上能看到最早的工具');

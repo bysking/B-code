@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { CapabilityItem, CapabilityKind } from './controller.js';
-import { isCompactTerminal, terminalCols, terminalRows } from './scroll-budget.js';
-import { scrollWindow } from './viewport/viewport.js';
+import { isCompactTerminal, terminalCols, useTerminalSize } from './scroll-budget.js';
+import { scrollWindow } from './scroll-budget.js';
 
 /**
  * 能力面板（/skills、/mcp）：可交互的启停开关。
@@ -34,11 +34,11 @@ const MAX_VISIBLE_COMPACT = 5;
  */
 const PANEL_CHROME_LINES = 6;
 
-/** 当前终端下最多展示几条 */
-function maxVisibleRows(): number {
+/** 当前终端下最多展示几条（rows 由调用方从 useTerminalSize 传入） */
+function maxVisibleRows(termRows: number): number {
   const cap = isCompactTerminal() ? MAX_VISIBLE_COMPACT : MAX_VISIBLE;
   // 给视口留至少 3 行，其余才归面板
-  const avail = terminalRows() - PANEL_CHROME_LINES - 3;
+  const avail = termRows - PANEL_CHROME_LINES - 3;
   return Math.max(1, Math.min(cap, avail));
 }
 
@@ -61,7 +61,8 @@ export function CapabilityPanel({
   onRefresh?: () => void;
 }) {
   const [idx, setIdx] = useState(0);
-  const rows = maxVisibleRows();
+  const { rows: termRows } = useTerminalSize();
+  const rows = maxVisibleRows(termRows);
 
   const enabledCount = items.filter((it) => it.enabled).length;
   const title = kind === 'skill' ? '🔧 技能' : '🔌 MCP Server';
@@ -177,16 +178,16 @@ export function CapabilityPanel({
  * 面板自身是 `flexShrink={0}` 的底栏内容，实际不会被压缩；这个函数给出的是
  * "按当前终端高度，面板会占多少行"，用于验证不会挤占正文。
  */
-export function capabilityPanelHeight(items: CapabilityItem[]): number {
+export function capabilityPanelHeight(items: CapabilityItem[], termRows = 40): number {
   if (items.length === 0) return PANEL_CHROME_LINES + 1;
-  const rows = maxVisibleRows();
+  const rows = maxVisibleRows(termRows);
   // chrome + 可见条数 + （有滚动提示时 +1）
   return PANEL_CHROME_LINES + Math.min(items.length, rows) + (items.length > rows ? 1 : 0);
 }
 
 /** 供测试断言：当前终端下最多可见几条 */
-export function capabilityVisibleRows(): number {
-  return maxVisibleRows();
+export function capabilityVisibleRows(termRows = 40): number {
+  return maxVisibleRows(termRows);
 }
 
 /** 供测试断言：面板固定 chrome 行数 */

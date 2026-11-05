@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { SlashItem } from './controller.js';
 import { clampIndex, filterSlash, slashWindow } from './slash.js';
-import { terminalRows } from './scroll-budget.js';
 
 /**
  * 菜单最多展示的候选项数上限（超出滚动）。
@@ -26,8 +25,8 @@ const MENU_CHROME_ROWS = 4;
  * 测量值小 → 只渲染 1 行 → 测量值仍然小 → 永远 1 行（终端明明有 50 行也显示一行）。
  * 高度必须由"外部已知量"（终端行数）推出，不能由"自己渲染结果"反推。
  */
-function visibleRows(): number {
-  const avail = terminalRows() - MENU_CHROME_ROWS - 4;
+function visibleRows(termRows: number): number {
+  const avail = termRows - MENU_CHROME_ROWS - 4;
   return Math.max(3, Math.min(avail, MAX_VISIBLE));
 }
 
@@ -47,6 +46,7 @@ export function SlashMenu({
   onSubmitRaw,
   onComplete,
   onClose,
+  termRows,
 }: {
   query: string;
   items: SlashItem[];
@@ -55,10 +55,21 @@ export function SlashMenu({
   onSubmitRaw: () => void;
   onComplete: (item: SlashItem) => void;
   onClose: () => void;
+  /**
+   * 终端行数，**由 App 传入而不是自己调 useTerminalSize()**。
+   *
+   * 自己调 hook 会让组件订阅尺寸变化：菜单打开期间若有任何一次尺寸 state 抖动，
+   * 组件重渲染、useInput 的 effect 重挂，飞行中的按键就丢了——表现是"↑ 按了没反应，
+   * 菜单停在第一项"（实测复现）。
+   *
+   * 菜单不是尺寸的独立消费者，它只是被父层布局的一部分；把尺寸作为 prop 传下来，
+   * 组件的订阅面最小，按键稳定性最好。
+   */
+  termRows: number;
 }) {
   const [idx, setIdx] = useState(0);
   const filtered = filterSlash(query, items);
-  const rows = visibleRows();
+  const rows = visibleRows(termRows);
 
   useEffect(() => setIdx(0), [query]);
 

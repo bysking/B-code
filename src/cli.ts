@@ -142,8 +142,8 @@ const HELP_TEXT = [
   '  Esc              硬中断当前对话（取消在飞请求/终止 shell）',
   '  Ctrl+O           工具输出面板',
   '  Shift+Tab        循环切换模式',
-  '  PgUp / PgDn      翻页回看历史',
-  '  ↑ / ↓            输入历史导航（已滚离底部时优先下滚回底部）',
+  '  PgUp / PgDn / 滚轮   回看历史',
+  '  ↑ / ↓            输入历史导航（已滚离底部时优先滚回）',
   '  Ctrl+V           粘贴图片（文本走括号粘贴自动处理）',
 ].join('\n');
 
@@ -430,6 +430,8 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         });
       },
       refreshCapability,
+      // 鼠标滚轮：render 层解析后经 controller 转给 App 的视口
+      onMouseWheel: (delta) => ctrl.emitMouseWheel(delta),
     },
     initialOutput,
   );

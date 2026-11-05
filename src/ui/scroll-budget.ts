@@ -1,23 +1,49 @@
 /**
  * 终端尺寸与面板的布局工具。
  *
- * 历史消息渲染已改为应用内滚动视口（`viewport/scroll-view.tsx`），
- * 原先那套"估算行数 → 切片提交进 <Static>"的防溢出机制随之删除。
- * 这里只剩两块仍被面板类组件共用的东西：
+ * 历史消息走 `<Static>`（终端原生 scrollback），live 区靠按行边界切分控制帧高。
+ * 这里剩下两块被各处共用的东西：
  *
- *   1. `terminalRows` / `terminalCols` —— 终端尺寸（非 TTY 兜底）。
- *   2. `clampByLines` / `estimateLines` —— 按**渲染行数**裁切列表。
- *      面板（待办/任务/能力面板/输出面板）仍需要限高：它们不是滚动视口，
- *      条数多了会把底栏撑高、挤占正文。
+ *   1. `useTerminalSize` / `terminalRows` / `terminalCols` —— 终端尺寸。
+ *   2. `clampByLines` / `estimateLines` —— 按**渲染行数**裁切列表与估算高度。
+ *      面板（待办/任务/能力面板/输出面板）需要限高：条数多了会把底栏撑高。
+ *   3. `scrollWindow` —— 长列表的滚动窗口（菜单/能力面板共用）。
+ *
+ * ## 组件里请用 `useTerminalSize()`，不要直接调这两个函数
+ *
+ * 这两个函数读的是**真实 `process.stdout`**。如果 ink 渲染用的 stdout 是别的流
+ * （测试注入、未来多路输出），读到的值就和实际渲染尺寸不一致——表现为"根盒子
+ * height=40，而终端只有 30 行"，整帧比终端高 → ink 整屏清屏 → 历史丢失且滚不动。
+ *
+ * 组件内一律用 `useTerminalSize()`（基于 ink 的 `useWindowSize`，读的是**当前
+ * 渲染流**，且 resize 时自动重渲染）。
  */
+import { useWindowSize } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 
-/** 终端行数（非 TTY/测试环境兜底 40） */
+/**
+ * 当前渲染流所在终端的尺寸（组件内**唯一**正确来源）。
+ *
+ * 为什么不能直接用 `process.stdout.rows`：ink 的渲染目标是 `render(..., { stdout })`
+ * 传进来的流，可能是测试注入的假流或未来的多路输出。读错对象就会让"根盒子高度"
+ * 与"实际终端高度"不一致 → 整帧比终端高 → ink 整屏清屏 → 历史丢失、无法滚动。
+ *
+ * `useWindowSize` 读的是 ink 自己的 stdout context，且 resize 时自动重渲染。
+ */
+export function useTerminalSize(): { rows: number; columns: number } {
+  const { rows, columns } = useWindowSize();
+  return {
+    rows: rows > 0 ? rows : 40,
+    columns: columns > 0 ? columns : 80,
+  };
+}
+
+/** 终端行数兜底（仅供非组件场景；组件内用 useTerminalSize） */
 export function terminalRows(): number {
   return process.stdout.rows || 40;
 }
 
-/** 终端列宽（非 TTY/测试环境兜底 80） */
+/** 终端列宽兜底（仅供非组件场景；组件内用 useTerminalSize） */
 export function terminalCols(): number {
   return process.stdout.columns || 80;
 }
@@ -74,3 +100,18 @@ export function estimateLines(text: string, cols = terminalCols()): number {
   return wrapAnsi(text, Math.max(cols, 10), { hard: true, trim: false }).split('\n').length;
 }
 
+/**
+ * 列表的滚动窗口：给定光标位置与可见条数，算出该渲染哪一段 [start, end)。
+ *
+ * 核心不变式：**光标项必须落在窗口内**。这是"被裁掉的项永远看不到"的解药——
+ * 光标下移穿过窗口下沿时，窗口跟着一起滚，最后一项也能翻到。
+ *
+ * 窗口采用"光标居中偏下"策略（靠近末尾时贴底）：光标移动时内容不会每步都跳一整屏，
+ * 同时又能保证末尾能看到足够的上下文。斜杠菜单与能力面板共用这套语义。
+ */
+export function scrollWindow(idx: number, length: number, maxVisible: number): [number, number] {
+  if (length <= maxVisible || maxVisible <= 0) return [0, length];
+  const half = Math.floor(maxVisible / 2);
+  const start = Math.min(Math.max(idx - half, 0), length - maxVisible);
+  return [start, Math.min(start + maxVisible, length)];
+}

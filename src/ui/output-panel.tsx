@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ToolCallDisplay } from './controller.js';
-import { estimateLines, terminalRows } from './scroll-budget.js';
+import { estimateLines, useTerminalSize } from './scroll-budget.js';
 
 /**
  * 单条输出在展开态下的展示上限。取得很大（而不是原来的 2000 字符）是为了
@@ -130,6 +130,7 @@ export function OutputPanel({
   logs = [],
   tab = 'tools',
   scroll,
+  termRows: termRowsOverride,
 }: {
   tools: ToolCallDisplay[];
   /** 系统日志（log.info/warn/error 被接管后收在这里） */
@@ -137,7 +138,11 @@ export function OutputPanel({
   tab?: PanelTab;
   /** 距底部的行偏移：0 = 贴底（最新），正数 = 向上翻 */
   scroll?: number;
+  /** 覆盖终端行数（测试用：保证与 outputPanelMaxScroll 算 max 时同一口径） */
+  termRows?: number;
 }) {
+  const { rows: measuredRows } = useTerminalSize();
+  const termRows = termRowsOverride ?? measuredRows;
   const withOutput = tools.filter((t) => t.status === 'done');
   const allRows = tab === 'logs' ? flattenLogs(logs) : flatten(withOutput);
   /**
@@ -145,7 +150,7 @@ export function OutputPanel({
    * chrome 灯常驻约 6 行；再留 1 行余量给输入框换行，避免帧高顶到终端行数
    * 触发 ink 整屏清屏（ESC[3J 会连 scrollback 一起清，用户回看的历史全丢）。
    */
-  const budget = Math.max(terminalRows() - PANEL_CHROME_ROWS, 4);
+  const budget = Math.max(termRows - PANEL_CHROME_ROWS, 4);
 
   // 视窗：以"距底部 offset 个可见行"定位。offset 按**渲染高度**换算成下标，
   // 这样 ↑↓ 一行的效果始终是"画面上移一行"，不会因为长行占 3 行而跳 3 行。
@@ -217,8 +222,9 @@ export function outputPanelScrollable(
   tools: ToolCallDisplay[],
   tab: PanelTab = 'tools',
   logs: string[] = [],
+  termRows = 40,
 ): boolean {
-  return maxScrollRows(rowsFor(tab, tools, logs), Math.max(terminalRows() - PANEL_CHROME_ROWS, 4)) > 0;
+  return maxScrollRows(rowsFor(tab, tools, logs), Math.max(termRows - PANEL_CHROME_ROWS, 4)) > 0;
 }
 
 /** 面板可滚动的最大偏移量（供按键处理把 scroll 夹在合法区间） */
@@ -226,6 +232,7 @@ export function outputPanelMaxScroll(
   tools: ToolCallDisplay[],
   tab: PanelTab = 'tools',
   logs: string[] = [],
+  termRows = 40,
 ): number {
-  return maxScrollRows(rowsFor(tab, tools, logs), Math.max(terminalRows() - PANEL_CHROME_ROWS, 4));
+  return maxScrollRows(rowsFor(tab, tools, logs), Math.max(termRows - PANEL_CHROME_ROWS, 4));
 }
