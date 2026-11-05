@@ -183,18 +183,16 @@ test('回归：用户消息单独 push 后立刻展示（模型回答前不丢�
   // 真实时序：提交后模型尚未返回（甚至 busy thinking 中），期间只有 user turn 一次渲染
   ctrl.setBusy('thinking…');
   ctrl.pushUser('帮我读一下 src/index.ts');
-  await wait(30);
-  await frame.flush();
-  let out = frame.frame();
-  assert.ok(out.includes('帮我读一下 src/index.ts'), '模型回答前用户消息已展示');
+  // 用轮询而非固定 wait(30)：CI 机器更慢，30ms 可能赶不上一次渲染提交。
+  // 断言的是"最终会显示"，不该受帧调度速度影响。
+  const out1 = await waitForFrame(frame, '帮我读一下 src/index.ts', '用户消息即时展示');
+  assert.ok(out1.includes('帮我读一下 src/index.ts'), '模型回答前用户消息已展示');
 
   // 模型随后开始流式回复：历史 + 新回复都应可见
   ctrl.streamText('好的，正在读取');
-  await wait(30);
-  await frame.flush();
-  out = frame.frame();
-  assert.ok(out.includes('帮我读一下 src/index.ts'), '流式期间用户消息仍在');
-  assert.ok(out.includes('好的，正在读取'), '模型回复渲染');
+  const out2 = await waitForFrame(frame, '好的，正在读取', '模型回复渲染');
+  assert.ok(out2.includes('帮我读一下 src/index.ts'), '流式期间用户消息仍在');
+  assert.ok(out2.includes('好的，正在读取'), '模型回复渲染');
   ctrl.finishStream();
   await frame.cleanup();
 });

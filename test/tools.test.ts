@@ -187,9 +187,22 @@ test('globstar **/ 匹配零个目录段：**/*.ts 命中根级文件（回归�
 });
 
 test('grep_search 返回 path:行号:内容 且命中正确行', async () => {
-  const out = await run('grep_search', { pattern: 'value = 0', path: dir });
-  assert.ok(out.startsWith('a.txt:2:'), `实际输出：${out}`);
-  assert.ok(!out.includes('junk.ts'), 'node_modules 不应被搜到');
+  // 用独立目录而不是共享的 dir：dir 上其他用例会写入同样含 `value = 0` 的文件
+  // （如 edit_file 的 dup.txt），而 grep_search 的遍历顺序取决于 readdir 的返回顺序，
+  // 不同文件系统不一致（Linux 上 dup.txt 可能排在 a.txt 前）→ 断言首行会随机失败。
+  const g = await mkdtemp(join(tmpdir(), 'b-code-grep-'));
+  try {
+    await writeFile(join(g, 'a.txt'), 'line one\nvalue = 0\nline three\n');
+    await mkdir(join(g, 'node_modules'));
+    await writeFile(join(g, 'node_modules', 'junk.ts'), 'value = 0\n');
+
+    const out = await run('grep_search', { pattern: 'value = 0', path: g });
+    // 顺序仍不保证，但这里只有一个命中文件，精确断言 path:行号:内容 格式
+    assert.equal(out, 'a.txt:2: value = 0', `实际输出：${out}`);
+    assert.ok(!out.includes('junk.ts'), 'node_modules 不应被搜到');
+  } finally {
+    await rm(g, { recursive: true, force: true });
+  }
 });
 
 test('grep_search 非法正则 → 报错而非崩溃', async () => {
