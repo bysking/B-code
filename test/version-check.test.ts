@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { compareVersions, localVersion, PACKAGE_NAME } from '../src/version-check.js';
 

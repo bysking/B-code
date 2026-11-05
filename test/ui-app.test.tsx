@@ -1,17 +1,18 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import React from 'react';
-import { render } from 'ink-testing-library';
+import { renderOtui } from './helpers/otui-test.js';
 import { App } from '../src/ui/app.js';
 import { AppController } from '../src/ui/controller.js';
 import type { ClipboardImage } from '../src/utils/clipboard.js';
 
-function renderApp(
+async function renderApp(
   ctrl: AppController,
   onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void = () => {},
   onExit: () => void = () => {},
 ) {
-  const frame = render(
+  // 30 行高：接近真实终端，也让"内容超屏"的场景可复现
+  const frame = await renderOtui(
     React.createElement(App, {
       ctrl,
       onSubmit,
@@ -20,6 +21,7 @@ function renderApp(
       onSetMode: () => {},
       initialOutput: undefined,
     }),
+    { width: 100, height: 30 },
   );
   return frame;
 }
@@ -28,8 +30,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 剥离 ANSI 色码：FORCE_COLOR 环境下渲染输出带颜色，断言只看纯文本 */
 const stripAnsi = (out: string): string => out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-const frameText = (frame: { lastFrame: () => string | undefined }): string =>
-  stripAnsi(frame.lastFrame() ?? '');
+const frameText = (frame: { frame: () => string }): string => frame.frame();
 
 /**
  * 等待 frame 渲染出包含 needle 的内容。
@@ -40,7 +41,7 @@ const frameText = (frame: { lastFrame: () => string | undefined }): string =>
  * 40ms 足够覆盖一次渲染提交，又给输入事件留出处理窗口。
  */
 async function waitForFrame(
-  frame: { lastFrame: () => string | undefined },
+  frame: { frame: () => string; flush: () => Promise<void> },
   needle: string,
   label: string,
   timeoutMs = 3000,
@@ -54,6 +55,7 @@ async function waitForFrame(
       throw new Error(`waitForFrame 超时（${label}）：\n……${out.slice(-900)}`);
     }
     await wait(40);
+    await frame.flush();
   }
 }
 
@@ -65,145 +67,159 @@ async function waitForFrame(
  * 例如 ↓ 后紧接 Enter 会变成"↓ 没生效，Enter 提交了默认项"。
  * 取 50ms：足够覆盖一次提交，又不至于让整个套件变慢。
  */
-const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
-  frame.stdin.write(keys);
+const press = async (frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> }, keys: string) => {
+  await frame.press(keys);
   await wait(50);
+  await frame.flush();
 };
 
 test('渲染：用户消息 + assistant markdown 流式文本', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.pushUser('你好');
   ctrl.streamText('收到 **加粗** 与 `code`');
   await wait(30);
-  const out = frame.lastFrame() ?? '';
+  await frame.flush();
+  const out = frame.frame();
   assert.ok(out.includes('你好'), '用户消息渲染');
   assert.ok(out.includes('加粗'), 'bold 文案渲染（样式由 ink 处理，文本在）');
   assert.ok(out.includes('code'));
   ctrl.finishStream();
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：工具调用块出现且标记完成', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.streamText('');
   ctrl.planTools([{ id: 't1', name: 'read_file', input: { file_path: 'x.ts' } }]);
   ctrl.toolStart('t1', 'read_file', { file_path: 'x.ts' }); // 首个工具开始 → 整批落地展示
   await wait(30);
-  assert.ok((frame.lastFrame() ?? '').includes('read_file'));
+  await frame.flush();
+  assert.ok((frame.frame()).includes('read_file'));
   ctrl.toolEnd('t1');
   await wait(30);
-  assert.ok((frame.lastFrame() ?? '').includes('read_file'));
-  frame.cleanup();
+  await frame.flush();
+  assert.ok((frame.frame()).includes('read_file'));
+  await frame.cleanup();
 });
 
 test('渲染：底部固定任务面板展示标题、三态与 loading，随事件推进', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.planTools([
     { id: 'a', name: 'read_file', input: { file_path: 'src/a.ts' } },
     { id: 'b', name: 'read_file', input: { file_path: 'src/b.ts' } },
   ]);
   await wait(30);
-  let out = frame.lastFrame() ?? '';
+  await frame.flush();
+  let out = frame.frame();
   assert.ok(out.includes('正在读取 2 个文件'), 'loading 态标题');
   assert.ok(out.includes('待读取'), 'queued → 待读取');
   assert.ok(out.includes('src/a.ts'), '子项标签（文件路径）');
 
   ctrl.toolStart('a', 'read_file', { file_path: 'src/a.ts' });
   await wait(30);
-  out = frame.lastFrame() ?? '';
+  await frame.flush();
+  out = frame.frame();
   assert.ok(out.includes('读取中'), 'running → 读取中');
 
   ctrl.toolEnd('a');
   ctrl.toolStart('b', 'read_file', { file_path: 'src/b.ts' });
   ctrl.toolEnd('b');
   await wait(30);
-  out = frame.lastFrame() ?? '';
+  await frame.flush();
+  out = frame.frame();
   assert.ok(!out.includes('正在读取 2 个文件'), '全部完成 → 面板消失');
   assert.ok(!out.includes('读取中'), '面板消失不再展示状态');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：busy 行展示 thinking 文案', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.setBusy('thinking…');
   await wait(30);
-  assert.ok((frame.lastFrame() ?? '').includes('thinking…'));
+  await frame.flush();
+  assert.ok((frame.frame()).includes('thinking…'));
   ctrl.setBusy(null);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：busy 状态行展示 ✽ 前缀、耗时、token 与 thinking 标签', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.setBusy('thinking…');
   ctrl.setBusyThinking(true);
   ctrl.setBusyTokens(1234);
   await wait(30);
-  const out = frame.lastFrame() ?? '';
+  await frame.flush();
+  const out = frame.frame();
   // elapsed 由挂载时刻决定（跨秒边界时为 1s），断言形态而非精确秒数
   assert.match(out, /✽ thinking… \(\d+s · ↓ 1\.2k tokens · thinking\)/, '完整状态行');
   ctrl.setBusy(null);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：模型调用完成后显示真实用量元信息行', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.pushUser('hi');
   ctrl.streamText('done');
   // 生产顺序：usage 事件先于 stream_end（agent.ts），用量行须在 finishStream 前回填
   ctrl.setTurnUsage({ input_tokens: 1000, output_tokens: 200 }, 3400);
   ctrl.finishStream();
   await wait(30);
-  const out = frame.lastFrame() ?? '';
+  await frame.flush();
+  const out = frame.frame();
   assert.ok(out.includes('(⏱ 3s · ↓ 1k · ↑ 200 tokens)'), '真实用量行（耗时 3s，整千去 .0）');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：用户消息单独 push 后立刻展示（模型回答前不丢失）', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   // 真实时序：提交后模型尚未返回（甚至 busy thinking 中），期间只有 user turn 一次渲染
   ctrl.setBusy('thinking…');
   ctrl.pushUser('帮我读一下 src/index.ts');
   await wait(30);
-  let out = frame.lastFrame() ?? '';
+  await frame.flush();
+  let out = frame.frame();
   assert.ok(out.includes('帮我读一下 src/index.ts'), '模型回答前用户消息已展示');
 
   // 模型随后开始流式回复：历史 + 新回复都应可见
   ctrl.streamText('好的，正在读取');
   await wait(30);
-  out = frame.lastFrame() ?? '';
+  await frame.flush();
+  out = frame.frame();
   assert.ok(out.includes('帮我读一下 src/index.ts'), '流式期间用户消息仍在');
   assert.ok(out.includes('好的，正在读取'), '模型回复渲染');
   ctrl.finishStream();
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：完整一轮结束后再输入，新一轮用户消息仍展示', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.pushUser('第一轮');
   ctrl.streamText('回复一');
   ctrl.setTurnUsage({ input_tokens: 10, output_tokens: 20 }, 100);
   ctrl.finishStream();
   await wait(30);
+  await frame.flush();
   ctrl.pushUser('第二轮');
   await wait(30);
-  const out = frame.lastFrame() ?? '';
+  await frame.flush();
+  const out = frame.frame();
   assert.ok(out.includes('第一轮'), '上一轮用户消息保留');
   assert.ok(out.includes('第二轮'), '新一轮用户消息展示');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：斜杠菜单打开显示候选', async () => {
   const ctrl = new AppController();
   const submitted: (string | { text: string; images?: ClipboardImage[] })[] = [];
-  const frame = renderApp(ctrl, (t) => submitted.push(t));
+  const frame = await renderApp(ctrl, (t) => submitted.push(t));
   ctrl.setSlashItems([
     ...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS,
     { name: 'commit', description: 'git commit' },
@@ -213,23 +229,23 @@ test('渲染：斜杠菜单打开显示候选', async () => {
   // 等菜单真正渲染出来：菜单会先用估算高度渲染、再用 useBoxMetrics 实测收敛一次，
   // 固定 wait(30) 在串行跑全套时可能读到收敛前的帧。
   const out = await waitForFrame(frame, '/clear', '菜单渲染');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：ctrl.pushOutput 的固定输出行必须真实渲染（曾被第二个 <Static> 吞掉）', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   // ink 7 的 root.staticNode 是单指针：挂两个 <Static> 时后挂载的 MessageList 会覆盖
   // app 层的输出行 <Static>，且 live 区会跳过所有 static 节点 → pushOutput 内容凭空消失。
   // 修复后输出行与消息流共用同一个 <Static>，此处断言它确实渲染出来。
   ctrl.pushOutput('(mode → plan)');
   await waitForFrame(frame, '(mode → plan)', 'pushOutput 渲染');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：pushOutput 输出行与消息流按时序交织（不挤在最前/最后）', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.pushUser('第一条');
   ctrl.streamText('回复一');
   ctrl.finishStream();
@@ -238,50 +254,56 @@ test('回归：pushOutput 输出行与消息流按时序交织（不挤在最前
   ctrl.streamText('回复二');
   ctrl.finishStream();
   await waitForFrame(frame, '回复二', '第二轮渲染');
-  const out = stripAnsi(frame.lastFrame() ?? '');
+  const out = stripAnsi(frame.frame());
   const iFirst = out.indexOf('第一条');
   const iMarker = out.indexOf('(middle marker)');
   const iSecond = out.indexOf('第二条');
   assert.ok(iFirst >= 0 && iMarker >= 0 && iSecond >= 0, '三者都渲染');
   assert.ok(iFirst < iMarker && iMarker < iSecond, '输出行落在它发生的那一刻（两条消息之间）');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：/技能 参数 回车必须提交，且参数随命令一起带上', async () => {
   const ctrl = new AppController();
   const submitted: (string | { text: string; images?: ClipboardImage[] })[] = [];
-  const frame = renderApp(ctrl, (t) => submitted.push(t));
+  const frame = await renderApp(ctrl, (t) => submitted.push(t));
   ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
   await wait(30);
+  await frame.flush();
 
   // 无匹配候选：Enter 曾被 SlashMenu 静默吞掉（picked 为 undefined 就什么都不做），
   // 表现就是"回车后界面毫无变化"。现在应原样提交，交给 cli 决定怎么处理。
   await press(frame, '/red-line-check 分支a 分支b');
   await wait(30);
+  await frame.flush();
   await press(frame, '\r');
   await wait(50);
+  await frame.flush();
   assert.deepEqual(submitted, ['/red-line-check 分支a 分支b'], '无匹配候选也不吞键');
 
   // 有匹配候选：选中时参数不能丢（曾提交成 "/model"，参数整段消失）
   submitted.length = 0;
   await press(frame, '/model claude-opus-5-5');
   await wait(30);
+  await frame.flush();
   await press(frame, '\r');
   await wait(50);
+  await frame.flush();
   assert.deepEqual(submitted, ['/model claude-opus-5-5'], '选中候选时保留参数');
 
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.setSlashItems([
     ...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS,
     { name: 'zzz-last', description: '最后一项' },
   ]);
   ctrl.openSlash('');
   await wait(120);
+  await frame.flush();
   const init = frameText(frame);
   assert.ok(init.includes('↑↓ 滚动'), '显示滚动位置提示');
   assert.ok(!init.includes('zzz-last'), '初始窗口看不到最后一项');
@@ -289,70 +311,76 @@ test('渲染：斜杠菜单超出可视上限时滚动跟随选中项', async ()
   // ↑ 环绕到末尾 → 最后一项滚入窗口。
   // 用固定等待而不是轮询：菜单打开时 App 把 ↑ 让给菜单，按键处理 + 渲染提交
   // 需要一次完整往返，密集轮询反而会在提交前反复读到旧帧。
-  frame.stdin.write('\x1b[A');
+  await frame.press('\x1b[A');
   await wait(150);
+  await frame.flush();
   const out = frameText(frame);
   assert.ok(out.includes('zzz-last'), '滚动后选中项可见');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：askText 文本输入提问渲染，交付后关闭', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   const p = ctrl.askText('请输入分支名:');
   await wait(30);
-  const open = frame.lastFrame() ?? '';
+  await frame.flush();
+  const open = frame.frame();
   assert.ok(open.includes('请输入分支名:'), '问题渲染');
   ctrl.resolveAskText('feature/x');
   assert.equal(await p, 'feature/x');
   assert.equal(ctrl.askTextState, null);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('渲染：Ctrl+O 面板打开展示工具真实输出，关闭后消失', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   ctrl.streamText('');
   ctrl.planTools([{ id: 't1', name: 'read_file', input: { file_path: 'x.ts' } }]);
   ctrl.toolStart('t1', 'read_file', { file_path: 'x.ts' });
   ctrl.toolEnd('t1', 'export const x = 1;\nline2\nline3\n');
   await wait(30);
+  await frame.flush();
   // 未打开面板时不显示输出
-  assert.ok(!(frame.lastFrame() ?? '').includes('line2'));
+  assert.ok(!(frame.frame()).includes('line2'));
 
   ctrl.toggleOutputPanel(true);
   await wait(30);
-  const open = frame.lastFrame() ?? '';
+  await frame.flush();
+  const open = frame.frame();
   assert.ok(open.includes('工具输出'), '面板标题');
   assert.ok(open.includes('line2'), '真实输出渲染');
   assert.ok(open.includes('read_file'));
 
   ctrl.toggleOutputPanel(false);
   await wait(30);
-  assert.ok(!(frame.lastFrame() ?? '').includes('line2'), '关闭后回主视图');
-  frame.cleanup();
+  await frame.flush();
+  assert.ok(!(frame.frame()).includes('line2'), '关闭后回主视图');
+  await frame.cleanup();
 });
 
 test('渲染：权限确认（ask）显示选项', async () => {
   const ctrl = new AppController();
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   const p = ctrl.ask('Allow write_file?', [
     { label: 'No', value: 'no' },
     { label: 'Yes', value: 'yes' },
   ]);
   await wait(30);
-  const out = frame.lastFrame() ?? '';
+  await frame.flush();
+  const out = frame.frame();
   assert.ok(out.includes('Allow write_file?'), '问题渲染');
   assert.ok(out.includes('Yes') && out.includes('No'), '选项渲染');
   ctrl.resolveAsk('no');
   assert.equal(await p, 'no');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：向导打开时 Esc 不触发 onInterrupt（提交后模型才能继续）', async () => {
   const ctrl = new AppController();
   let interrupted = 0;
-  const frame = render(
+  const frame = await renderOtui(
     React.createElement(App, {
       ctrl,
       onSubmit: () => {},
@@ -368,19 +396,21 @@ test('回归：向导打开时 Esc 不触发 onInterrupt（提交后模型才能
     { title: '方案', question: '用哪个?', options: [{ label: 'React', value: 'react' }] },
   ]);
   await wait(30);
+  await frame.flush();
   // 向导未处于输入态时按 Esc：由 Wizard 自行取消，不应再软中断 agent
-  frame.stdin.write('\x1b');
+  await frame.press('\x1b');
   await wait(30);
+  await frame.flush();
   assert.equal(interrupted, 0, '向导打开时 Esc 不应触发 agent 软中断');
   assert.equal(await p, '__cancel__', 'Esc 由 Wizard 交付取消');
   assert.equal(ctrl.askWizardState, null);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可取消向导', async () => {
   const ctrl = new AppController();
   let interrupted = 0;
-  const frame = render(
+  const frame = await renderOtui(
     React.createElement(App, {
       ctrl,
       onSubmit: () => {},
@@ -413,7 +443,7 @@ test('回归：向导输入态按 Esc 返回选项不中断 agent，Ctrl+C 可�
   await press(frame, '\x03');
   assert.equal(ctrl.askWizardState, null, 'Ctrl+C 应取消向导');
   assert.equal(await p, '__cancel__');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 底栏压缩回归 ────────────────────────────────────────────────
@@ -430,8 +460,9 @@ test('回归：历史撑满视口后，斜杠菜单第一项仍可见且选中�
   // 撑满视口（模拟 /help 打出大量输出）
   for (let i = 0; i < 40; i++) ctrl.pushOutput(`帮助行 ${i}`);
 
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(50);
+  await frame.flush();
   ctrl.openSlash('');
   await waitForFrame(frame, '/clear', '菜单渲染');
 
@@ -445,14 +476,15 @@ test('回归：历史撑满视口后，斜杠菜单第一项仍可见且选中�
     const cmdCount = (line.match(/\/[a-z]+/g) ?? []).length;
     assert.ok(cmdCount <= 2, `单行不应混入多个命令（实际 ${cmdCount} 个）: ${line}`);
   }
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：斜杠菜单可见条数随终端高度自适应（不硬编码 12）', async () => {
   const ctrl = new AppController();
   ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(50);
+  await frame.flush();
   ctrl.openSlash('');
   await waitForFrame(frame, '滚动', '菜单滚动提示');
 
@@ -460,7 +492,7 @@ test('回归：斜杠菜单可见条数随终端高度自适应（不硬编码 1
   // 且必须给出滚动位置提示，否则用户不知道还有更多
   const out = frameText(frame);
   assert.match(out, /… \d+\/15/, '有滚动位置提示');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 命令执行后菜单必须收起 ──────────────────────────────────────
@@ -471,8 +503,9 @@ test('回归：斜杠菜单可见条数随终端高度自适应（不硬编码 1
 test('回归：打开能力面板时斜杠菜单自动收起，输入框清空', async () => {
   const ctrl = new AppController();
   ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(60);
+  await frame.flush();
   ctrl.openSlash('skills');
   await waitForFrame(frame, '/skills', '菜单渲染');
 
@@ -483,14 +516,15 @@ test('回归：打开能力面板时斜杠菜单自动收起，输入框清空',
   assert.equal(ctrl.slashOpen, false, '斜杠菜单已收起');
   const out = frameText(frame);
   assert.ok(!/❯\s*\/skills/.test(out), '不再残留斜杠候选');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：/mcp 面板同样不残留斜杠候选', async () => {
   const ctrl = new AppController();
   ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(60);
+  await frame.flush();
   ctrl.openSlash('mcp');
   await waitForFrame(frame, '/mcp', '菜单渲染');
 
@@ -499,7 +533,7 @@ test('回归：/mcp 面板同样不残留斜杠候选', async () => {
 
   assert.equal(ctrl.slashOpen, false);
   assert.ok(!/❯\s*\/mcp/.test(frameText(frame)), '不残留斜杠候选');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── Tab 补全路径的菜单收起 ──────────────────────────────────────
@@ -513,12 +547,13 @@ test('回归：Tab 补全（带尾随空格）+ Enter 后菜单收起，不留 /
   const ctrl = new AppController();
   ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
   const submitted: string[] = [];
-  const frame = renderApp(ctrl, (t) => {
+  const frame = await renderApp(ctrl, (t) => {
     const s = typeof t === 'string' ? t.trim() : '';
     submitted.push(s);
     if (s === '/mcp') ctrl.openCapability('mcp', [{ name: 'github', enabled: true, detail: '12 工具' }]);
   });
   await wait(60);
+  await frame.flush();
 
   // 逐字输入 /mc → Tab 补全成 "/mcp "
   for (const ch of '/mc') {
@@ -527,6 +562,7 @@ test('回归：Tab 补全（带尾随空格）+ Enter 后菜单收起，不留 /
   await waitForFrame(frame, '/mcp', '候选出现');
   await press(frame, '\t');
   await wait(120);
+  await frame.flush();
 
   await press(frame, '\r');
   await waitForFrame(frame, 'MCP Server', '面板打开');
@@ -535,26 +571,28 @@ test('回归：Tab 补全（带尾随空格）+ Enter 后菜单收起，不留 /
   assert.equal(ctrl.slashOpen, false, '斜杠菜单已收起');
   const out = frameText(frame);
   assert.ok(!/❯\s*\/mcp/.test(out), '不残留斜杠候选');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('回归：输入框不接收控制字符（\\r / \\t / ESC 不落进草稿）', async () => {
   const ctrl = new AppController();
   ctrl.setSlashItems([...(await import('../src/ui/slash.js')).BUILTIN_SLASH_ITEMS]);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(60);
+  await frame.flush();
 
   await press(frame, 'abc');
   await waitForFrame(frame, 'abc', '文本输入');
   // 菜单关闭状态下按 Esc（不应插入任何字符）
   await press(frame, '\x1b');
   await wait(60);
+  await frame.flush();
   const out = frameText(frame);
   // 输入行仍应只有 abc
   const line = out.split('\n').find((l) => l.trimStart().startsWith('>'));
   assert.ok(line && line.includes('abc'), '文本保留');
   assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(line ?? ''), '没有控制字符混入');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 鼠标滚轮 / 触摸板 ──────────────────────────────────────────
@@ -568,47 +606,56 @@ test('回归：输入框不接收控制字符（\\r / \\t / ESC 不落进草稿�
 test('滚轮/触摸板：密集事件按位移总和精确累积，不丢不重', async () => {
   const ctrl = new AppController();
   for (let i = 1; i <= 100; i++) ctrl.pushUser(`问 ${i}`);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(120);
+  await frame.flush();
   assert.equal(ctrl.scrollFromBottom, 0, '初始贴底');
 
   // 模拟惯性滚动：5 个事件（每格 3 行）
   for (let i = 0; i < 5; i++) {
     ctrl.emitMouseWheel(3);
     await wait(25);
+    await frame.flush();
   }
   await wait(150);
+  await frame.flush();
   assert.equal(ctrl.scrollFromBottom, 15, '5 事件应累计 15 行');
 
   // 再来 10 个 → 累计 45
   for (let i = 0; i < 10; i++) {
     ctrl.emitMouseWheel(3);
     await wait(25);
+    await frame.flush();
   }
   await wait(150);
+  await frame.flush();
   assert.equal(ctrl.scrollFromBottom, 45, '再 10 事件应累计到 45 行');
 
   // 反向 15 个 → 归零并恢复跟随
   for (let i = 0; i < 15; i++) {
     ctrl.emitMouseWheel(-3);
     await wait(25);
+    await frame.flush();
   }
   await wait(150);
+  await frame.flush();
   assert.equal(ctrl.scrollFromBottom, 0, '反向应精确回到贴底');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('滚轮：同步连发（同一 tick 内）也能全部累加', async () => {
   const ctrl = new AppController();
   for (let i = 1; i <= 200; i++) ctrl.pushUser(`问 ${i}`);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(120);
+  await frame.flush();
 
   // 一次性连发 10 个（不等渲染，模拟事件队列瞬时涌入）
   for (let i = 0; i < 10; i++) ctrl.emitMouseWheel(3);
   await wait(200);
+  await frame.flush();
   assert.equal(ctrl.scrollFromBottom, 30, '同一 tick 的 10 个事件应合并成 30 行位移');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 滚动性能 ────────────────────────────────────────────────────
@@ -624,8 +671,9 @@ test('滚动性能：大量历史下单次滚动响应低于一帧（16ms）', a
     ctrl.streamText(`## 分析\n\n**加粗** \`code\`\n- 一\n- 二\n`);
     ctrl.finishStream();
   }
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(300);
+  await frame.flush();
 
   const latencies: number[] = [];
   for (let i = 0; i < 8; i++) {
@@ -638,14 +686,16 @@ test('滚动性能：大量历史下单次滚动响应低于一帧（16ms）', a
         break;
       }
       await wait(1);
+      await frame.flush();
     }
     await wait(30);
+    await frame.flush();
   }
   latencies.sort((a, b) => a - b);
   const median = latencies[Math.floor(latencies.length / 2)] ?? 999;
   // 放宽到 40ms：CI 机器性能波动大，但能拦住"退回到 50-60ms"的回归
   assert.ok(median < 40, `单次滚动中位延迟应 < 40ms（实际 ${median.toFixed(1)}ms）`);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('虚拟滚动：只渲染视口附近的条目，远处内容用占位撑高', async () => {
@@ -659,26 +709,31 @@ test('虚拟滚动：只渲染视口附近的条目，远处内容用占位撑�
   }));
 
   // 不虚拟化：全部渲染
-  const full = render(
+  // 画布给足够高：200 条 turn 全部渲染时远超默认 40 行，
+  // 画布太矮会把顶部内容裁掉，断言"含第一条"就失败（不是代码问题，是视口太小）
+  const full = await renderOtui(
     React.createElement(Transcript, { turns, output: [], scrollTop: undefined, viewportRows: undefined }),
+    { width: 80, height: 420 },
   );
   await wait(120);
+  await full.flush();
   const fullText = frameText(full);
   assert.ok(fullText.includes('问题 0'), '全量渲染含第一条');
   assert.ok(fullText.includes('问题 199'), '全量渲染含最后一条');
-  full.cleanup();
+  await full.cleanup();
 
   // 虚拟化：只渲染视口附近。
   // 注意 scrollTop 要落在内容中部——每条约 2 行、200 条共 400 行，
   // 取 200 行处（正中间）才能同时验证"顶部和底部都不渲染"。
-  const virt = render(
+  const virt = await renderOtui(
     React.createElement(Transcript, { turns, output: [], scrollTop: 200, viewportRows: 30, cols: 80 }),
   );
   await wait(120);
+  await virt.flush();
   const virtText = frameText(virt);
   assert.ok(!virtText.includes('问题 0'), '远处（顶部）内容不渲染');
   assert.ok(!virtText.includes('问题 199'), '远处（底部）内容不渲染');
-  virt.cleanup();
+  await virt.cleanup();
 
   assert.ok(estimateItemHeight({ id: 1, kind: 'turn', turn: turns[0]! }, 80) > 0, '高度估算为正');
 });
@@ -697,12 +752,14 @@ test('回归：狂滚上滚后 fromBottom 收敛到真实上限，下滚立即�
     ctrl.streamText(`回答 ${i}\n`);
     ctrl.finishStream();
   }
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(300);
+  await frame.flush();
 
   // 疯狂上滚：远超内容高度
   for (let k = 0; k < 200; k++) ctrl.emitMouseWheel(3);
   await wait(400);
+  await frame.flush();
 
   const atTop = ctrl.scrollFromBottom;
   assert.ok(atTop > 0, '确实滚上去了');
@@ -711,12 +768,14 @@ test('回归：狂滚上滚后 fromBottom 收敛到真实上限，下滚立即�
   for (let k = 0; k < 3; k++) {
     ctrl.emitMouseWheel(-3);
     await wait(50);
+    await frame.flush();
   }
   await wait(200);
+  await frame.flush();
   const after = ctrl.scrollFromBottom;
   assert.ok(
     atTop - after >= 5,
     `下滚应立即可见（从 ${atTop} 到 ${after}，减少 ${atTop - after} 行，期望 ≥5）`,
   );
-  frame.cleanup();
+  await frame.cleanup();
 });

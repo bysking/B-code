@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import React from 'react';
-import { render } from 'ink-testing-library';
+import { renderOtui } from './helpers/otui-test.js';
 import { App } from '../src/ui/app.js';
 import { AppController } from '../src/ui/controller.js';
 import { buildWizardResult, wizardNavTotal, wizardProgress } from '../src/ui/wizard.js';
@@ -12,15 +12,14 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 剥离 ANSI 色码：FORCE_COLOR 环境下渲染输出带颜色，断言只看纯文本 */
 const stripAnsi = (out: string): string => out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-const frameText = (frame: { lastFrame: () => string | undefined }): string =>
-  stripAnsi(frame.lastFrame() ?? '');
+const frameText = (frame: { frame: () => string }): string => frame.frame();
 
 /**
  * 等待 frame 渲染出包含 needle 的内容（轮询代替固定睡眠：
  * ink 渲染提交在微任务/帧边界后，固定 wait 在高负载下可能读到上一帧）
  */
 async function waitForFrame(
-  frame: { lastFrame: () => string | undefined },
+  frame: { frame: () => string; flush: () => Promise<void> },
   needle: string,
   label: string,
   timeoutMs = 3000,
@@ -31,13 +30,15 @@ async function waitForFrame(
     if (out.includes(needle)) return out;
     if (Date.now() > deadline) throw new Error(`waitForFrame 超时（${label}）：\n${out}`);
     await wait(40);
+    await frame.flush();
   }
 }
 
 /** 写一段按键序列后等 ink 处理完（stdin 是同步 emit，等一帧让 React 提交渲染） */
-const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
-  frame.stdin.write(keys);
+const press = async (frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> }, keys: string) => {
+  await frame.press(keys);
   await wait(50);
+  await frame.flush();
 };
 
 function createApp(ctrl: AppController) {
@@ -52,17 +53,17 @@ function createApp(ctrl: AppController) {
 }
 
 // ── 纯函数 ──────────────────────────────────────────────────
-test('wizardProgress：完成☒/当前●/待做○ + Submit', () => {
+test('wizardProgress：完成☒/当前●/待做○ + Submit', async () => {
   assert.equal(wizardProgress(0, 3), '← ●1 ○2 ○3 ✔Submit→', '起始步骤为当前');
   assert.equal(wizardProgress(1, 1), '← ☒1 ✔Submit→', '单步完成');
 });
 
-test('wizardNavTotal：导航范围含 1 个特殊项（自定义与 Chat 合一）', () => {
+test('wizardNavTotal：导航范围含 1 个特殊项（自定义与 Chat 合一）', async () => {
   assert.equal(wizardNavTotal(2), 3, '2 选项 + 自定义');
   assert.equal(wizardNavTotal(0), 1, '无选项时也可达特殊项');
 });
 
-test('buildWizardResult：按步汇总 + 未选标注', () => {
+test('buildWizardResult：按步汇总 + 未选标注', async () => {
   const steps = [
     { title: '框架', question: 'q1', options: [{ label: 'Vue', value: 'vue' }] },
     { title: '构建', question: 'q2', options: [] },
@@ -71,7 +72,7 @@ test('buildWizardResult：按步汇总 + 未选标注', () => {
   assert.equal(out, '框架: Vue\n构建: （未选）');
 });
 
-test('buildWizardResult：多选步数组逗号拼接', () => {
+test('buildWizardResult：多选步数组逗号拼接', async () => {
   const steps = [
     {
       title: '框架',
@@ -90,7 +91,7 @@ test('buildWizardResult：多选步数组逗号拼接', () => {
 // ── 渲染 ────────────────────────────────────────────────────
 test('渲染：Wizard 进度条 + 当前步选项 + 自定义特殊项；Review 汇总 Submit/Cancel', async () => {
   const ctrl = new AppController();
-  const frame = render(createApp(ctrl));
+  const frame = await renderOtui(createApp(ctrl));
   const p = ctrl.askWizard('搭建新项目?', [
     {
       title: '框架',
@@ -110,7 +111,8 @@ test('渲染：Wizard 进度条 + 当前步选项 + 自定义特殊项；Review 
     },
   ]);
   await wait(50);
-  const out = frame.lastFrame() ?? '';
+  await frame.flush();
+  const out = frame.frame();
   assert.ok(out.includes('✔Submit→'), '进度条含 Submit');
   assert.ok(out.includes('选择前端框架?'), '第一步问题');
   assert.ok(out.includes('我想自己提供一个不在选项里面的答案'), '自定义入口');
@@ -121,12 +123,12 @@ test('渲染：Wizard 进度条 + 当前步选项 + 自定义特殊项；Review 
   ctrl.resolveAskWizard('框架: Vue\n构建: Webpack');
   assert.equal(await p, '框架: Vue\n构建: Webpack');
   assert.equal(ctrl.askWizardState, null);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('交互：选中自定义 → 行内输入 → 回车作为该步答案 → Review 提交', async () => {
   const ctrl = new AppController();
-  const frame = render(createApp(ctrl));
+  const frame = await renderOtui(createApp(ctrl));
   const p = ctrl.askWizard('选择?', [
     {
       title: '方案',
@@ -158,13 +160,13 @@ test('交互：选中自定义 → 行内输入 → 回车作为该步答案 →
 
   assert.equal(await p, '方案: 我自己的方案');
   assert.equal(ctrl.askWizardState, null);
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 分步多选 ────────────────────────────────────────────────
 test('分步多选：Enter/空格勾选多个 → 完成本步 → Review 提交（逗号拼接）', async () => {
   const ctrl = new AppController();
-  const frame = render(createApp(ctrl));
+  const frame = await renderOtui(createApp(ctrl));
   const p = ctrl.askWizard(
     '搭建新项目?',
     [
@@ -181,33 +183,33 @@ test('分步多选：Enter/空格勾选多个 → 完成本步 → Review 提交
   );
   // 等选中项出现 = useInput 监听器已挂（只等标题会抢在监听器之前按键）
   await waitForFrame(frame, '❯ ○ 1. Vue', '向导就绪');
-  const out = frame.lastFrame() ?? '';
+  const out = frame.frame();
   assert.ok(out.includes('○ 1. Vue'), '未选显示 ○');
   assert.ok(out.includes('✔ 完成并查看汇总'), '单步时特殊项为完成汇总');
   assert.ok(!out.includes('我想自己提供一个不在选项里面的答案'), '多选模式不出现自定义入口');
 
   // 每一步都等"渲染结果真的变了"再按下一个键。
   // 固定 wait 在多文件同时跑（CPU 竞争）时会丢键——表现为"空格没勾上，后面全错位"。
-  frame.stdin.write('\r');
+  await frame.press('\r');
   await waitForFrame(frame, '✓ 1. Vue', 'Enter 勾选 Vue');
   // ↓ 到 React，空格勾选
-  frame.stdin.write('\x1b[B');
+  await frame.press('\x1b[B');
   await waitForFrame(frame, '❯ ○ 2. React', '↓ 移到 React');
-  frame.stdin.write(' ');
+  await frame.press(' ');
   await waitForFrame(frame, '✓ 2. React', '空格勾选 React');
   // ↓ 到特殊项（完成本步）→ Enter 进 Review → Enter 提交
-  frame.stdin.write('\x1b[B');
+  await frame.press('\x1b[B');
   await waitForFrame(frame, '❯ 3. ✔ 完成并查看汇总', '↓ 移到完成项');
-  frame.stdin.write('\r');
+  await frame.press('\r');
   await waitForFrame(frame, 'Review your answers', '进入 Review');
-  frame.stdin.write('\r');
+  await frame.press('\r');
   assert.equal(await p, '框架: Vue, React');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('分步多选：再次 Enter 取消勾选，空选走 Review 标未选', async () => {
   const ctrl = new AppController();
-  const frame = render(createApp(ctrl));
+  const frame = await renderOtui(createApp(ctrl));
   const p = ctrl.askWizard(
     '选?',
     [
@@ -223,22 +225,28 @@ test('分步多选：再次 Enter 取消勾选，空选走 Review 标未选', as
     true,
   );
   await wait(50);
+  await frame.flush();
   // 勾选 Vue → 再 Enter 取消
-  frame.stdin.write('\r');
+  await frame.press('\r');
   await wait(50);
-  frame.stdin.write('\r');
+  await frame.flush();
+  await frame.press('\r');
   await wait(50);
-  assert.ok((frame.lastFrame() ?? '').includes('○ 1. Vue'), '再次 Enter 取消勾选');
+  await frame.flush();
+  assert.ok((frame.frame()).includes('○ 1. Vue'), '再次 Enter 取消勾选');
   // 空选直接完成本步 → Review 未选 → 提交
-  frame.stdin.write('[B');
+  await frame.press('[B');
   await wait(50);
-  frame.stdin.write('[B');
+  await frame.flush();
+  await frame.press('[B');
   await wait(50);
-  frame.stdin.write('\r');
+  await frame.flush();
+  await frame.press('\r');
   await wait(50);
-  frame.stdin.write('\r');
+  await frame.flush();
+  await frame.press('\r');
   assert.equal(await p, '框架: （未选）');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 协议回灌 ────────────────────────────────────────────────

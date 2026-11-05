@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { evaluateGoal, classifyAction, renderTranscript } from '../src/autonomy.js';
 import { Agent } from '../src/agent.js';

@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,13 +11,13 @@ import type { ModelInput, ModelOutput } from '../src/backend.js';
 let dir: string;
 let filePath: string;
 
-before(async () => {
+beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'b-code-sub-'));
   filePath = join(dir, 'target.txt');
   await writeFile(filePath, 'subagent sees this');
 });
 
-after(async () => {
+afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 

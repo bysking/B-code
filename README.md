@@ -150,21 +150,34 @@ Bun 运行时已嵌入。
 
 npm 通过 `os`/`cpu` 字段自动只装匹配的平台包，用户只下载自己那份（~75MB）。
 
-### 两套渲染引擎
+### 渲染引擎
 
-| | ink（回退） | OpenTUI（默认） |
-|---|---|---|
-| 运行时 | Node | Bun（已嵌入） |
-| 产物 | `dist/cli.mjs` 1.9MB | `dist/bcode` ~75MB |
-| 滚动 | 应用内视口（手写虚拟滚动） | 原生 `scrollbox` |
-| 鼠标 | 手写 SGR 解析 | 原生 `useRawMouse` |
-| markdown | marked + marked-terminal | 原生组件 |
+基于 [OpenTUI](https://github.com/anomalyco/opentui)（Zig 原生核心）：
 
-业务组件通过 `src/ui/ui/` 适配层访问渲染能力，与具体引擎解耦。
-切换引擎只改适配层的实现，业务代码不动。
+| 能力 | 原生实现 |
+|---|---|
+| 滚动 | `scrollbox`（视口裁剪 + 粘性滚动 + 滚动条） |
+| 鼠标 | `useRawMouse`（滚轮/点击） |
+| Markdown | 原生 `markdown` 组件 |
+| 输入 | 原生 `input` / `textarea` |
+| 布局 | flexbox（Yoga） |
 
-**为什么保留 ink**：OpenTUI 的原生 FFI 只实现了 Bun 绑定（Node 26 实测也不行）。
-开发态用 Node 跑测试时走 ink 更省事；发布版二进制里用 OpenTUI。
+业务组件通过 `src/ui/ui/` 适配层访问渲染能力，**不直接 import `@opentui/*`**
+（有静态门禁测试守住）。适配层收敛了从 ink 迁移过来的语义差异：
+
+- `Box` 默认 `flexDirection: 'row'`（OpenTUI 原生默认是 column）
+- `<Text>` 内嵌 `<Text>` → 自动转成 `<span>`（OpenTUI 的 text 只收字符串）
+- `Ctrl+字母` 的 `input` 返回字母本身（OpenTUI 给的是控制字符码位）
+- 文本属性用整数位掩码（`BOLD=1, DIM=2, ITALIC=4, UNDERLINE=8, INVERSE=32, STRIKE=128`）
+
+### 测试
+
+```bash
+bun test
+```
+
+**必须用 Bun 跑**：OpenTUI 的原生 FFI 只在 Bun 运行时可用（Node 26 实测也不行）。
+测试用 OpenTUI 的 `createTestRenderer`，辅助封装见 `test/helpers/otui-test.ts`。
 
 ### 构建
 

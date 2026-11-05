@@ -114,12 +114,57 @@ function toOtuiText(p: TextProps): Record<string, unknown> {
 
 /* ── 组件 ───────────────────────────────────────────── */
 
+/** ink 的 Box 在未指定 flexDirection 时是 **row**（横向排列）。
+ *
+ * OpenTUI 的 box 默认是 **column**——这个差异会静默改变布局：
+ * 比如 ModeBar 是 `<Box>` 里放三个 `<Text>`，期望横排成一行，
+ * 在 OpenTUI 下会变成三行（模式栏被拆开，视觉上完全错乱）。
+ *
+ * 适配层必须显式补上 ink 的默认值，业务代码才能保持原样。
+ */
 export function Box({ children, ...props }: BoxProps) {
-  return React.createElement('box', toOtuiBox(props) as never, children);
+  const p = { flexDirection: 'row' as const, ...props };
+  return React.createElement('box', toOtuiBox(p) as never, children);
+}
+
+/**
+ * 文本。
+ *
+ * ## 嵌套 Text 的处理
+ *
+ * ink 支持 `<Text>前缀<Text dimColor>高亮</Text></Text>`——外层给基础样式，
+ * 内层覆盖局部。业务代码大量依赖这个（比如工具块的"名称 + 暗淡参数"）。
+ *
+ * OpenTUI 的 `text` **只接受字符串 / TextNode / StyledText**，传 React 元素
+ * 会抛 `TextNodeRenderable only accepts strings...`。
+ * 它要求嵌套用 `<span>` 标签。
+ *
+ * 所以这里做一层转换：把 children 里的 `<Text>` 元素换成 `<span>`
+ * （同样的属性映射），其余原样透传。业务代码不用知道这个差异。
+ */
+function toOtuiChildren(children: React.ReactNode): React.ReactNode {
+  return React.Children.map(children, (child) => {
+    if (!React.isValidElement(child)) return child;
+    // 我们的 Text 组件：转成 span（保持同样的样式映射）
+    if (child.type === Text) {
+      const p = child.props as TextProps;
+      return React.createElement(
+        'span',
+        toOtuiText(p) as never,
+        toOtuiChildren(p.children),
+      );
+    }
+    // 其他元素原样返回（含其 children 不递归——保持可预期行为）
+    return child;
+  });
 }
 
 export function Text({ children, ...props }: TextProps) {
-  return React.createElement('text', toOtuiText(props) as never, children);
+  return React.createElement(
+    'text',
+    toOtuiText(props) as never,
+    toOtuiChildren(children),
+  );
 }
 
 /* ── 按键归一化 ─────────────────────────────────────── */
@@ -155,7 +200,16 @@ function toKeyLike(e: KeyEvent): KeyLike {
  * 才给内容。这里照搬同一语义——业务代码（输入框）依赖"空串 = 功能键"判断。
  */
 function toInput(e: KeyEvent): string {
-  // 只接受单字符且非控制字符；功能键的 sequence 是转义序列，不能当输入
+  // Ctrl/Meta 组合键：ink 的约定是 `input` 返回**字母本身**（Ctrl+C → 'c'）。
+  // 业务代码大量写成 `key.ctrl && input === 'c'`，不这么处理快捷键全都会失灵。
+  //
+  // OpenTUI 的 sequence 是原始控制字符（Ctrl+C = '\x03'），需要按 Ctrl 键位
+  // 映射回字母：\x01-\x1a 对应 a-z。
+  if (e.ctrl) {
+    const code = e.sequence.charCodeAt(0);
+    if (code >= 1 && code <= 26) return String.fromCharCode(code + 96); // 1→a, 3→c
+  }
+  // 其余只接受可打印单字符（功能键的 sequence 是转义序列，不能当输入）
   const seq = e.sequence;
   if (seq.length === 1 && seq >= ' ') return seq;
   return '';

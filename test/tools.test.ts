@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,7 +20,7 @@ const schemas = registry.toolsSchema();
 
 let dir: string;
 
-before(async () => {
+beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'b-code-tools-'));
   await writeFile(join(dir, 'a.txt'), 'line one\nvalue = 0\nline three\n');
   await mkdir(join(dir, 'sub'));
@@ -36,7 +36,7 @@ before(async () => {
   await writeFile(join(dir, '.git', 'config'), '[core]\n');
 });
 
-after(async () => {
+afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 

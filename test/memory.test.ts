@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,14 +11,14 @@ let home: string;
 let cwd1: string;
 let cwd2: string;
 
-before(async () => {
+beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'b-code-mem-'));
   process.env[BASE_PATH_ENV] = home;
   cwd1 = join(home, 'proj-a');
   cwd2 = join(home, 'proj-b');
 });
 
-after(async () => {
+afterAll(async () => {
   if (saved === undefined) delete process.env[BASE_PATH_ENV];
   else process.env[BASE_PATH_ENV] = saved;
   await rm(home, { recursive: true, force: true });

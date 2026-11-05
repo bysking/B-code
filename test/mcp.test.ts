@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -66,10 +66,10 @@ rl.on('line', (line) => {
 let dir: string;
 const savedMcpEnv = process.env[MCP_CONFIG_ENV];
 
-before(async () => {
+beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'b-code-mcp-'));
 });
-after(async () => {
+afterAll(async () => {
   if (savedMcpEnv === undefined) delete process.env[MCP_CONFIG_ENV];
   else process.env[MCP_CONFIG_ENV] = savedMcpEnv;
   await rm(dir, { recursive: true, force: true });

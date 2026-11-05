@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from './ui/index.js';
-import TextInput from 'ink-text-input';
+import { SimpleTextInput } from './input-box.js';
 import type { AskWizardState, WizardStepOption } from './controller.js';
 
 /**
@@ -286,7 +286,7 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
                   {typing ? <Text> </Text> : null}
                 </Text>
                 {typing ? (
-                  <TextInput
+                  <SimpleTextInput
                     value={draft}
                     onChange={setDraft}
                     onSubmit={commitTyped}

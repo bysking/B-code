@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,7 +29,7 @@ function collect(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-test('门禁：业务代码不得直连 ink（必须走适配层）', () => {
+test('门禁：业务代码不得直连 ink（已移除该引擎）', () => {
   const files = collect(UI_DIR).filter((f) => !f.startsWith(ADAPTER_DIR));
   const offenders: string[] = [];
   for (const f of files) {
@@ -41,7 +41,7 @@ test('门禁：业务代码不得直连 ink（必须走适配层）', () => {
   assert.deepEqual(
     offenders,
     [],
-    `以下文件直连了 ink，应改为 import from './ui/index.js'：\n  ${offenders.join('\n  ')}`,
+    `以下文件仍引用已移除的 ink：\n  ${offenders.join('\n  ')}`,
   );
 });
 
@@ -58,7 +58,7 @@ test('门禁：业务代码不得直连未来的其他引擎包', () => {
 });
 
 test('适配层契约：引擎实现导出完整接口', async () => {
-  const { inkEngine } = await import('../src/ui/ui/ink/index.js');
+  const { opentuiEngine } = await import('../src/ui/ui/opentui/index.js');
   const required = [
     'Box',
     'Text',
@@ -69,9 +69,9 @@ test('适配层契约：引擎实现导出完整接口', async () => {
     'mount',
   ] as const;
   for (const key of required) {
-    assert.ok(key in inkEngine, `引擎实现缺少 ${key}`);
+    assert.ok(key in opentuiEngine, `引擎实现缺少 ${key}`);
   }
-  assert.equal(typeof inkEngine.mount, 'function', 'mount 必须是函数');
+  assert.equal(typeof opentuiEngine.mount, 'function', 'mount 必须是函数');
 });
 
 test('适配层是唯一出口：index 导出的能力与契约一致', async () => {

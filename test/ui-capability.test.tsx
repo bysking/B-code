@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import React from 'react';
-import { render } from 'ink-testing-library';
+import { renderOtui } from './helpers/otui-test.js';
 import { App } from '../src/ui/app.js';
 import { AppController, type CapabilityItem, type CapabilityKind } from '../src/ui/controller.js';
 import { capabilityPanelHeight } from '../src/ui/capability-panel.js';
@@ -16,7 +16,7 @@ import { capabilityPanelHeight } from '../src/ui/capability-panel.js';
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (out: string): string => out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
-function renderApp(
+async function renderApp(
   ctrl: AppController,
   hooks: {
     onToggleCapability?: (name: string) => void;
@@ -24,7 +24,7 @@ function renderApp(
     refreshCapability?: () => void;
   } = {},
 ) {
-  return render(
+  return renderOtui(
     React.createElement(App, {
       ctrl,
       onSubmit: () => {},
@@ -36,12 +36,14 @@ function renderApp(
       refreshCapability: hooks.refreshCapability,
       initialOutput: undefined,
     }),
+    { width: 100, height: 40 },
   );
 }
 
-const press = async (frame: { stdin: { write: (s: string) => void } }, keys: string) => {
-  frame.stdin.write(keys);
+const press = async (frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> }, keys: string) => {
+  await frame.press(keys);
   await wait(20);
+  await frame.flush();
 };
 
 const SKILLS: CapabilityItem[] = [
@@ -57,9 +59,10 @@ const MCPS: CapabilityItem[] = [
 test('面板渲染：逐项展示启用状态与描述', async () => {
   const ctrl = new AppController();
   ctrl.openCapability('skill', SKILLS);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(40);
-  const out = stripAnsi(frame.lastFrame() ?? '');
+  await frame.flush();
+  const out = stripAnsi(frame.frame());
   assert.ok(out.includes('🔧 技能'), '标题');
   assert.ok(out.includes('1 启用 / 2'), '启用计数');
   assert.ok(out.includes('commit'), '第一项');
@@ -67,15 +70,16 @@ test('面板渲染：逐项展示启用状态与描述', async () => {
   assert.ok(out.includes('☐'), '禁用空框');
   assert.ok(out.includes('red-line-check'), '第二项');
   assert.ok(out.includes('空格 启停'), '键位提示');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('空格：切换当前选中项的启停', async () => {
   const ctrl = new AppController();
   const toggled: string[] = [];
   ctrl.openCapability('skill', SKILLS);
-  const frame = renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
+  const frame = await renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
   await wait(40);
+  await frame.flush();
 
   await press(frame, ' '); // 第一项 commit
   assert.deepEqual(toggled, ['commit']);
@@ -83,79 +87,86 @@ test('空格：切换当前选中项的启停', async () => {
   await press(frame, '\u001B[B'); // ↓
   await press(frame, ' ');
   assert.deepEqual(toggled, ['commit', 'red-line-check'], '下移后切换第二项');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('↓↑ 循环移动选择，j/k 等价', async () => {
   const ctrl = new AppController();
   const toggled: string[] = [];
   ctrl.openCapability('skill', SKILLS);
-  const frame = renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
+  const frame = await renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
   await wait(40);
+  await frame.flush();
 
   await press(frame, 'j'); // 下移到 red-line-check
   await press(frame, 'k'); // 回到 commit
   await press(frame, ' ');
   assert.deepEqual(toggled, ['commit'], 'k/j 与方向键同义');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('MCP 面板：R 键触发重连，且带行内提示', async () => {
   const ctrl = new AppController();
   const reconnected: string[] = [];
   ctrl.openCapability('mcp', MCPS);
-  const frame = renderApp(ctrl, {
+  const frame = await renderApp(ctrl, {
     onReconnectCapability: (n) => {
       reconnected.push(n);
       ctrl.setCapabilityNotice(n, '重连中…');
     },
   });
   await wait(40);
+  await frame.flush();
 
   await press(frame, 'r');
   assert.deepEqual(reconnected, ['github'], 'R 重连当前项');
   await wait(30);
-  assert.ok(stripAnsi(frame.lastFrame() ?? '').includes('重连中…'), '行内提示可见');
-  frame.cleanup();
+  await frame.flush();
+  assert.ok(stripAnsi(frame.frame()).includes('重连中…'), '行内提示可见');
+  await frame.cleanup();
 });
 
 test('技能面板：R 键无作用（技能没有连接概念）', async () => {
   const ctrl = new AppController();
   const reconnected: string[] = [];
   ctrl.openCapability('skill', SKILLS);
-  const frame = renderApp(ctrl, { onReconnectCapability: (n) => reconnected.push(n) });
+  const frame = await renderApp(ctrl, { onReconnectCapability: (n) => reconnected.push(n) });
   await wait(40);
+  await frame.flush();
 
   await press(frame, 'r');
   assert.deepEqual(reconnected, [], 'kind=skill 时 R 不触发回调');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('Esc：关闭面板，输入框恢复可用', async () => {
   const ctrl = new AppController();
   ctrl.openCapability('mcp', MCPS);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(40);
+  await frame.flush();
   assert.ok(ctrl.capabilityPanel, '已打开');
 
   await press(frame, '\u001B'); // Esc
   await wait(30);
+  await frame.flush();
   assert.equal(ctrl.capabilityPanel, null, 'Esc 关闭面板');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('空列表给出提示，不渲染空框', async () => {
   const ctrl = new AppController();
   ctrl.openCapability('skill', []);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(40);
-  const out = stripAnsi(frame.lastFrame() ?? '');
+  await frame.flush();
+  const out = stripAnsi(frame.frame());
   assert.ok(out.includes('没有可用技能'), '空态提示');
   assert.ok(out.includes('0 启用 / 0'), '计数为 0');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
-test('setCapabilityNotice：只改指定行，其余行不变', () => {
+test('setCapabilityNotice：只改指定行，其余行不变', async () => {
   const ctrl = new AppController();
   ctrl.openCapability('mcp', MCPS);
   ctrl.setCapabilityNotice('github', '✓ 已重连（12 工具）');
@@ -164,7 +175,7 @@ test('setCapabilityNotice：只改指定行，其余行不变', () => {
   assert.equal(items[1]!.notice, undefined, '其他行不受影响');
 });
 
-test('setCapabilityItems：覆盖后保持面板打开（刷新数据不闪退）', () => {
+test('setCapabilityItems：覆盖后保持面板打开（刷新数据不闪退）', async () => {
   const ctrl = new AppController();
   ctrl.openCapability('skill', SKILLS);
   ctrl.setCapabilityItems([{ name: 'commit', enabled: false, detail: 'd' }]);
@@ -177,7 +188,7 @@ test('能力面板打开时 App 让出键盘（Ctrl+C 不退出）', async () =>
   const ctrl = new AppController();
   let exited = false;
   ctrl.openCapability('skill', SKILLS);
-  const frame = render(
+  const frame = await renderOtui(
     React.createElement(App, {
       ctrl,
       onSubmit: () => {},
@@ -190,14 +201,16 @@ test('能力面板打开时 App 让出键盘（Ctrl+C 不退出）', async () =>
     }),
   );
   await wait(40);
+  await frame.flush();
   await press(frame, '\u0003'); // Ctrl+C
   await wait(30);
+  await frame.flush();
   assert.equal(exited, false, '面板打开时 Ctrl+C 由 App 忽略（不退出）');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 // ── 面板高度与滚动窗口 ──────────────────────────────────────
-test('capabilityPanelHeight：条目多时受可见条数封顶，不会撑爆终端', () => {
+test('capabilityPanelHeight：条目多时受可见条数封顶，不会撑爆终端', async () => {
   const few = capabilityPanelHeight([SKILLS[0]!]);
   const many = capabilityPanelHeight(SKILLS);
   assert.ok(many > few, '条目多则更高');
@@ -218,29 +231,31 @@ test('回归：条目超出一屏时，光标能滚到最后的项（不再永�
   const ctrl = new AppController();
   const toggled: string[] = [];
   ctrl.openCapability('skill', many);
-  const frame = renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
+  const frame = await renderApp(ctrl, { onToggleCapability: (n) => toggled.push(n) });
   await wait(60);
+  await frame.flush();
 
   // 逐次 ↓ 到底（每次等光标真的移动到位，避免高频按键被丢）
   for (let i = 2; i <= 20; i++) {
     const target = `skill-${String(i).padStart(2, '0')}`;
     let reached = false;
     for (let attempt = 0; attempt < 30 && !reached; attempt++) {
-      frame.stdin.write('\x1b[B');
+      await frame.press('\x1b[B');
       await wait(60);
-      reached = new RegExp(`❯.*${target}`).test(stripAnsi(frame.lastFrame() ?? ''));
+      await frame.flush();
+      reached = new RegExp(`❯.*${target}`).test(stripAnsi(frame.frame()));
     }
     assert.ok(reached, `光标应能移动到第 ${i} 项`);
   }
 
-  const out = stripAnsi(frame.lastFrame() ?? '');
+  const out = stripAnsi(frame.frame());
   assert.ok(out.includes('skill-20'), '最后一项可见');
   assert.ok(/❯.*skill-20/.test(out), '最后一项是选中项');
 
   // 选中项上按空格 → 切换的是最后一项（证明光标真的到了）
   await press(frame, ' ');
   assert.deepEqual(toggled, ['skill-20'], '空格作用于最后一项');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
 test('能力面板：面板本身不被压缩（flexShrink=0），历史再长也完整显示', async () => {
@@ -248,15 +263,16 @@ test('能力面板：面板本身不被压缩（flexShrink=0），历史再长�
   // 用大量历史把视口撑满
   for (let i = 0; i < 60; i++) ctrl.pushOutput(`历史行 ${i}`);
   ctrl.openCapability('skill', SKILLS);
-  const frame = renderApp(ctrl);
+  const frame = await renderApp(ctrl);
   await wait(60);
-  const out = stripAnsi(frame.lastFrame() ?? '');
+  await frame.flush();
+  const out = stripAnsi(frame.frame());
   assert.ok(out.includes('commit'), '第一项可见');
   assert.ok(out.includes('red-line-check'), '第二项可见');
-  frame.cleanup();
+  await frame.cleanup();
 });
 
-test('kind 类型约束：只有 skill / mcp 两种', () => {
+test('kind 类型约束：只有 skill / mcp 两种', async () => {
   const kinds: CapabilityKind[] = ['skill', 'mcp'];
   assert.equal(kinds.length, 2);
 });

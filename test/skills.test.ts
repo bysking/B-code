@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,7 +20,7 @@ let dataHome: string;
 const savedHomeEnv = process.env[BASE_PATH_ENV];
 const savedSkillsEnv = process.env[SKILLS_DIR_ENV];
 
-before(async () => {
+beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'b-code-skills-'));
   proj = join(home, 'proj');
   dataHome = join(home, 'data'); // B_CODE_HOME 数据根
@@ -30,7 +30,7 @@ before(async () => {
   process.env[BASE_PATH_ENV] = dataHome;
 });
 
-after(async () => {
+afterAll(async () => {
   if (savedHomeEnv === undefined) delete process.env[BASE_PATH_ENV];
   else process.env[BASE_PATH_ENV] = savedHomeEnv;
   if (savedSkillsEnv === undefined) delete process.env[SKILLS_DIR_ENV];

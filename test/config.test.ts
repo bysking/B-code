@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -19,11 +19,11 @@ const savedHome = process.env[BASE_PATH_ENV];
 const savedCfg = process.env[SETTINGS_FILE_ENV];
 let home: string;
 
-before(async () => {
+beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'b-code-cfg-'));
   process.env[BASE_PATH_ENV] = home;
 });
-after(async () => {
+afterAll(async () => {
   if (savedHome === undefined) delete process.env[BASE_PATH_ENV];
   else process.env[BASE_PATH_ENV] = savedHome;
   if (savedCfg === undefined) delete process.env[SETTINGS_FILE_ENV];

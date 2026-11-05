@@ -1,4 +1,4 @@
-import { test, mock } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { Spinner } from '../src/ui.js';
 
@@ -15,7 +15,7 @@ function makeStream() {
   };
 }
 
-test('非 TTY（disabled）→ start/stop 零写入（管道/CI 不产生动画帧）', () => {
+test('非 TTY（disabled）→ start/stop 零写入（管道/CI 不产生动画帧）', async () => {
   const stream = makeStream();
   const sp = new Spinner(stream, false);
   sp.start('thinking…');
@@ -23,9 +23,8 @@ test('非 TTY（disabled）→ start/stop 零写入（管道/CI 不产生动画�
   assert.equal(stream.text, '');
 });
 
-test('TTY：start 渲染帧 → tick 推进多帧 → stop 以擦行结尾', () => {
-  mock.timers.enable({ apis: ['setInterval'] });
-  try {
+test('TTY：start 渲染帧 → tick 推进多帧 → stop 以擦行结尾', async () => {
+  {
     const stream = makeStream();
     const sp = new Spinner(stream, true);
     sp.start('working…');
@@ -33,20 +32,17 @@ test('TTY：start 渲染帧 → tick 推进多帧 → stop 以擦行结尾', () 
     assert.match(first, /\r\x1b\[K/, '首帧带擦行+回到行首');
     assert.ok(first.includes('working…'));
 
-    mock.timers.tick(160); // 推进 2 帧
+    await new Promise((r) => setTimeout(r, 160)); // 推进 2 帧
     const mid = stream.text;
     assert.ok(mid.length > first.length, '多帧推进会产生更多字节');
 
     sp.stop();
     assert.ok(stream.text.endsWith('\r\x1b[K'), 'stop 后遮罩当前行');
-  } finally {
-    mock.timers.reset();
   }
 });
 
-test('stop 幂等：重复 stop 不重复写入', () => {
-  mock.timers.enable({ apis: ['setInterval'] });
-  try {
+test('stop 幂等：重复 stop 不重复写入', async () => {
+  {
     const stream = makeStream();
     const sp = new Spinner(stream, true);
     sp.start('x');
@@ -56,16 +52,13 @@ test('stop 幂等：重复 stop 不重复写入', () => {
     sp.stop();
     assert.equal(stream.text, stopped, '二次 stop 无新增字节');
     assert.ok(stopped.length > before.length);
-  } finally {
-    mock.timers.reset();
   }
 });
 
-test('update 可改提示文案', () => {
+test('update 可改提示文案', async () => {
   const stream = makeStream();
   const sp = new Spinner(stream, true);
   sp.start('phase1…');
   sp.update('phase2…');
   sp.stop();
-  mock.timers.reset();
 });

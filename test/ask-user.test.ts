@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../src/agent.js';
 import { registerAskUserTool } from '../src/ask-user.js';

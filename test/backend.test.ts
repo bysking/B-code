@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import {
@@ -25,7 +25,7 @@ const savedModel = process.env.B_CODE_MODEL;
 const savedProxy = process.env.HTTP_PROXY;
 const savedNoProxy = process.env.NO_PROXY;
 
-before(async () => {
+beforeAll(async () => {
   server = createServer((req, res) => {
     if (req.url?.includes('/chat/completions')) {
       // OpenAI 兼容 SSE 流式响应：文本分两块到达，最后 [DONE]
@@ -45,7 +45,8 @@ before(async () => {
   if (addr && typeof addr === 'object') baseUrl = `http://127.0.0.1:${addr.port}/v1`;
 });
 
-after(async () => {
+afterAll(async () => {
+  server.closeAllConnections?.();
   await new Promise((r) => server.close(r));
   for (const [k, v] of [
     ['OPENAI_API_KEY', savedApiKey],
@@ -110,7 +111,9 @@ test('真·流式：第一块文本在 callModel resolve 之前到达（打字�
       return out;
     });
 
+    console.log('[dbg] 进入 30ms 等待');
     await new Promise((r) => setTimeout(r, 30)); // 停顿时长内，第一块应已到达
+    console.log('[dbg] 30ms 后 got=', JSON.stringify(got), 'resolved=', resolved);
     assert.equal(resolved, false, 'callModel 尚未 resolve 时第一块就已到达');
     assert.deepEqual(got, ['first-frag'], '30ms 时只有第一块被回调');
 
@@ -120,6 +123,9 @@ test('真·流式：第一块文本在 callModel resolve 之前到达（打字�
   } finally {
     if (saved === undefined) delete process.env.OPENAI_BASE_URL;
     else process.env.OPENAI_BASE_URL = saved;
+    // Bun 下 server.close(cb) 会等 keep-alive 连接自然断开，若客户端保持连接
+    // 就永不回调（表现为测试卡到超时）。先强制断开所有连接再 close。
+    evtServer.closeAllConnections?.();
     await new Promise((r) => evtServer.close(r));
   }
 });

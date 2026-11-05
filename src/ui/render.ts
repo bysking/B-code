@@ -2,12 +2,6 @@ import React from 'react';
 import { mount as engineMount } from './ui/index.js';
 import { App } from './app.js';
 import { setLogSink } from '../utils/log.js';
-import {
-  createMouseFilteredInput,
-  MOUSE_DISABLE,
-  MOUSE_ENABLE,
-  type MouseEvent,
-} from './mouse.js';
 import type { AppController } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
@@ -68,21 +62,13 @@ export async function mountTtyApp(
   const realStdin = streams?.stdin ?? process.stdin;
 
   /**
-   * 鼠标滚轮：必须在喂给 ink **之前**拦下。
+   * 鼠标由 OpenTUI 自己处理——它原生支持（`useRawMouse` + 渲染器输入解析），
+   * 会自行开启鼠标追踪并派发事件。
    *
-   * ink 8 会主动丢弃未识别的控制序列（含鼠标报告），所以拿不到这些事件；
-   * 我们在 stdin 上挂一层过滤流，把 `\x1b[<64;x;yM` 这类序列摘出来转成滚动，
-   * 其余输入原样转发给 ink。
+   * 之前 ink 时代需要我们在 stdin 上套一层过滤流手动解析 SGR 序列
+   * （ink 会丢弃未识别的控制序列）。那套在 OpenTUI 下必须**移除**：
+   * 多套一层过滤流会把事件截走，渲染器就收不到鼠标了。
    */
-  const mouse = createMouseFilteredInput(realStdin, (ev: MouseEvent) => {
-    if (!ev.wheel) return;
-    // 一格滚轮 ≈ 3 行，与常见终端行为一致
-    hooks.onMouseWheel?.(ev.wheel === 'up' ? 3 : -3);
-  });
-
-  // 开启鼠标追踪：只在真实 TTY 下做，非 TTY（管道/CI）会污染输出
-  const mouseEnabled = Boolean(process.stdout.isTTY && realStdin.isTTY);
-  if (mouseEnabled) out.write(MOUSE_ENABLE);
 
   const app = await engineMount(
     React.createElement(App, {
@@ -98,7 +84,7 @@ export async function mountTtyApp(
     }),
     {
       stdout: out,
-      stdin: mouse.input,
+      stdin: realStdin,
       // 关闭引擎默认的 exitOnCtrlC：否则 Ctrl+C 被引擎吞掉，我们自己的
       // "第一次提示 / 第二次退出 / 打印恢复命令" 协议永远收不到事件
       exitOnCtrlC: false,
@@ -107,15 +93,7 @@ export async function mountTtyApp(
   return {
     unmount: () => {
       app.unmount();
-      // 关掉鼠标追踪并摘掉过滤流：否则退出后终端仍在鼠标模式下（原生选中失效）
-      if (mouseEnabled) {
-        try {
-          out.write(MOUSE_DISABLE);
-        } catch {
-          // 流已关闭
-        }
-      }
-      mouse.dispose();
+      // 鼠标模式由 OpenTUI 的 renderer.destroy() 负责关掉
       restoreLogSink(); // 交还 stderr，退出期日志要能正常打到终端
     },
   };

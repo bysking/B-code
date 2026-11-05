@@ -12,10 +12,10 @@
     "dist/cli.mjs"
   ],
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "bun src/index.ts",
     "build": "node build.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-force-exit --test-concurrency=1 test/*.test.ts test/*.test.tsx",
+    "test": "bun test --timeout 20000",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "prepublishOnly": "npm run typecheck && npm run build",
@@ -54,8 +54,6 @@
     "@opentui/react": "0.8.2",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
-    "ink": "^8.0.0",
-    "ink-text-input": "^6.0.0",
     "marked": "^9.1.6",
     "marked-terminal": "^6.2.0",
     "react": "^19.3.1",
@@ -63,12 +61,10 @@
     "wrap-ansi": "^10.0.1"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.4",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
-    "esbuild": "^0.25.12",
-    "ink-testing-library": "^4.0.0",
     "prettier": "^3.9.6",
-    "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   },
   "optionalDependencies": {

@@ -1,11 +1,11 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { basePath, safeName, userHomeDir, dirs, BASE_PATH_ENV } from '../src/utils/paths.js';
 
 const saved = process.env[BASE_PATH_ENV];
-after(() => {
+afterAll(() => {
   if (saved === undefined) delete process.env[BASE_PATH_ENV];
   else process.env[BASE_PATH_ENV] = saved;
 });

@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,11 +9,11 @@ let dir: string;
 const savedFile = process.env.B_CODE_LOG_FILE;
 const savedLevel = process.env.B_CODE_LOG_LEVEL;
 
-before(async () => {
+beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'b-code-log-'));
 });
 
-after(async () => {
+afterAll(async () => {
   if (savedFile === undefined) delete process.env.B_CODE_LOG_FILE;
   else process.env.B_CODE_LOG_FILE = savedFile;
   if (savedLevel === undefined) delete process.env.B_CODE_LOG_LEVEL;

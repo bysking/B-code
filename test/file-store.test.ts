@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { FileStore, cacheable, contentHash, filePointer, FILE_CACHE_MAX_ENTRIES } from '../src/file-store.js';
 

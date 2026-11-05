@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -15,11 +15,11 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/mes
 const saved = process.env[BASE_PATH_ENV];
 let home: string;
 
-before(async () => {
+beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'b-code-savemem-'));
   process.env[BASE_PATH_ENV] = home;
 });
-after(async () => {
+afterAll(async () => {
   if (saved === undefined) delete process.env[BASE_PATH_ENV];
   else process.env[BASE_PATH_ENV] = saved;
   await rm(home, { recursive: true, force: true });

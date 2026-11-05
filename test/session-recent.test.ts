@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { recentTurns, renderRecentTurns } from '../src/session.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';

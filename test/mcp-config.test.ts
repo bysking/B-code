@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,7 +13,7 @@ let dataHome: string;
 const savedHomeEnv = process.env[BASE_PATH_ENV];
 const savedMcpEnv = process.env[MCP_CONFIG_ENV];
 
-before(async () => {
+beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'b-code-mcpcfg-'));
   proj = join(home, 'proj');
   dataHome = join(home, 'data');
@@ -22,7 +22,7 @@ before(async () => {
   process.env[BASE_PATH_ENV] = dataHome;
 });
 
-after(async () => {
+afterAll(async () => {
   if (savedHomeEnv === undefined) delete process.env[BASE_PATH_ENV];
   else process.env[BASE_PATH_ENV] = savedHomeEnv;
   if (savedMcpEnv === undefined) delete process.env[MCP_CONFIG_ENV];
