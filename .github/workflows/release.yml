@@ -204,12 +204,28 @@ jobs:
             fi
 
             echo "📦 Publishing $name@$ver from $dir"
-            (cd "$dir" && npm publish --access public) || {
+            if ! out=$( (cd "$dir" && npm publish --access public) 2>&1); then
+              echo "$out"
               echo "::error::$name@$ver 发布失败"
-              echo "   若报 404/ENEEDAUTH：该包尚未在 npm 上存在，而 Trusted Publishing"
-              echo "   不支持发布首个版本（npm/cli#8544）。先用 token 手动发一次。"
+              # 按实际报错给出对应处理，避免误导排查方向
+              if grep -qiE 'EOTP|one-time password|one-time pass' <<<"$out"; then
+                echo "   原因：NPM_TOKEN 没有 Bypass 2FA 权限。granular token 的"
+                echo "   'Bypass two-factor authentication' 默认不勾，不勾就会要求交互式 OTP，"
+                echo "   而 CI 没有终端 → 必然失败。"
+                echo "   处理：到 npmjs.com → Access Tokens 重新创建，勾上 Bypass 2FA，"
+                echo "         更新 NPM_TOKEN secret。或改用 Trusted Publishing (OIDC)。"
+              elif grep -qiE 'E404|ENEEDAUTH|not found' <<<"$out"; then
+                echo "   原因：该包尚未在 npm 上存在，而 Trusted Publishing 不支持发布"
+                echo "   首个版本（npm/cli#8544）。先用 token 手动发一次。"
+              elif grep -qiE 'E403|cannot publish over' <<<"$out"; then
+                echo "   原因：该版本已存在于 registry（版本号没改就重跑）。"
+                echo "   处理：改 package.json 的 version，或确认该版本确实是你的。"
+              else
+                echo "   完整输出见上方，对照 docs/RELEASING.md 的排错表。"
+              fi
               exit 1
-            }
+            fi
+            echo "$out"
           done
 
   # ── 最后发布主包（依赖各平台包已就位）──
@@ -278,4 +294,14 @@ jobs:
           fi
 
           echo "📦 Publishing $name@$ver"
-          npm publish --access public
+          if ! out=$(npm publish --access public 2>&1); then
+            echo "$out"
+            echo "::error::$name@$ver 发布失败"
+            if grep -qiE 'EOTP|one-time password' <<<"$out"; then
+              echo "   原因：NPM_TOKEN 没有 Bypass 2FA 权限（granular token 默认不勾），"
+              echo "   会要求交互式 OTP 而 CI 无终端。重新创建 token 并勾上 Bypass 2FA，"
+              echo "   或走 Trusted Publishing (OIDC)。"
+            fi
+            exit 1
+          fi
+          echo "$out"

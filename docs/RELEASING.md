@@ -82,7 +82,7 @@ Workflow filename:    release.yml
 ### 首次发布是例外——必须用 token
 
 npm 目前**不支持用 OIDC 发布一个尚不存在的包**
-（[npm/cli#8544#8544#8544#8544](https://github.com/npm/cli/issues/8544)，仍 open；PyPI 支持，npm 不支持）。
+（[npm/cli#8544](https://github.com/npm/cli/issues/8544)，仍 open；PyPI 支持，npm 不支持）。
 
 4 个平台包在 3.0.0 之前从未发布过（registry 全是 404），所以**首次发版必须有 token**。
 
@@ -96,11 +96,23 @@ workflow 因此同时支持两条路，按 secret 是否存在自动选择：
 
 **过渡步骤：**
 
-1. 首次发版前，仓库 Settings → Secrets 配好 `NPM_TOKEN`（classic token，勾 `read and write` + 对 `@bysking` scope 的发布权限）
-2. 打 tag，确认 4 个平台包都发出去、主包最后上线
-3. 5 个包都进 npmjs.com 配好 Trusted Publisher
-4. **删掉 `NPM_TOKEN` secret**——之后自动走纯 OIDC
-5. 下一版验证一次，确认日志里有 `🔐 未配置 NPM_TOKEN，将使用 Trusted Publishing (OIDC)`
+1. 首次发版前，在 npmjs.com → Access Tokens 创建 **Granular Access Token**，必须：
+   - **勾选 `Bypass two-factor authentication`**（默认是**关闭**的，不勾会报 `EOTP`，见下）
+   - Permissions 选 `Read and write`
+   - Packages and scopes 选 `All packages`（或至少覆盖 `@bysking` 那 5 个包）
+   - 设一个够用的过期时间（至少 1 天）
+2. 把它配到仓库 Settings → Secrets 的 `NPM_TOKEN`
+3. 打 tag，确认 4 个平台包都发出去、主包最后上线
+4. 5 个包都进 npmjs.com 配好 Trusted Publisher
+5. **删掉 `NPM_TOKEN` secret**——之后自动走纯 OIDC
+6. 下一版验证一次，确认日志里有 `🔐 未配置 NPM_TOKEN，将使用 Trusted Publishing (OIDC)`
+
+> **为什么必须勾 Bypass 2FA**：npm 只保留 granular token，而它的 `Bypass 2FA` **默认关闭**。
+> 关闭状态下用它发布，npm 会要求输入一次性密码（`EOTP`），而 CI 没有交互终端，必然失败。
+> legacy/classic token 已被 npm 移除，不要照着旧教程找「Automation token」。
+>
+> 另外，Bypass-2FA 的直接发布能力**正在被 npm 废弃**（官方文档已标注 deprecated，未来
+> 只能走 staged publishing）。所以 token 只是首次发布的临时手段，尽早切 OIDC。
 
 ---
 
@@ -173,6 +185,7 @@ node build-bun.js --all-check
 
 | 症状                                                            | 原因                                                  | 处理                                                  |
 | ----------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- |
+| **`EOTP` / `This operation requires a one-time password`**       | token 没勾 `Bypass two-factor authentication`（granular token 默认不勾），npm 要求交互式输 OTP，CI 无终端 | 重新创建 token 并**勾上 Bypass 2FA**；或改用 OIDC（已发布的包都支持） |
 | `E404` / `ENEEDAUTH`，但 token 明明是对的                       | 该包尚未存在，或 Trusted Publisher 没配到**这个**包上 | 首次发布用 token；其余检查 5 个包是否都配了           |
 | 日志里 `Failed token exchange ... package not found`            | 同上，OIDC 发不了不存在的包                           | 用 token 发首次版本                                   |
 | OIDC 悄悄失效、回退成 token                                     | npm < 11.5.1，或给 `setup-node` 传了 `registry-url`   | 用 Node 24；去掉 `registry-url`                       |
