@@ -256,7 +256,8 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 
 ## MCP
 
-启动时自动挂载配置的 MCP 服务器（失败仅记日志，不阻塞）。
+基于官方 [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) 接入，
+协议细节（JSON-RPC 编解码、版本协商、错误码、超时、session）由 SDK 保证。
 
 **配置搜索链（env 最高优先，同名 server 后者胜）：**
 
@@ -264,32 +265,94 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 2. `{cwd}/.claude/mcp.json` —— 项目级
 3. `{B_CODE_HOME}/mcp.json` —— 用户级
 
+### 两种传输
+
+**本地子进程（stdio）** —— `command` / `args` / `env`：
+
 ```json
 {
   "mcpServers": {
-    "demo": {
-      "mode": "read",
-      "command": "node",
-      "args": ["/path/to/server.cjs"]
+    "docs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] }
+  }
+}
+```
+
+**远程端点（Streamable HTTP）** —— `url` / `headers`：
+
+```json
+{
+  "mcpServers": {
+    "sentry": {
+      "url": "https://mcp.sentry.dev/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
     }
   }
 }
 ```
 
-**启用/禁用与重连：** `/mcp` 打开交互面板，`↑↓` 选择、`空格` 启停、`R` 重连、`Esc` 关闭。
+同时写了 `command` 和 `url` 时按本地子进程处理。
 
-- **禁用** = 该 server 的工具从模型可见的 `toolsSchema` 摘掉（不花 token）；**子进程保持存活**，
-  重新启用瞬时生效。与技能不同，MCP 没有"手动调用"通道，所以禁用即模型不可见。
-- **重连（`R`）** = 重开子进程 → 重新握手 → 重新注册工具。用于 server 进程崩了、
-  或配置文件改了想立刻生效的场景。失败时该 server 的工具会被完全摘除（不留指向死进程的 handler）。
-- 状态存在 `{B_CODE_HOME}/settings.json` 的 `disabled.mcpServers`（全局生效）。
+### 权限模式
+
+每个工具的权限按三级判定（优先级从高到低）：
+
+1. **server 级 `mode: "read"`** —— 整片声明信任，该 server 所有工具按只读放行
+2. **工具自身的 `annotations.readOnlyHint`** —— MCP 规范的语义标注，可信，自动按只读处理
+3. **缺省 fail-closed** —— `external`，任何写入都需要确认
+
+```json
+{ "mcpServers": { "docs": { "command": "npx", "args": ["..."], "mode": "read" } } }
 ```
 
-`mode: "read"` 声明该 server 所有工具按只读放行（免确认）；缺省 fail-closed → 需要确认。
+`annotations.destructiveHint` 为真的工具会在描述里标 `⚠️ destructive`，让模型自己谨慎。
 
-**资源（resources）**：server 若声明 `resources` 能力并返回资源列表，b-code 会把它们聚合为一个只读工具
-`mcp__<server>__read_resource`（参数 `uri`），模型可按 URI 读取 `resources/read` 的内容；
-不支持资源的 server 自动跳过，不影响工具发现。
+**确认一次 = 授权整个 server**：在确认框选批准后，白名单写入 `mcp__<server>__*`，
+该 server 的其他工具（包括 server 升级后新增的）不再询问。别的 server 不受影响。
+
+### 启用/禁用与重连
+
+`/mcp` 打开交互面板：`↑↓` 选择、`空格` 启停、`R` 重连、`Esc` 关闭。
+
+- **禁用** = 该 server 的工具从模型可见的 `toolsSchema` 摘掉（不花 token）；连接保持，
+  重新启用瞬时生效。与技能不同，MCP 没有"手动调用"通道，所以禁用即模型不可见。
+- **重连（`R`）** = 重新建立传输 → 重新握手 → 重新注册工具。用于进程崩了、远程端点
+  换了 token、或配置文件改了想立刻生效。失败时该 server 的工具会被完全摘除
+  （不留指向死连接的 handler）。
+- 状态存在 `{B_CODE_HOME}/settings.json` 的 `disabled.mcpServers`（全局生效）。
+
+**子进程 stderr 不会污染终端**：传输层把 server 的 stderr 收进日志系统
+（`Ctrl+O` 的"日志"页可查），而不是直接继承终端——否则 server 随手一行输出就会
+打乱 TUI 画面。
+
+**资源（resources）**：server 若声明 `resources` 能力并返回资源列表，b-code 会把它们
+聚合为一个只读工具 `mcp__<server>__read_resource`（参数 `uri`），模型可按 URI 读取
+`resources/read` 的内容；不支持资源的 server 自动跳过，不影响工具发现。
+
+### 动态工具与通知
+
+- **工具热更新**：server 发 `notifications/tools/list_changed` 时，b-code 会重新拉取
+  工具列表并自动重注册——**不需要手动按 `R` 重连**。用于 server 按需解锁功能的场景。
+- **资源订阅**：server 声明 `resources.subscribe` 时可订阅某 URI，内容变更时收到
+  `notifications/resources/updated` 推送。
+
+### 反向调用（server → client）
+
+MCP 允许 server 请求客户端代做它自己做不到的事。b-code 默认支持两项：
+
+| 能力 | 作用 | 是否默认开启 |
+|---|---|---|
+| `roots` | 告诉 server 工作区根目录 | ✅（就用当前工作目录） |
+| `sampling` | server 借用宿主模型跑一次补全 | ✅（用当前配置的模型） |
+| `elicitation` | server 弹表单问用户 | ❌ 刻意不声明 |
+
+**为什么 sampling 是安全的**：server 没有 LLM 凭证，借我们的模型是规范内的设计；
+调用走本 agent 的模型通道，但**不写入会话历史**（旁路调用，不污染对话上下文）。
+
+**为什么不开 elicitation**：那等于让 server 绕过 b-code 的交互与权限体系直接弹窗，
+既可能打断用户正在做的事，也会绕过权限确认。等有明确需求再说。
+
+原则是**注入才声明**：不注入宿主能力就不向 server 声明该 capability，
+server 会据此自行降级，而不是发一个永远没人处理的请求然后超时。
 
 ## 任务清单（TodoWrite）
 

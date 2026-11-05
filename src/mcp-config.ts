@@ -13,12 +13,32 @@ import { dirs } from './utils/paths.js';
  * 纯函数、不校验具体 server 字段——P5 的 mcp-loader 从这里拿配置去 spawn。
  */
 
+/**
+ * 单个 MCP server 的配置。两种传输二选一：
+ *
+ *   stdio（本地子进程）  { command, args?, env? }
+ *   HTTP（远程端点）     { url, headers? }
+ *
+ * HTTP 走官方 Streamable HTTP 传输；老式 SSE 端点也可用 url 配（SDK 会自动降级）。
+ */
 export interface McpServerConfig {
-  command: string;
+  /** stdio 传输：要执行的命令 */
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** HTTP 传输：远程 MCP 端点（如 https://mcp.example.com/mcp） */
+  url?: string;
+  /** HTTP 传输：附加请求头（常用于 Authorization） */
+  headers?: Record<string, string>;
   /** 声明 "read" 则该 server 所有工具按只读放行（免确认）；缺省 fail-closed → confirm */
   mode?: 'read';
+}
+
+/** 该配置走哪种传输（command 优先：两者都写时按本地子进程处理） */
+export function transportKind(cfg: McpServerConfig): 'stdio' | 'http' | 'invalid' {
+  if (cfg.command) return 'stdio';
+  if (cfg.url) return 'http';
+  return 'invalid';
 }
 
 export type McpConfig = Record<string, McpServerConfig>;
@@ -71,12 +91,16 @@ export function formatMcpList(
   return names
     .map((name) => {
       const cfg = configs[name]!;
-      const cmd = [cfg.command, ...(cfg.args ?? [])].join(' ');
+      // 两种传输的展示名：stdio 显示命令，HTTP 显示端点
+      const target = cfg.command
+        ? [cfg.command, ...(cfg.args ?? [])].join(' ')
+        : (cfg.url ?? '(未配置 command 或 url)');
       const count = toolCount(name);
       const off = disabled.includes(name) ? ' — [disabled]' : '';
-      if (count === null) return `✗ ${name} — ${cmd} — 未连接${off}`;
+      const kind = cfg.command ? '' : ' [http]';
+      if (count === null) return `✗ ${name} — ${target}${kind} — 未连接${off}`;
       const mode = cfg.mode === 'read' ? ' (read)' : '';
-      return `✓ ${name} — ${cmd} — ${count} 工具${mode}${off}`;
+      return `✓ ${name} — ${target}${kind} — ${count} 工具${mode}${off}`;
     })
     .join('\n');
 }

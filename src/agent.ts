@@ -10,7 +10,12 @@ import { registerTodoTool, loadTodos, type TodoItem } from './todo.js';
 import { CheckpointStore, withCheckpoints } from './checkpoint.js';
 import { runSubAgent } from './subagent.js';
 import { FileStore } from './file-store.js';
-import { loadMcpServers, reconnectMcpServer, type McpConnectResult } from './mcp.js';
+import {
+  loadMcpServers,
+  reconnectMcpServer,
+  type McpConnectResult,
+  type McpHostCapabilities,
+} from './mcp.js';
 import { Registry, type RuntimeContext, type UserOption } from './registry.js';
 import {
   loadDisabled,
@@ -310,11 +315,51 @@ export class Agent {
     });
   }
 
+  /**
+   * 宿主侧能力（反向调用：server → client）。
+   *
+   * 只声明我们真能做的两件事：
+   *   - roots：告诉 server 工作区在哪（它就这点信息需求，给工作目录即可）
+   *   - sampling：让 server 借用我们的模型跑补全（server 通常没有 LLM 凭证）
+   *
+   * 刻意**不声明 elicitation**：那是"server 弹窗问用户"，而我们的 UI 已经有一套
+   * 完整的交互形态（Wizard/AskInput），让 server 绕过它直接弹表单会绕过权限确认，
+   * 也容易打断用户正在做的事。等有明确需求再开。
+   */
+  private hostCapabilities(cwd: string): McpHostCapabilities {
+    return {
+      roots: () => [{ uri: `file://${cwd}`, name: cwd.split('/').pop() || cwd }],
+      sample: async ({ messages, maxTokens, systemPrompt }) => {
+        // 复用本 agent 的模型调用通道（含重试/超时策略），但**不写入会话历史**——
+        // 这是 server 借用的旁路调用，混进对话会让上下文莫名其妙。
+        const sys: SystemBlock[] = systemPrompt
+          ? [{ type: 'text', text: systemPrompt }]
+          : buildSystemPrompt({});
+        const reply = await this.call({
+          model: this.model,
+          system: sys,
+          messages: messages.map((m) => ({
+            role: m.role,
+            content:
+              typeof m.content === 'string'
+                ? m.content
+                : ((m.content as any[]).map((b) => (b?.type === 'text' ? b.text : '')).join('') ?? ''),
+          })) as MessageParam[],
+          ...(maxTokens ? { max_tokens: maxTokens } : {}),
+        } as ModelInput);
+        return reply.content
+          .filter((b): b is Anthropic.TextBlockParam => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
+      },
+    };
+  }
+
   /** 启动时/首次使用前拉起 MCP 服务器（幂等；失败仅记日志） */
   async initMcp(cwd = process.cwd()): Promise<void> {
     if (this.mcpLoaded) return;
     this.mcpLoaded = true;
-    await loadMcpServers(this.registry, cwd);
+    await loadMcpServers(this.registry, cwd, this.hostCapabilities(cwd));
   }
 
   // ── 能力启停（技能 / MCP）──────────────────────────────────
