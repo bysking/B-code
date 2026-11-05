@@ -33,7 +33,18 @@ import type { ClipboardImage } from '../utils/clipboard.js';
  */
 
 export interface TtyMount {
-  unmount(): void;
+  /**
+   * 卸载并**等待终端状态恢复完成**。
+   *
+   * 返回 Promise 是必须的：OpenTUI 的 `destroy()` 是同步返回，但真正的清理
+   * （关鼠标追踪、退出备用屏、还光标）写在后续的微任务/IO 里，
+   * 要 `await renderer.closed` 才等得到。
+   *
+   * 官方文档原话："Await after destroy() before closing stdout or calling
+   * process.exit()"。不等就会像之前那样——退出后终端还停在鼠标追踪模式，
+   * 用户一动鼠标就在 shell 里刷出 `35;41;30M` 这种裸转义序列。
+   */
+  unmount(): Promise<void>;
   /** 渲染器实例（测试/调试用） */
   renderer: CliRenderer;
 }
@@ -111,7 +122,7 @@ export async function mountTtyApp(
 
   return {
     renderer,
-    unmount: () => {
+    unmount: async () => {
       try {
         root.unmount();
       } catch {
@@ -121,6 +132,12 @@ export async function mountTtyApp(
         renderer.destroy();
       } catch {
         // 已销毁
+      }
+      // 等终端状态真正恢复（鼠标追踪/备用屏/光标）再返回——见接口注释
+      try {
+        await renderer.closed;
+      } catch {
+        // 关闭过程报错不应阻塞退出
       }
       restoreLogSink(); // 交还 stderr，退出期日志要能正常打到终端
     },

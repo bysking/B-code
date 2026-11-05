@@ -377,9 +377,16 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const oneShot = Boolean(args.instruction) && !args.goal && args.loop <= 0;
 
   let running = false;
-  const quit = (code: number): void => {
+  /**
+   * 退出：先恢复终端状态，再退进程。
+   *
+   * unmount 现在是异步的（要等 OpenTUI 把鼠标追踪/备用屏/光标切回来）。
+   * 不 await 直接 `process.exit()` 会让那些清理序列来不及写出——
+   * 终端停在鼠标追踪模式，用户回到 shell 后一动鼠标就是满屏的 `35;41;30M`。
+   */
+  const quit = async (code: number): Promise<void> => {
     printResumeHint(sessionId);
-    unmount?.();
+    await unmount?.();
     closeAllMcpConnections();
     process.exit(code);
   };
@@ -395,7 +402,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const { unmount: unmountApp } = await mountTtyApp(
     ctrl,
     {
-      onExit: () => quit(130),
+      onExit: () => void quit(130),
       onInterrupt: () => agent.interrupt(), // Esc：软中断当前 chat
       onSubmit: (text) => void handle(text),
       onSetMode: (mode) => {
@@ -449,13 +456,13 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         ctrl.pushUser(displayText);
         await agent.chat({ text, images });
         await saveSession(agent.history(), sessionId);
-        if (oneShot) quit(0);
+        if (oneShot) void quit(0);
         return;
       }
 
       const trimmed = input.trim();
       if (trimmed === 'exit' || trimmed === 'quit') {
-        quit(0);
+        void quit(0);
         return;
       }
       if (trimmed === '/clear') {
@@ -552,7 +559,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       if (args.goal) {
         await agent.pursueGoal(args.goal, effective || 'Continue working toward the goal.');
         await saveSession(agent.history(), sessionId);
-        quit(0);
+        void quit(0);
         return;
       }
       await agent.chat(effective);
@@ -566,7 +573,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       if (args.loop > 0) {
         setTimeout(() => void handle(args.instruction ?? ''), args.loop * 1000);
       } else if (oneShot) {
-        quit(0);
+        void quit(0);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
