@@ -17,6 +17,7 @@ import { CapabilityPanel } from './views/capability.js';
 import { UserTodoEditor } from './views/user-todo.js';
 import { AskInput } from './views/ask-input.js';
 import { buildSubmitLine, filterSlash } from './slash.js';
+import { COLORS } from './primitives/theme.js';
 
 /**
  * 根组件（OpenTUI 原生写法）。
@@ -258,7 +259,13 @@ export function App({
   const compact = termRows < 30;
 
   return (
-    <box flexDirection="column" width={termCols} height={termRows}>
+    <box
+      flexDirection="column"
+      width={termCols}
+      height={termRows}
+      // VS Code 2026 深色：编辑区底色作为整体背景
+      backgroundColor={COLORS.surfaceDeep}
+    >
       {/*
         会话历史：<scrollbox> 原生滚动。
         stickyScroll 让新内容自动贴底；viewportCulling 只渲染可见部分
