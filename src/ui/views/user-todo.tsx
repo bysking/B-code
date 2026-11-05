@@ -137,13 +137,19 @@ export function UserTodoEditor({
           <text fg={COLORS.accent} attributes={attrs('bold')}>
             {editing.kind === 'add' ? '+ ' : '✎ '}
           </text>
-          <textarea
+          {/* 用 <input> 而非 textarea：textarea 的裸 Enter 是"插入换行"，
+              不会触发 onSubmit（用户会觉得回车没反应）。<input> 的 Enter 直接提交。 */}
+          <input
             key={editing.kind === 'add' ? 'add' : editing.id}
-            style={{ flexGrow: 1, height: 1 }}
-            initialValue={draft}
+            style={{ flexGrow: 1 }}
+            value={draft}
             focused
-            onContentChange={() => void 0}
-            onSubmit={commit}
+            placeholder="输入待办内容"
+            placeholderColor={COLORS.muted}
+            textColor={COLORS.text}
+            focusedTextColor={COLORS.text}
+            onInput={(v: string) => setDraft(v)}
+            onSubmit={() => commit()}
           />
         </box>
       ) : null}

@@ -620,3 +620,25 @@ test('回归：输入框不接收控制字符（\\r / \\t / ESC 不落进草稿�
 // 视觉上被 clamp 掩盖了，但用户体验是坏的：上滚前面一大段"空转"，
 // 之后下滚要还这笔债，按很久才动一下——这正是"来回滚动不灵敏"的直接原因。
 // ScrollView 现在会在容积实测后把 fromBottom 收回真实上限。
+
+// ── 输入框回车必须提交 ──────────────────────────────────────────
+//
+// 踩过的坑：`askText` 的输入框最初用 `<textarea>`。textarea 的默认键绑定是
+// **Enter = 插入换行**、Meta+Enter = 提交，所以裸 Enter 根本不触发 onSubmit
+// ——用户输入后回车"没反应"（而这个框只有 1 行高，连换行都看不见）。
+//
+// 修复：所有单行输入一律用 `<input>`（textarea 的单行子类，原生 Enter 提交）。
+test('回归：askText 输入框输入后回车必须提交', async () => {
+  const ctrl = new AppController();
+  const frame = await renderApp(ctrl);
+  const p = ctrl.askText('请输入分支名');
+  await waitForFrame(frame, '请输入分支名', '提问框渲染');
+
+  await press(frame, 'feature/login');
+  await waitForFrame(frame, 'feature/login', '输入回显');
+
+  await press(frame, '\r');
+  assert.equal(await p, 'feature/login', '回车应提交输入内容');
+  assert.equal(ctrl.askTextState, null, '提交后提问框关闭');
+  await frame.cleanup();
+});
