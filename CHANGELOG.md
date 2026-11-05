@@ -16,7 +16,15 @@
 
 ### Fixed
 
-- **修复 v3.0.0 发布链路**（此前按现状打 tag 会在第一个 job 就失败）：
+- **两个测试只在 CI（Linux）上失败**——都是测试自身对平台/速度的脆弱假设，与业务代码无关：
+  - `grep_search 返回 path:行号:内容 且命中正确行`：断言 `out.startsWith('a.txt:2:')`，
+    但它搜的是**共享的** `dir`，而前面 `edit_file` 的用例已往该目录写入同样含
+    `value = 0` 的 `dup.txt`。命中顺序取决于 `readdir` 的返回顺序，macOS 上恰好
+    `a.txt` 在前，Linux 上 `dup.txt` 在前 → 断言失败。改为使用独立临时目录（只留一个
+    命中文件）并精确断言整行输出，不再依赖遍历顺序。
+  - `回归：用户消息单独 push 后立刻展示`：用固定 `wait(30)` 等待渲染提交，CI 机器较慢时
+    30ms 可能赶不上一次帧提交。改用文件内已有的 `waitForFrame` 轮询（上限 3s）。
+    断言的本意是"最终会显示"，不该受帧调度速度影响。
   - CI 的 test / publish-main 两个 job 仍在用 pnpm，而 `pnpm-lock.yaml` 是 ink 时代的
     （没有 `@opentui/*`），`--frozen-lockfile` 必然报 OUTDATED_LOCKFILE，且
     `pnpm test` 调的是 `bun test`。统一改为 Bun。
