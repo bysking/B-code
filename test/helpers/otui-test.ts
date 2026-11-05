@@ -64,6 +64,10 @@ export async function renderOtui(
   // renderOnce() 是必需的：createRoot().render() 只提交 React 树，
   // 真正画一帧要显式调它。只调 flush() 会拿到全空白的画面。
   await setup.renderOnce();
+  // 再等一轮：<markdown> 等内容型组件是**异步解析**的（tree-sitter），
+  // 首帧往往还是空的。给它们一个短窗口落地，否则断言会读到空白画面。
+  await new Promise((r) => setTimeout(r, 60));
+  await setup.renderOnce();
 
   const frame: OtuiTestFrame = {
     frame: () => stripAnsi(setup.captureCharFrame()),
@@ -94,6 +98,9 @@ export async function renderOtui(
       await setup.renderOnce();
     },
     async flush() {
+      await setup.renderOnce();
+      // 内容型组件（markdown/代码块）解析是异步的，等一小段再画一次
+      await new Promise((r) => setTimeout(r, 60));
       await setup.renderOnce();
     },
     async waitFor(needle: string, label = needle, timeoutMs = 3000) {

@@ -152,23 +152,41 @@ npm 通过 `os`/`cpu` 字段自动只装匹配的平台包，用户只下载自�
 
 ### 渲染引擎
 
-基于 [OpenTUI](https://github.com/anomalyco/opentui)（Zig 原生核心）：
+基于 [OpenTUI](https://github.com/anomalyco/opentui)（Zig 原生核心），按它的
+最佳实践直接写原生组件——**没有兼容层**：
 
-| 能力 | 原生实现 |
+```tsx
+<box flexDirection="column" borderStyle="rounded">
+  <text fg="#7aa2f7" attributes={1}>标题</text>
+  <scrollbox stickyScroll viewportCulling>
+    <markdown content={text} syntaxStyle={style} />
+  </scrollbox>
+</box>
+```
+
+| 能力 | 用的原生组件 |
 |---|---|
-| 滚动 | `scrollbox`（视口裁剪 + 粘性滚动 + 滚动条） |
-| 鼠标 | `useRawMouse`（滚轮/点击） |
-| Markdown | 原生 `markdown` 组件 |
-| 输入 | 原生 `input` / `textarea` |
+| 会话流滚动 | `<scrollbox>`（视口裁剪 + 粘性贴底 + 鼠标滚轮） |
+| 文本输入 | `<input>`（受控 value、原生光标/选区/undo、Enter 提交） |
+| Markdown | `<markdown>`（tree-sitter 解析 + 代码高亮） |
 | 布局 | flexbox（Yoga） |
+| 键盘 | `useKeyboard`（`e.name` 直接判断） |
 
-业务组件通过 `src/ui/ui/` 适配层访问渲染能力，**不直接 import `@opentui/*`**
-（有静态门禁测试守住）。适配层收敛了从 ink 迁移过来的语义差异：
+**注意 `jsxImportSource`**：`tsconfig.json` 配了 `"jsxImportSource": "@opentui/react"`，
+所以 `<box>` / `<text>` 这些是 OpenTUI 的原生标签，不是 React 组件包装。
 
-- `Box` 默认 `flexDirection: 'row'`（OpenTUI 原生默认是 column）
-- `<Text>` 内嵌 `<Text>` → 自动转成 `<span>`（OpenTUI 的 text 只收字符串）
-- `Ctrl+字母` 的 `input` 返回字母本身（OpenTUI 给的是控制字符码位）
-- 文本属性用整数位掩码（`BOLD=1, DIM=2, ITALIC=4, UNDERLINE=8, INVERSE=32, STRIKE=128`）
+**vs 之前的 ink 版**：删掉了手写虚拟滚动、滚轮 SGR 解析、输入框光标管理、
+markdown 的 marked 管线（约 1500 行）。这些 OpenTUI 全都原生提供。
+
+## 调试日志
+
+```bash
+BCODE_DEBUG_CONSOLE=1 bun src/index.ts
+```
+
+打开 OpenTUI 的 console overlay（浮层显示 `console.log`）。
+默认关闭——浮层会遮挡 UI。业务日志不受影响：它们经 `setLogSink` 收进
+`Ctrl+O` 面板的"日志"页。
 
 ### 测试
 

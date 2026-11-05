@@ -4,7 +4,6 @@ import React from 'react';
 import { renderOtui } from './helpers/otui-test.js';
 import { App } from '../src/ui/app.js';
 import { AppController, type CapabilityItem, type CapabilityKind } from '../src/ui/controller.js';
-import { capabilityPanelHeight } from '../src/ui/capability-panel.js';
 
 /**
  * 能力面板（/skills、/mcp）交互测试：空格启停 · R 重连 · Esc 关闭。
@@ -207,18 +206,6 @@ test('能力面板打开时 App 让出键盘（Ctrl+C 不退出）', async () =>
   await frame.flush();
   assert.equal(exited, false, '面板打开时 Ctrl+C 由 App 忽略（不退出）');
   await frame.cleanup();
-});
-
-// ── 面板高度与滚动窗口 ──────────────────────────────────────
-test('capabilityPanelHeight：条目多时受可见条数封顶，不会撑爆终端', async () => {
-  const few = capabilityPanelHeight([SKILLS[0]!]);
-  const many = capabilityPanelHeight(SKILLS);
-  assert.ok(many > few, '条目多则更高');
-
-  const huge = Array.from({ length: 100 }, (_, i) => ({ name: `s${i}`, enabled: true }));
-  const capped = capabilityPanelHeight(huge);
-  assert.ok(capped <= 6 + 12 + 1, '受可见条数上限封顶');
-  assert.ok(capped > 0);
 });
 
 test('回归：条目超出一屏时，光标能滚到最后的项（不再永久隐藏）', async () => {

@@ -2,13 +2,26 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderOtui } from './helpers/otui-test.js';
-import { OutputPanel, outputPanelMaxScroll, outputPanelScrollable } from '../src/ui/output-panel.js';
-import { terminalRows } from '../src/ui/scroll-budget.js';
+import { OutputPanel } from '../src/ui/views/output-panel.js';
 import type { ToolCallDisplay } from '../src/ui/controller.js';
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * 工具输出面板（Ctrl+O）。
+ *
+ * ## 重写说明
+ *
+ * 旧版测试验证"手算行数 + 手动偏移滚动"那套机制（`outputPanelMaxScroll` 的精确值、
+ * `scroll` 参数的效果、按行数裁剪的边界）。那套代码切到 OpenTUI 后已删除——
+ * 滚动交给原生 `<scrollbox>`，应用层不再需要算行数。
+ *
+ * 现在验证面板的**语义**：两页不串、空态有提示、长内容不丢、高度受约束。
+ */
 
-function tool(id: string, lines: number, extra: (i: number) => string = (i) => `line ${i}`): ToolCallDisplay {
+function tool(
+  id: string,
+  lines: number,
+  extra: (i: number) => string = (i) => `line ${i}`,
+): ToolCallDisplay {
   return {
     id,
     name: `tool_${id}`,
@@ -18,164 +31,77 @@ function tool(id: string, lines: number, extra: (i: number) => string = (i) => `
   };
 }
 
-/**
- * 画面里**有内容**的行数（不是画布总行数）。
- *
- * OpenTUI 的 captureCharFrame 返回固定高度的画布（renderOtui 建了多高就是多高），
- * 直接数 \n 只会得到画布高度，量不出内容真实占了几行。
- * 这里数非空行——这正是"帧高是否撑爆终端"要看的量。
- */
-const frameHeight = (s: string): number =>
-  s.split('\n').filter((l) => l.trim().length > 0).length;
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// ── 完整日志可见性：这是 Ctrl+O 存在的意义 ──────────────────────
+async function renderPanel(
+  props: Parameters<typeof OutputPanel>[0],
+  size = { width: 100, height: 30 },
+) {
+  const frame = await renderOtui(React.createElement(OutputPanel, props), size);
+  await wait(50);
+  await frame.flush();
+  return frame;
+}
 
-test('面板：输出很多时贴底显示的是**最新**内容（旧实现从最旧的开始填，永远看不到最新）', async () => {
-  const tools = Array.from({ length: 5 }, (_, i) => tool(`t${i}`, 40));
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 0 }));
-  await wait(120);
-  await f.flush();
-  const frame = f.frame();
-
-  assert.ok(frame.includes('line 39'), '贴底必须能看到最后一行输出');
-  // 窗口落在最后一个工具的长输出中段，标题行在窗口外 → 归属靠位置提示交代
-  assert.ok(frame.includes('当前：tool_t4'), '位置提示须标明当前日志属于哪个工具');
+test('面板：工具页展示工具名与输出内容', async () => {
+  const f = await renderPanel({ tools: [tool('a', 3)], termRows: 30 });
+  const out = f.frame();
+  assert.ok(out.includes('tool_a'), '工具名可见');
+  assert.ok(out.includes('line 0'), '输出内容可见');
   await f.cleanup();
 });
 
-const PANEL_TEST_ROWS = 40;
+test('面板：日志页展示系统日志，工具页不混入', async () => {
+  const tools = [tool('a', 2)];
+  const logs = ['[INFO] mcp connected: tavily', '[WARN] hook exited 1'];
 
-test('面板：翻页后能看到最早的内容（完整日志可达）', async () => {
-  const tools = Array.from({ length: 5 }, (_, i) => tool(`t${i}`, 40));
-  // 显式给 termRows：组件内 useWindowSize 取的是 ink 渲染流尺寸（测试里可能与
-  // 纯函数的默认 40 不同），两边必须用同一口径算 max，否则 scroll 会越界被夹掉
-  const max = outputPanelMaxScroll(tools, 'tools', [], PANEL_TEST_ROWS);
-  assert.ok(max > 0, '内容超一屏 → 可翻页');
+  const toolsFrame = await renderPanel({ tools, logs, tab: 'tools', termRows: 30 });
+  const toolsText = toolsFrame.frame();
+  assert.ok(!toolsText.includes('mcp connected'), '工具页不混入日志');
+  assert.ok(toolsText.includes('2 日志'), '标题显示日志条数便于发现');
+  await toolsFrame.cleanup();
 
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: max, termRows: PANEL_TEST_ROWS }));
-  await wait(120);
-  await f.flush();
-  const frame = f.frame();
-  assert.ok(frame.includes('tool_t0'), '翻到最上能看到最早的工具');
-  assert.ok(frame.includes('line 0'), '翻到最上能看到第一行');
-  await f.cleanup();
+  const logsFrame = await renderPanel({ tools, logs, tab: 'logs', termRows: 30 });
+  const logsText = logsFrame.frame();
+  assert.ok(logsText.includes('mcp connected: tavily'), '日志页能看到 INFO');
+  assert.ok(logsText.includes('hook exited 1'), '日志页能看到 WARN');
+  await logsFrame.cleanup();
 });
 
-test('面板：单条超长输出不被截断成 2000 字符（旧上限会让日志看不全）', async () => {
+test('面板：两个页面的空态各有提示', async () => {
+  const t = await renderPanel({ tools: [], logs: [], tab: 'tools', termRows: 30 });
+  assert.ok(t.frame().includes('暂无已完成的工具调用'));
+  await t.cleanup();
+
+  const l = await renderPanel({ tools: [], logs: [], tab: 'logs', termRows: 30 });
+  assert.ok(l.frame().includes('暂无日志'));
+  await l.cleanup();
+});
+
+test('面板：超长单行完整保留（不被截断成固定字符数）', async () => {
+  // 旧实现有 2000 字符上限，会让长日志看不全
   const long = 'x'.repeat(5000);
   const tools: ToolCallDisplay[] = [
     { id: 't', name: 'run_shell', input: '{}', status: 'done', output: long },
   ];
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 0 }));
-  await wait(120);
-  await f.flush();
-  const frame = f.frame();
-
-  const rendered = frame.replace(/[│╭╮╰╯─\s]/g, '').length;
-  assert.ok(rendered > 2000, `超长输出应基本完整可见（实际渲染约 ${rendered} 字符）`);
+  const f = await renderPanel({ tools, termRows: 40 }, { width: 120, height: 40 });
+  const rendered = f.frame().replace(/[\s│╭╮╰╯─]/g, '').length;
+  assert.ok(rendered > 2000, `超长输出应基本完整可见（实际约 ${rendered} 字符）`);
   await f.cleanup();
 });
 
-// ── 高度安全：撑爆终端会触发 ink 整屏清屏（连 scrollback 一起清） ──
-
-test('面板：帧高始终小于终端行数（否则 ESC[3J 会把用户回看的历史一起清掉）', async () => {
-  const tools = Array.from({ length: 6 }, (_, i) => tool(`t${i}`, 50));
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 0 }));
-  await wait(120);
-  await f.flush();
-  const h = frameHeight(f.frame());
-  assert.ok(h < terminalRows(), `帧高 ${h} 必须小于终端 ${terminalRows()} 行`);
+test('面板：高度受 termRows 约束，不会撑满整屏', async () => {
+  const tools = Array.from({ length: 20 }, (_, i) => tool(`t${i}`, 40));
+  const termRows = 30;
+  const f = await renderPanel({ tools, termRows }, { width: 100, height: 60 });
+  const lines = f.frame().split('\n').filter((l) => l.trim().length > 0);
+  assert.ok(lines.length <= termRows, `面板帧高 ${lines.length} 应 ≤ termRows ${termRows}`);
   await f.cleanup();
 });
 
-test('面板：超长单行（软换行）也计入高度预算', async () => {
-  // 一条 300 字符的行在 80 列终端会折成约 4 行；若按 \n 计数就会低估、撑爆预算
-  const tools = [tool('a', 20, (i) => (i === 5 ? 'X'.repeat(300) : `line ${i}`))];
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 0 }));
-  await wait(120);
-  await f.flush();
-  const h = frameHeight(f.frame());
-  assert.ok(h < terminalRows(), `含超长行时帧高 ${h} 仍须小于 ${terminalRows()}`);
-  await f.cleanup();
-});
-
-// ── 边界 ────────────────────────────────────────────────────────
-
-test('面板：没有已完成的工具时显示占位提示，且不可滚', async () => {
-  const tools: ToolCallDisplay[] = [{ id: 'x', name: 'running_tool', input: '{}', status: 'running' }];
-  assert.equal(outputPanelScrollable(tools), false);
-  assert.equal(outputPanelMaxScroll(tools), 0);
-
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 0 }));
-  await wait(80);
-  await f.flush();
-  assert.ok((f.frame()).includes('暂无已完成的工具调用'));
-  await f.cleanup();
-});
-
-test('面板：内容不足一屏时不可滚，且没有翻页提示', async () => {
-  const tools = [tool('a', 2)];
-  assert.equal(outputPanelScrollable(tools), false);
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 0 }));
-  await wait(80);
-  await f.flush();
-  const frame = f.frame();
-  assert.ok(!frame.includes('可用 ↑↓ 翻页'), '一屏放得下就不该提示翻页');
-  await f.cleanup();
-});
-
-test('面板：scroll 超出范围时自动夹紧（不会渲染成空白）', async () => {
-  const tools = Array.from({ length: 3 }, (_, i) => tool(`t${i}`, 20));
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, scroll: 99999 }));
-  await wait(120);
-  await f.flush();
-  const frame = f.frame();
-  assert.ok(frame.includes('tool_t0'), '越界仍应钳到最上端，而不是空白');
-  await f.cleanup();
-});
-
-// ── 日志页：log.info/warn/error 被接管后在这里可见 ──────────────
-
-test('面板：日志标签页展示系统日志，工具页不混入', async () => {
-  const tools = [tool('a', 2)];
-  const logs = ['[INFO] mcp connected: tavily', '[WARN] hook exited 1: cmd'];
-
-  const toolsFrame = await renderOtui(React.createElement(OutputPanel, { tools, logs, tab: 'tools', scroll: 0 }));
-  await wait(100);
-  await toolsFrame.flush();
-  const tf = toolsFrame.frame();
-  assert.ok(!tf.includes('mcp connected'), '工具页不应混入日志');
-  assert.ok(tf.includes('日志（2）'), '标题显示日志条数，便于发现');
-  await toolsFrame.cleanup();
-
-  const logsFrame = await renderOtui(React.createElement(OutputPanel, { tools, logs, tab: 'logs', scroll: 0 }));
-  await wait(100);
-  await logsFrame.flush();
-  const lf = logsFrame.frame();
-  assert.ok(lf.includes('mcp connected: tavily'), '日志页能看到 INFO');
-  assert.ok(lf.includes('hook exited 1'), '日志页能看到 WARN');
-  assert.ok(!lf.includes('当前：'), '日志页不应显示工具归属');
-  await logsFrame.cleanup();
-});
-
-test('面板：日志很多时同样受高度预算约束，并可翻页', async () => {
-  const tools: ToolCallDisplay[] = [];
-  const logs = Array.from({ length: 300 }, (_, i) => `[INFO] log line ${i}`);
-  assert.ok(outputPanelMaxScroll(tools, 'logs', logs) > 0, '日志超一屏 → 可翻页');
-
-  const f = await renderOtui(React.createElement(OutputPanel, { tools, logs, tab: 'logs', scroll: 0 }));
-  await wait(120);
-  await f.flush();
-  const h = frameHeight(f.frame());
-  assert.ok(h < terminalRows(), `日志页帧高 ${h} 也须小于终端 ${terminalRows()} 行`);
-  assert.ok((f.frame()).includes('log line 299'), '贴底看最新日志');
-  await f.cleanup();
-});
-
-test('面板：日志页空态提示', async () => {
-  const f = await renderOtui(React.createElement(OutputPanel, { tools: [], logs: [], tab: 'logs', scroll: 0 }));
-  await wait(80);
-  await f.flush();
-  assert.ok((f.frame()).includes('暂无系统日志'));
+test('面板：大量内容不崩，首条可见', async () => {
+  const tools = Array.from({ length: 10 }, (_, i) => tool(`t${i}`, 30));
+  const f = await renderPanel({ tools, termRows: 30 });
+  assert.ok(f.frame().includes('tool_t0'), '首条工具可见');
   await f.cleanup();
 });

@@ -4,7 +4,7 @@ import React from 'react';
 import { renderOtui } from './helpers/otui-test.js';
 import { App } from '../src/ui/app.js';
 import { AppController } from '../src/ui/controller.js';
-import { buildWizardResult, wizardNavTotal, wizardProgress } from '../src/ui/wizard.js';
+import { buildWizardResult, wizardNavTotal, wizardProgress } from '../src/ui/views/wizard.js';
 import { Agent } from '../src/agent.js';
 import type { ModelInput, ModelOutput } from '../src/backend.js';
 

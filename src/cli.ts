@@ -430,8 +430,6 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         });
       },
       refreshCapability,
-      // 鼠标滚轮：render 层解析后经 controller 转给 App 的视口
-      onMouseWheel: (delta) => ctrl.emitMouseWheel(delta),
     },
     initialOutput,
   );
