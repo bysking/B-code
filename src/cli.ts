@@ -383,7 +383,15 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
    * 不 await 直接 `process.exit()` 会让那些清理序列来不及写出——
    * 终端停在鼠标追踪模式，用户回到 shell 后一动鼠标就是满屏的 `35;41;30M`。
    */
-  const quit = async (code: number): Promise<void> => {
+  /**
+   * @param afterExit 终端恢复后要补打的内容（one-shot 场景用）。
+   *
+   * 为什么需要：TTY 下 UI 渲染在**备用屏**里，退出备用屏后屏幕上什么都没有。
+   * `bcode "今天是几号"` 这种 one-shot 调用，用户敲完命令期望直接看到答案，
+   * 结果回到 shell 是空的——答案随备用屏一起被丢了。
+   * 所以在退出后把最终回复重新打到真实终端上。
+   */
+  const quit = async (code: number, afterExit?: string): Promise<void> => {
     /**
      * 顺序很重要：**先卸载再打印提示**。
      *
@@ -395,6 +403,8 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
      * 终端状态完全恢复后才返回；之后写 stdout 才是打在用户真实终端上的。
      */
     await unmount?.();
+    // 先补打 one-shot 的结果（用户主要想看这个），再打 resume 提示
+    if (afterExit) process.stdout.write(`${afterExit}\n`);
     printResumeHint(sessionId);
     closeAllMcpConnections();
     process.exit(code);
@@ -462,7 +472,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         ctrl.pushUser(displayText);
         await agent.chat({ text, images });
         await saveSession(agent.history(), sessionId);
-        if (oneShot) void quit(0);
+        if (oneShot) void quit(0, finalAssistantText(agent.history()));
         return;
       }
 
@@ -579,7 +589,8 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       if (args.loop > 0) {
         setTimeout(() => void handle(args.instruction ?? ''), args.loop * 1000);
       } else if (oneShot) {
-        void quit(0);
+        // one-shot：把最终回复带回真实终端（UI 画在备用屏里，退出后会消失）
+        void quit(0, finalAssistantText(agent.history()));
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
