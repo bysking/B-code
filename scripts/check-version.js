@@ -14,6 +14,9 @@
  * SUPPORTED / scripts/pack-platform.js 的 supported），漏掉一处就会出现
  * "发了包但启动器不认"的错配，所以一并校验。
  *
+ * Node 最低版本同理散在两处（package.json 的 engines.node / bin/bcode.js
+ * 的 MIN_NODE），一并校验。
+ *
  * 用法：
  *   node scripts/check-version.js            # 只校验内部一致性
  *   node scripts/check-version.js v3.0.0     # 额外校验与 git tag 一致
@@ -112,6 +115,19 @@ if (tag) {
   if (tag !== expected) {
     errors.push(`git tag 是 ${tag}，但 package.json 版本是 ${pkg.version}（应为 ${expected}）`);
   }
+}
+
+// ── 7. Node 版本要求：bin/bcode.js 的 MIN_NODE 与 package.json 的 engines.node ──
+// 启动器的运行时探查和 engines 是同一件事的两处声明：engines 决定 npm 装不装，
+// MIN_NODE 决定装了之后跑不跑。只改一处就会出现"npm 放行、运行时报错"（或反之）。
+const minNode = /const MIN_NODE = '([^']+)'/.exec(launcher);
+const enginesNode = pkg.engines?.node ?? '';
+if (!minNode) {
+  errors.push('bin/bcode.js 里找不到 MIN_NODE');
+} else if (enginesNode !== `>=${minNode[1]}`) {
+  errors.push(
+    `package.json 的 engines.node 是 ${enginesNode || '(空)'}，应为 >=${minNode[1]}（与 bin/bcode.js 的 MIN_NODE 一致）`,
+  );
 }
 
 if (errors.length > 0) {

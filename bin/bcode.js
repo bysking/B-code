@@ -23,6 +23,40 @@ import os from 'node:os';
 
 const require = createRequire(import.meta.url);
 
+/** 启动器运行在用户的 Node 上，低于此版本不保证行为一致 */
+const MIN_NODE = '24.22.2';
+
+/**
+ * 比较版本号，返回 -1 / 0 / 1。
+ *
+ * 只比较 主.次.修订，预发布后缀（-rc.1 等）直接忽略：这里只做准入判断，
+ * 不需要 semver 的完整语义，为它引一个依赖不值得。
+ */
+function compareVersion(a, b) {
+  const pa = a.split('-')[0].split('.').map(Number);
+  const pb = b.split('-')[0].split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+// ── 版本探查：必须放在最前 ──
+// 后面的 require.resolve / spawn 在旧版本 Node 上的失败信息是"模块找不到"之类，
+// 与真实原因（Node 太旧）毫无关系，排查成本高。先在入口拦住。
+const currentNode = process.versions.node;
+if (compareVersion(currentNode, MIN_NODE) < 0) {
+  console.error(`\n  bcode 需要 Node v${MIN_NODE} 或更高版本，当前是 v${currentNode}\n`);
+  console.error('  请升级 Node 后重试，任选一种：');
+  console.error('    官网下载   https://nodejs.org/');
+  console.error('    nvm        nvm install 24 && nvm use 24');
+  console.error('    fnm        fnm install 24 && fnm use 24');
+  console.error('    macOS      brew install node@24');
+  console.error('    Windows    winget install OpenJS.NodeJS\n');
+  process.exit(1);
+}
+
 const platform = process.platform;
 const arch = process.arch;
 

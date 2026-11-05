@@ -1,7 +1,7 @@
 {
   "name": "@bysking/b-code",
-  "version": "3.0.3",
-  "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里",
+  "version": "3.0.5",
+  "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里 要求nodejs版本>=24.22.2， 推荐>=26.2.0",
   "type": "module",
   "main": "lib/index.js",
   "bin": {
@@ -23,7 +23,7 @@
     "build:all-check": "node build-bun.js --all-check"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24.22.2"
   },
   "repository": {
     "type": "git",
@@ -67,10 +67,10 @@
     "typescript": "^7.0.2"
   },
   "optionalDependencies": {
-    "@bysking/b-code-darwin-arm64": "3.0.3",
-    "@bysking/b-code-darwin-x64": "3.0.3",
-    "@bysking/b-code-linux-x64": "3.0.3",
-    "@bysking/b-code-win32-x64": "3.0.3"
+    "@bysking/b-code-darwin-arm64": "3.0.5",
+    "@bysking/b-code-darwin-x64": "3.0.5",
+    "@bysking/b-code-linux-x64": "3.0.5",
+    "@bysking/b-code-win32-x64": "3.0.5"
   },
   "os": [
     "darwin",
