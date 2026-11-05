@@ -23,9 +23,10 @@ on:
 #   - 5 个包（主包 + 4 平台包）都要在 npmjs.com 各自配置一次 Trusted Publisher，
 #     Workflow filename 一律填 release.yml
 #
-# 首次发布例外：npm 不允许用 OIDC 发布一个**尚未存在**的包（npm/cli#8544 仍 open）。
-# 所以 4 个平台包的 0.1 版本必须先用 token 或本地手动发一次，之后才能走 OIDC。
-# 下面的脚本保留了 NPM_TOKEN 作为回退：secret 存在就用它，不存在就走 OIDC。
+# 全新包的限制：npm 不允许用 OIDC 发布一个**尚未存在**的包（npm/cli#8544 仍 open）。
+# 4 个平台包已通过发布 1.0.0 占位版本解决此事，当前所有包都走 OIDC、无需 token。
+# 将来新增平台包时才需要再次「先发占位版本」。
+# 脚本保留了 NPM_TOKEN 作为回退：secret 存在就用它，不存在就走 OIDC（当前状态）。
 #
 # 每个平台都必须在该平台上原生编译：
 # OpenTUI 的动态 import 让打包器把所有平台的 @opentui/core-<platform> 都当必需依赖，
@@ -113,11 +114,25 @@ jobs:
 
       - run: node scripts/pack-platform.js
 
+      # ⚠️ 必须打包成 tar 再上传：upload-artifact 用 zip 传输，
+      # **不保留 Unix 权限**——所有目录变 755、所有文件变 644（官方文档 Permission Loss 一节）。
+      # 直接上传目录会让二进制的 +x 丢失，用户安装后执行报 EACCES。
+      # 只有 archive:false 上传单个 tar 才能保住权限位。
+      - name: Tar platform package (preserve exec bit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 输出到 dist-pkg/ 而不是被压缩目录内部，避免 tar 把自己也打进去
+          tar -czf "dist-pkg/${{ matrix.platform }}.tar.gz" \
+            -C "dist-pkg/${{ matrix.platform }}" .
+          tar -tvzf "dist-pkg/${{ matrix.platform }}.tar.gz"
+
       - uses: actions/upload-artifact@v4
         with:
           name: bcode-${{ matrix.platform }}
-          # 上传目录内容 → 下载后落在 dist-pkg/bcode-<platform>/{bcode,package.json}
-          path: dist-pkg/${{ matrix.platform }}/
+          path: dist-pkg/${{ matrix.platform }}.tar.gz
+          # 默认 archive:true 会再压一层 zip；这里已是 tar.gz，直接存原文件保住权限
+          archive: false
           retention-days: 7
 
   # ── 发布各平台包 ──
@@ -140,6 +155,51 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      # 解开 build job 上传的 tar（保住权限位），还原成 dist-pkg/bcode-<platform>/
+      - name: Extract platform packages (restore exec bit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in dist-pkg/*/*.tar.gz; do
+            [ -f "$f" ] || continue
+            platform=$(basename "$(dirname "$f")")
+            target="dist-pkg/$platform"
+            echo "解包 $f → $target"
+            rm -rf "$target"
+            mkdir -p "$target"
+            tar -xzf "$f" -C "$target"
+            rm -f "$f"
+          done
+
+          # 双保险：无论 tar 是否正确保留，显式重设二进制可执行位并校验
+          for dir in dist-pkg/bcode-*/; do
+            for exe in "$dir"bcode "$dir"bcode.exe; do
+              [ -f "$exe" ] || continue
+              chmod +x "$exe"
+            done
+          done
+
+          echo "--- 解包结果与权限 ---"
+          ls -l dist-pkg/bcode-*/ | grep -vE '^total'
+
+      - name: Verify exec bit preserved
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          for dir in dist-pkg/bcode-*/; do
+            platform=$(basename "$dir")
+            exe="$dir/bcode"
+            [[ "$platform" == *win32* ]] && exe="$dir/bcode.exe"
+            [ -f "$exe" ] || { echo "::error::$platform 缺少二进制 $exe"; fail=1; continue; }
+            if [ ! -x "$exe" ]; then
+              echo "::error::$platform 的二进制没有执行位（安装后会 EACCES）"
+              fail=1
+            fi
+          done
+          [ "$fail" = "0" ] || exit 1
+          echo "✅ 所有平台二进制均具备执行位"
 
       - name: Verify npm supports trusted publishing
         run: |

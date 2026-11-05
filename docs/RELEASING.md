@@ -6,16 +6,26 @@
 发布对象是 5 个 npm 包：
 
 
-| 包                             | 内容                                          | registry 状态           |
-| -------------------------------- | ----------------------------------------------- | ------------------------- |
-| `@bysking/b-code`              | `bin/bcode.js` 启动器 + `lib/index.js`，~30KB | 已存在（2.x 为 ink 版） |
-| `@bysking/b-code-darwin-arm64` | macOS Apple Silicon 二进制，~75MB             | **3.0.0 前不存在**      |
-| `@bysking/b-code-darwin-x64`   | macOS Intel 二进制                            | **3.0.0 前不存在**      |
-| `@bysking/b-code-linux-x64`    | Linux glibc 二进制                            | **3.0.0 前不存在**      |
-| `@bysking/b-code-win32-x64`    | Windows 二进制                                | **3.0.0 前不存在**      |
+| 包                             | 内容                                          | registry 状态                          |
+| -------------------------------- | ----------------------------------------------- | ---------------------------------------- |
+| `@bysking/b-code`              | `bin/bcode.js` 启动器 + `lib/index.js`，~30KB | 已存在（latest 2.0.2，ink 版）         |
+| `@bysking/b-code-darwin-arm64` | macOS Apple Silicon 二进制，~75MB             | 已存在（`1.0.0` 为占位包，无二进制）   |
+| `@bysking/b-code-darwin-x64`   | macOS Intel 二进制                            | 同上                                     |
+| `@bysking/b-code-linux-x64`    | Linux glibc 二进制                            | 同上                                     |
+| `@bysking/b-code-win32-x64`    | Windows 二进制                                | 同上                                     |
 
 为什么拆成 5 个包：二进制 ~75MB/平台，塞进一个包会让用户下 300MB。拆开后 npm 用
 `os`/`cpu` 字段只装匹配的那一份。
+
+### 关于 4 个平台包的 `1.0.0` 占位版本
+
+npm 的 Trusted Publishing **只能给已存在的包配置**，所以这 4 个平台包在实现功能之前，
+先手工发布了 `1.0.0` 占位版本——只含 `README.md` + `package.json`（~1KB），
+**不含任何可执行文件**，仅用于占住包名、让 OIDC 配置成为可能。
+
+主包的 `optionalDependencies` 指向 `3.0.1`，与占位的 `1.0.0` 不匹配，所以用户
+**不会**装上占位包——这是预期行为。等真实版本发布后，占位版本自然被取代（无法删除，
+npm 不允许复用已发布的版本号，但它不会被安装）。
 
 ---
 
@@ -79,40 +89,41 @@ Workflow filename:    release.yml
 1. **Workflow filename 只填文件名**，不含路径、不能写成 `.github/workflows/release.yml`，但**必须带 `.yml` 后缀**。
 2. 新配置**必须在 2 天内完成首次成功发布**，否则配置过期，只能删掉重建。
 
-### 首次发布是例外——必须用 token
+### 全新包第一次发布：唯一需要 token 的场景
 
 npm 目前**不支持用 OIDC 发布一个尚不存在的包**
 （[npm/cli#8544](https://github.com/npm/cli/issues/8544)，仍 open；PyPI 支持，npm 不支持）。
+**包一旦存在，之后所有版本都能走 OIDC。**
 
-4 个平台包在 3.0.0 之前从未发布过（registry 全是 404），所以**首次发版必须有 token**。
+这 4 个平台包已经通过发布 `1.0.0` 占位包解决了这个问题（见文首），所以**当前不需要 token**。
+只有将来新增平台包（比如 `linux-x64-musl`）时才需要重走一遍。
 
-workflow 因此同时支持两条路，按 secret 是否存在自动选择：
+那一步的做法：发一个只含 README + `package.json` 的占位版本，把包名占住即可。
 
+workflow 同时支持两条路，按 secret 是否存在自动选择：
 
 | 配置                    | 行为                                                     |
 | ------------------------- | ---------------------------------------------------------- |
 | 配了 `NPM_TOKEN` secret | 写入 `.npmrc`，用它发布。OIDC 仍会优先尝试，token 是回退 |
-| 没配 `NPM_TOKEN` secret | 纯 OIDC                                                  |
+| 没配 `NPM_TOKEN` secret | 纯 OIDC（**当前状态**）                                  |
 
-**过渡步骤：**
+**新增平台包时的完整步骤：**
 
-1. 首次发版前，在 npmjs.com → Access Tokens 创建 **Granular Access Token**，必须：
+1. 在 npmjs.com → Access Tokens 创建 **Granular Access Token**，必须：
    - **勾选 `Bypass two-factor authentication`**（默认是**关闭**的，不勾会报 `EOTP`，见下）
    - Permissions 选 `Read and write`
-   - Packages and scopes 选 `All packages`（或至少覆盖 `@bysking` 那 5 个包）
+   - Packages and scopes 选 `All packages`（或至少覆盖 `@bysking` 下的包）
    - 设一个够用的过期时间（至少 1 天）
-2. 把它配到仓库 Settings → Secrets 的 `NPM_TOKEN`
-3. 打 tag，确认 4 个平台包都发出去、主包最后上线
-4. 5 个包都进 npmjs.com 配好 Trusted Publisher
-5. **删掉 `NPM_TOKEN` secret**——之后自动走纯 OIDC
-6. 下一版验证一次，确认日志里有 `🔐 未配置 NPM_TOKEN，将使用 Trusted Publishing (OIDC)`
+2. 发布占位包（`package.json` + 一个说明用途的 README，不要放二进制）
+3. 到该包的 Settings → Trusted Publisher 配好 OIDC
+4. **吊销 token**——它是一次性的，不要留在账号里
 
 > **为什么必须勾 Bypass 2FA**：npm 只保留 granular token，而它的 `Bypass 2FA` **默认关闭**。
 > 关闭状态下用它发布，npm 会要求输入一次性密码（`EOTP`），而 CI 没有交互终端，必然失败。
 > legacy/classic token 已被 npm 移除，不要照着旧教程找「Automation token」。
 >
 > 另外，Bypass-2FA 的直接发布能力**正在被 npm 废弃**（官方文档已标注 deprecated，未来
-> 只能走 staged publishing）。所以 token 只是首次发布的临时手段，尽早切 OIDC。
+> 只能走 staged publishing）。这也是尽早切 OIDC 的另一个理由。
 
 ---
 
@@ -137,6 +148,39 @@ CI 矩阵存在的唯一理由。
 
 `macos-13` 早已移除，`macos-14` 的全部镜像于 **2026-11-02 退役**
 （actions/runner-images#15226）。若某天 job 卡在排队不动，先查标签是否又过期了。
+
+### 跨 job 传递二进制：必须用 tar，不能直接传目录
+
+`build` job 编译完后要通过 artifact 传给 `publish-platforms` job，这一步**必须打包成
+tar 再上传**（`archive: false`）。原因见
+[upload-artifact 官方文档的 Permission Loss](https://github.com/actions/upload-artifact#permission-loss)：
+
+> File permissions are not maintained during zipped artifact upload.
+> All directories will have `755` and all files will be `644`.
+
+也就是说，`pack-platform.js` 里 `chmod 755` 设好的执行位，会被这次 zip 中转**静默抹掉**。
+v3.0.1 首次发布时就踩了这个坑：registry 上的 tarball 里 `bcode` 是 `644`，用户
+`pnpm add -g` 安装后执行 `bcode` 直接报：
+
+```
+启动 bcode 失败：spawn .../bcode EACCES
+```
+
+这类问题**只在用户机器上才暴露**——CI 全绿、`npm publish` 成功、registry 也有包，
+但装下来就是跑不了。当前的三重防线：
+
+| 防线 | 位置 | 作用 |
+|---|---|---|
+| tar 打包上传 + `archive: false` | `build` job | 从源头保住权限位 |
+| 解包后 `chmod +x` + `Verify exec bit preserved` | `publish-platforms` job | 双保险，并在发布前硬校验 |
+| `pack-platform.js` 里的 mode 检查 | 本地/CI 打包时 | 打包后立即发现缺少 `+x`，不等用户报错 |
+
+排查时可自查已发布的包：
+
+```bash
+npm pack @bysking/b-code-darwin-arm64@<版本> && tar -tvzf *.tgz | grep bcode
+# 期望 -rwxr-xr-x，若是 -rw-r--r-- 说明执行位丢了
+```
 
 ---
 
@@ -186,8 +230,10 @@ node build-bun.js --all-check
 | 症状                                                            | 原因                                                  | 处理                                                  |
 | ----------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- |
 | **`EOTP` / `This operation requires a one-time password`**       | token 没勾 `Bypass two-factor authentication`（granular token 默认不勾），npm 要求交互式输 OTP，CI 无终端 | 重新创建 token 并**勾上 Bypass 2FA**；或改用 OIDC（已发布的包都支持） |
-| `E404` / `ENEEDAUTH`，但 token 明明是对的                       | 该包尚未存在，或 Trusted Publisher 没配到**这个**包上 | 首次发布用 token；其余检查 5 个包是否都配了           |
-| 日志里 `Failed token exchange ... package not found`            | 同上，OIDC 发不了不存在的包                           | 用 token 发首次版本                                   |
+| `E404` / `ENEEDAUTH`，但 token 明明是对的                       | Trusted Publisher 没配到**这个**包上，或配了但包名/仓库/文件名填错 | 逐个检查 5 个包的 Trusted Publisher 配置             |
+| 日志里 `Failed token exchange ... package not found`            | 该包在 registry 上**根本不存在**                     | 发一个 `1.0.0` 占位包占住包名（见「全新包第一次发布」） |
+| `npm publish` 成功但 `curl` 仍是 404                              | npm 索引延迟，正常现象                               | 等几分钟；`+ pkg@ver` 已打印就是发出去了             |
+| **用户装完执行报 `spawn ... EACCES`**                           | 发布的 tarball 里二进制是 `644`，执行位被 artifact 的 zip 中转抹掉 | 见「跨 job 传递二进制」；用 `tar -tvzf` 自查已发布包 |
 | OIDC 悄悄失效、回退成 token                                     | npm < 11.5.1，或给 `setup-node` 传了 `registry-url`   | 用 Node 24；去掉 `registry-url`                       |
 | `403 You cannot publish over the previously published versions` | 版本号没改就重跑                                      | workflow 已加幂等跳过，若仍报错说明该版本已被别人占用 |
 | job 一直排队不动                                                | runner 标签已退役                                     | 见「runner 标签」一节                                 |

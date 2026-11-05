@@ -224,10 +224,13 @@ git tag v3.0.0 && git push origin v3.0.0
 CI 用 Bun 跑（`bun install --frozen-lockfile` / `bun test` / `node build-bun.js`），
 **不是 pnpm** —— OpenTUI 的原生 FFI 只在 Bun 运行时可用。
 
-发布走 **npm Trusted Publishing (OIDC)**，不用长期 token。但有三个前提（npm CLI ≥ 11.5.1、
-5 个包各配一次、不给 `setup-node` 传 `registry-url`），且**首次发布必须用 token**——npm
-不允许用 OIDC 发布尚不存在的包，而 4 个平台包至今未发布过。完整机制、配置步骤与排错表
-见 **[docs/RELEASING.md](./docs/RELEASING.md)**。
+发布走 **npm Trusted Publishing (OIDC)**，不用长期 token。前提是 npm CLI ≥ 11.5.1、
+不给 `setup-node` 传 `registry-url`，以及**5 个包各配一次 Trusted Publisher**。
+完整机制、配置步骤与排错表见 **[docs/RELEASING.md](./docs/RELEASING.md)**。
+
+> 4 个平台包已发布 `1.0.0` 占位版本（只含 README，无二进制）。这是为了绕开
+> 「OIDC 无法发布尚不存在的包」的限制——包存在后才能配置 Trusted Publishing。
+> 主包 `optionalDependencies` 指向的版本与占位版本不同，用户不会装到它。
 
 **主包只是启动器**（`bin/bcode.js`，~3KB，零依赖），真正的二进制在 4 个平台包里。
 所以 `dependencies` 现在是空的：源码里用到的库都已移入 `devDependencies`，只参与

@@ -110,6 +110,19 @@ function main() {
 
   writeFileSync(join(outDir, 'package.json'), JSON.stringify(pkgJson, null, 2) + '\n');
 
+  // 打包后立刻校验执行位。npm 打包会保留该位，但 CI 里任何一次
+  // zip 中转（如 actions/upload-artifact，官方明确说不保留 Unix 权限）
+  // 都会把它抹成 644，用户安装后执行就报 EACCES —— 这类问题只有装到用户机器
+  // 才会暴露，所以必须在这里就拦住。
+  if (platform !== 'win32') {
+    const mode = statSync(join(outDir, binName)).mode & 0o777;
+    if ((mode & 0o111) === 0) {
+      console.error(`❌ ${binName} 缺少执行位（mode=${mode.toString(8)}）`);
+      console.error('   用户安装后运行会报 EACCES。检查构建流程是否经过 zip 中转。');
+      process.exit(1);
+    }
+  }
+
   // 用 statSync 而非 du：Windows runner 上 du 不一定存在
   const sizeMb = (statSync(join(outDir, binName)).size / 1024 / 1024).toFixed(1);
 

@@ -16,6 +16,15 @@
 
 ### Fixed
 
+- **v3.0.1 的二进制在用户机器上执行报 `EACCES`**：发布的 tarball 里 `bcode` 权限是
+  `644` 而非 `755`。根因是 `actions/upload-artifact` 用 zip 跨 job 传递产物，
+  **官方明确不保留 Unix 权限**（所有文件变 `644`），`pack-platform.js` 里设的
+  `chmod 755` 被静默抹掉。这类问题 CI 全绿、发布成功、registry 有包，只有用户安装后
+  才会暴露。
+  - `build` job 改为 tar 打包后 `archive: false` 上传，`publish-platforms`
+    解包并显式 `chmod +x`，再加一步 `Verify exec bit preserved` 硬校验。
+  - `pack-platform.js` 打包后立即检查 mode 含 `0o111`，本地就把问题挡住。
+  - 已发布的 `3.0.1` 需要重新发一个版本修复（npm 不允许覆盖已发布版本）。
 - **两个测试只在 CI（Linux）上失败**——都是测试自身对平台/速度的脆弱假设，与业务代码无关：
   - `grep_search 返回 path:行号:内容 且命中正确行`：断言 `out.startsWith('a.txt:2:')`，
     但它搜的是**共享的** `dir`，而前面 `edit_file` 的用例已往该目录写入同样含
@@ -54,9 +63,10 @@
   npm 自动换取短时令牌并生成 provenance。CI 的 Node 从 22 升到 24（Node 22 自带
   npm 10.9.x，低于 Trusted Publishing 要求的 11.5.1），并加了一步硬校验防止
   回退到旧 npm 后静默失效。
-  - **首次发布仍需 token**：npm 不允许用 OIDC 发布尚不存在的包（npm/cli#8544 仍 open），
-    4 个平台包的 0.1 版本必须先手动发一次。workflow 保留 `NPM_TOKEN` 作回退：
-    secret 存在则使用，不存在则走 OIDC。
+  - **全新包的限制已解除**：npm 不允许用 OIDC 发布尚不存在的包（npm/cli#8544 仍 open），
+    因此 4 个平台包先发布了 `1.0.0` 占位版本（仅 README + package.json，无二进制），
+    占住包名以便配置 Trusted Publishing。现所有包均可走 OIDC，实测无需 token。
+    workflow 仍保留 `NPM_TOKEN` 回退，供将来新增平台包时使用。
   - 发布步骤改为自建 `.npmrc` 且**不给 `setup-node` 传 `registry-url`**——后者会写入
     占位 token，OIDC 交换失败后回退到假 token，报出与真实原因无关的 E404/ENEEDAUTH。
   - 发布循环加幂等：已存在的版本跳过，避免"4 个平台发了 2 个后失败"的重跑从头报错。
