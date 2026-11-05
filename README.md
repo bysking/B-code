@@ -145,6 +145,10 @@ Bun 运行时已嵌入。
 
 npm 通过 `os`/`cpu` 字段自动只装匹配的平台包，用户只下载自己那份（~75MB）。
 
+Alpine 等 musl 发行版暂未分发：`scripts/pack-platform.js` 已能生成
+`linux-x64-musl` 变体，但需要先在主包 `optionalDependencies`、`bin/bcode.js`
+和 CI 矩阵里一并登记才会生效。
+
 ### 渲染引擎
 
 基于 [OpenTUI](https://github.com/anomalyco/opentui)（Zig 原生核心），按它的
@@ -195,15 +199,43 @@ bun test
 ### 构建
 
 ```bash
-npm run build                   # 当前平台可执行文件 → dist/bcode（~75MB）
+bun run build                   # 当前平台可执行文件 → dist/bcode（~75MB）
 node scripts/pack-platform.js   # 打成可发布的平台包 → dist-pkg/<platform>/
-npm run build:all-check         # 查看各平台构建前置条件
+bun run build:all-check         # 查看各平台构建前置条件
 ```
 
 **各平台必须原生编译**：OpenTUI 的动态 import 让打包器把所有平台的
 `@opentui/core-<platform>` 都当必需依赖，而这些包带 `os`/`cpu` 字段，
 npm 只允许装当前平台的 → 交叉编译会因缺包失败。全平台发布由
 `.github/workflows/release.yml` 的 CI 矩阵完成。
+
+### 发布
+
+```bash
+# 1. 改 package.json 的 version，并把 optionalDependencies 的 4 行平台包版本同步
+# 2. CHANGELOG 里把 [Unreleased] 移到新版本小节
+# 3. 打 tag 触发 CI（test → build 矩阵 → 平台包 → 主包）
+git tag v3.0.0 && git push origin v3.0.0
+```
+
+也可以在 Actions 页面**手动触发**（`workflow_dispatch`，选 `main` 分支），勾 `dry_run`
+可先只跑构建与校验、不发布。
+
+CI 用 Bun 跑（`bun install --frozen-lockfile` / `bun test` / `node build-bun.js`），
+**不是 pnpm** —— OpenTUI 的原生 FFI 只在 Bun 运行时可用。
+
+发布走 **npm Trusted Publishing (OIDC)**，不用长期 token。但有三个前提（npm CLI ≥ 11.5.1、
+5 个包各配一次、不给 `setup-node` 传 `registry-url`），且**首次发布必须用 token**——npm
+不允许用 OIDC 发布尚不存在的包，而 4 个平台包至今未发布过。完整机制、配置步骤与排错表
+见 **[docs/RELEASING.md](./docs/RELEASING.md)**。
+
+**主包只是启动器**（`bin/bcode.js`，~3KB，零依赖），真正的二进制在 4 个平台包里。
+所以 `dependencies` 现在是空的：源码里用到的库都已移入 `devDependencies`，只参与
+编译期打包、不随主包分发。改 `package.json` 的 version 时漏改平台包版本，npm 对
+optionalDependencies 的解析失败是静默的，用户会装成功却跑不起来——`scripts/check-version.js`
+（已挂到 `prepublishOnly` 和 CI）会拦下这种漂移，同时校验平台清单在
+`optionalDependencies` / `bin/bcode.js` / `lib/index.js` / `scripts/pack-platform.js`
+四处是否一致。
 
 ## 权限与模式
 
@@ -543,8 +575,8 @@ bun run build      # 编译单文件可执行程序 → dist/bcode（当前平�
 ./dist/bcode       # 验证产物
 ```
 
-发布前 `prepublishOnly` 会自动跑类型检查；实际构建由
-`.github/workflows/release.yml` 的 CI 矩阵在各平台原生完成
+发布前 `prepublishOnly` 会自动跑类型检查与版本一致性校验（详见「[构建](#构建)」）；
+实际构建由 `.github/workflows/release.yml` 的 CI 矩阵在各平台原生完成
 （OpenTUI 的跨平台原生包无法在单机上交叉编译）。
 
 ## License

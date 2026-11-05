@@ -3,12 +3,13 @@
   "version": "3.0.0",
   "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里",
   "type": "module",
-  "main": "dist/cli.mjs",
+  "main": "lib/index.js",
   "bin": {
     "bcode": "./bin/bcode.js"
   },
   "files": [
-    "bin"
+    "bin",
+    "lib"
   ],
   "scripts": {
     "dev": "bun src/index.ts",
@@ -17,7 +18,8 @@
     "test": "bun test --timeout 20000",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
-    "prepublishOnly": "npm run typecheck",
+    "check:version": "node scripts/check-version.js",
+    "prepublishOnly": "npm run typecheck && npm run check:version",
     "build:all-check": "node build-bun.js --all-check"
   },
   "engines": {
@@ -44,7 +46,8 @@
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
     "@devhub-io/latex-to-unicode": "^2.0.1",
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -56,9 +59,7 @@
     "marked-terminal": "^6.2.0",
     "react": "^19.3.1",
     "undici": "^6.28.0",
-    "wrap-ansi": "^10.0.1"
-  },
-  "devDependencies": {
+    "wrap-ansi": "^10.0.1",
     "@types/bun": "^1.4.4",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",

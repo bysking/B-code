@@ -35,7 +35,7 @@ registry.register({
 |----|--------|
 | ① | 实现/包装一个 async `(input) => string` 函数 |
 | ② | `registry.register({...})` 一行（名称/描述/schema/mode/handler） |
-| ③ | `pnpm typecheck && pnpm test` |
+| ③ | `bun run typecheck && bun test` |
 
 > **MCP 工具不需要第 ① 步**：`.claude/mcp.json` 加个 server，启动自动前缀注册 `mcp__server__tool`，模型立即可用（零代码扩展）。
 
@@ -62,7 +62,7 @@ export function createBackend(): ModelBackend {
 |----|--------|
 | ① | 实现 `ModelBackend`（1 方法 `call`），返回归一化为 Anthropic content 形状 |
 | ② | `createBackend()` 按 env 加分支 |
-| ③ | `pnpm dev "hello"` 冒烟 + 回归 |
+| ③ | `bun run dev "hello"` 冒烟 + 回归 |
 
 ## 3. 换记忆 / 上下文 / 权限策略
 
@@ -121,8 +121,8 @@ user-invocable: true
 ## 5. 完成后必跑
 
 ```bash
-pnpm typecheck && pnpm test          # 契约与回归
-pnpm dev "冒烟指令"                    # 端到端
+bun run typecheck && bun test          # 契约与回归
+bun run dev "冒烟指令"                    # 端到端
 ```
 
 > **写完 EXTENDING.md 本身暴露了一个事实**：加能力最贵的不再是代码，而是"描述清楚干什么 + 权限 mode 想清楚"——这两样写对了，其余全是模板。

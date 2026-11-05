@@ -93,8 +93,8 @@ function main() {
   if (args.includes('--all-check')) {
     console.log('各平台构建前置条件：\n');
     for (const [os, arch, note] of [
-      ['darwin', 'arm64', 'macos-14 (Apple Silicon)'],
-      ['darwin', 'x64', 'macos-13 (Intel)'],
+      ['darwin', 'arm64', 'macos-15 (Apple Silicon)'],
+      ['darwin', 'x64', 'macos-15-intel (Intel)'],
       ['linux', 'x64', 'ubuntu-latest'],
       ['linux', 'x64-musl', 'ubuntu-latest + musl toolchain'],
       ['win32', 'x64', 'windows-latest'],

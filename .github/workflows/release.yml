@@ -5,10 +5,37 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只跑构建与校验，不发布到 npm'
+        type: boolean
+        default: false
 
+# 两种触发方式都支持：
+#   - push tag（v*）   → 自动化发版，tag 必须与 package.json 版本一致
+#   - workflow_dispatch → 手动从分支发版（tag 校验自动跳过），可勾 dry_run 先演练
+#
+# 认证方式：npm Trusted Publishing（OIDC），不依赖长期 token。
+#   - 需要 job 级 `permissions: id-token: write`
+#   - 需要 npm CLI >= 11.5.1 → Node 24 自带 11.19.x（Node 22 只带 10.9.x，不够）
+#   - 不要给 setup-node 传 registry-url：它会往 .npmrc 写入占位 token，
+#     OIDC 交换失败后会回退到这个假 token，报一个与真实原因无关的 E404/E401
+#   - 5 个包（主包 + 4 平台包）都要在 npmjs.com 各自配置一次 Trusted Publisher，
+#     Workflow filename 一律填 release.yml
+#
+# 首次发布例外：npm 不允许用 OIDC 发布一个**尚未存在**的包（npm/cli#8544 仍 open）。
+# 所以 4 个平台包的 0.1 版本必须先用 token 或本地手动发一次，之后才能走 OIDC。
+# 下面的脚本保留了 NPM_TOKEN 作为回退：secret 存在就用它，不存在就走 OIDC。
+#
 # 每个平台都必须在该平台上原生编译：
 # OpenTUI 的动态 import 让打包器把所有平台的 @opentui/core-<platform> 都当必需依赖，
 # 而这些包带 os/cpu 字段，npm 只允许安装匹配当前机器的 → 交叉编译会失败。
+#
+# 依赖管理统一用 Bun：OpenTUI 的原生 FFI 只在 Bun 运行时可用，
+# 测试（bun test）与编译（bun build --compile）都要求 Bun，故不使用 pnpm。
+
+permissions:
+  contents: read
 
 jobs:
   # ── 先跑测试，失败就不必浪费 4 个平台的编译时间 ──
@@ -16,14 +43,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14   # OpenTUI 要求 >= 1.3.14
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
+          node-version: 24
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test --timeout 20000
+
+  # ── 版本号一致性：平台包版本由主包 version 派生，漂移会让 npm 装不上 ──
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # tag 触发时校验 tag 与版本号一致；手动触发时 GITHUB_REF_NAME 是分支名，
+      # 传空串跳过 tag 校验（其余一致性校验照常跑）。
+      - name: Check version consistency
+        env:
+          IS_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          if [ "$IS_TAG" = "true" ]; then
+            bun scripts/check-version.js "${GITHUB_REF_NAME}"
+          else
+            bun scripts/check-version.js
+          fi
 
   # ── 各平台编译 ──
   build:
@@ -32,9 +84,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14          # Apple Silicon
+          # macOS 14 镜像已于 2026-11-02 全部退役（actions/runner-images#15226），
+          # macos-13 更早已不可用。现行标签：arm64 用 macos-15，Intel 用 macos-15-intel。
+          - os: macos-15          # Apple Silicon
             platform: darwin-arm64
-          - os: macos-13          # Intel Mac
+          - os: macos-15-intel    # Intel
             platform: darwin-x64
           - os: ubuntu-latest     # glibc
             platform: linux-x64
@@ -50,27 +104,31 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       # bun install 会按当前平台装对应原生包（npm 做不到的 --os 覆盖在这里不需要）
       - run: bun install --frozen-lockfile
 
       - run: node build-bun.js
-        shell: bash
 
       - run: node scripts/pack-platform.js
-        shell: bash
 
       - uses: actions/upload-artifact@v4
         with:
           name: bcode-${{ matrix.platform }}
+          # 上传目录内容 → 下载后落在 dist-pkg/bcode-<platform>/{bcode,package.json}
           path: dist-pkg/${{ matrix.platform }}/
           retention-days: 7
 
   # ── 发布各平台包 ──
+  # 必须先于主包：主包的 optionalDependencies 指向这些包，
+  # 主包先上线会让用户安装时解析不到平台包。
   publish-platforms:
-    needs: build
+    needs: [build, check-version]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC：npm CLI 用它换取短时发布令牌
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -81,38 +139,143 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
+
+      - name: Verify npm supports trusted publishing
+        run: |
+          set -euo pipefail
+          ver=$(npm --version)
+          echo "npm $ver"
+          # Trusted Publishing 要求 >= 11.5.1；低于此版本 npm 不认识 OIDC 环境
+          node -e "
+            const [a,b,c] = require('child_process').execSync('npm --version').toString().trim().split('.').map(Number);
+            const ok = a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)));
+            if (!ok) { console.error('::error::npm ' + a+'.'+b+'.'+c + ' 太低，Trusted Publishing 需要 >= 11.5.1'); process.exit(1); }
+          "
+
+      - name: Show artifacts
+        run: find dist-pkg -maxdepth 2 -type f | sort
 
       - name: Publish platform packages
-        run: |
-          for dir in dist-pkg/bcode-*/*; do
-            if [ -f "$dir/package.json" ]; then
-              echo "Publishing $dir"
-              (cd "$dir" && npm publish --access public)
-            fi
-          done
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # 可选回退：secret 存在则在 OIDC 之上额外提供一个 token。
+          # npm 会优先用 OIDC，只有 OIDC 不适用（如首次发布）时才用到它。
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          # 主包 .npmrc 已被 gitignore，CI 里不存在；显式写一份不含 token 的，
+          # 避免 npm 从其他位置捡到残留配置
+          echo "registry=https://registry.npmjs.org/" > "$HOME/.npmrc"
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$HOME/.npmrc"
+            echo "🔑 使用 NPM_TOKEN 回退（Trusted Publishing 未生效时）"
+          else
+            echo "🔐 未配置 NPM_TOKEN，将使用 Trusted Publishing (OIDC)"
+          fi
+
+          dirs=(dist-pkg/bcode-*/)
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::未找到平台包目录，检查 build job 的 upload/download 路径"
+            exit 1
+          fi
+
+          for dir in "${dirs[@]}"; do
+            if [ ! -f "$dir/package.json" ]; then
+              echo "::error::$dir 缺少 package.json"
+              exit 1
+            fi
+
+            name=$(node -p "require('./$dir/package.json').name")
+            ver=$(node -p "require('./$dir/package.json').version")
+
+            # 幂等：npm 不允许重发同一版本（403），手动重跑时已发布的直接跳过。
+            # 这样"4 个平台发了 2 个后失败"的重跑能继续，而不是从头报错。
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "⏭  $name@$ver 已存在，跳过"
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "🔍 [dry_run] 将发布 $name@$ver（目录 $dir）"
+              continue
+            fi
+
+            echo "📦 Publishing $name@$ver from $dir"
+            (cd "$dir" && npm publish --access public) || {
+              echo "::error::$name@$ver 发布失败"
+              echo "   若报 404/ENEEDAUTH：该包尚未在 npm 上存在，而 Trusted Publishing"
+              echo "   不支持发布首个版本（npm/cli#8544）。先用 token 手动发一次。"
+              exit 1
+            }
+          done
 
   # ── 最后发布主包（依赖各平台包已就位）──
   publish-main:
     needs: publish-platforms
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC + 自动 provenance
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
+          node-version: 24
 
-      - run: pnpm install --frozen-lockfile
-      # 主包的 dist/cli.mjs 是 ink 回退版（Node 下可用），
-      # 用户跑 bcode 时实际执行的是平台包里的 Bun 二进制
-      - run: pnpm build
+      - run: bun install --frozen-lockfile
 
-      - run: npm publish --access public
+      # 主包本体只是 bin/bcode.js 启动器（~3KB），不含二进制也不含源码；
+      # 跑二进制的是各平台包。这里不构建，只做发布前的类型检查与内容校验。
+      - run: bun run typecheck
+
+      - name: Verify tarball 只含启动器
+        run: |
+          set -euo pipefail
+          npm pack --dry-run 2>&1 | tee /tmp/pack.log
+          files=$(sed -n '/Tarball Contents/,/Tarball Details/p' /tmp/pack.log)
+          echo "$files"
+          if ! echo "$files" | grep -q 'bin/bcode.js'; then
+            echo "::error::tarball 缺少 bin/bcode.js"
+            exit 1
+          fi
+          # 主包一旦带上 dist/ 或源码，说明 files 字段被改坏（会白白膨胀数十 MB）
+          if echo "$files" | grep -Eq 'dist/|src/'; then
+            echo "::error::tarball 里出现了 dist/ 或 src/，检查 package.json 的 files 字段"
+            exit 1
+          fi
+
+      - name: Publish main package
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          echo "registry=https://registry.npmjs.org/" > "$HOME/.npmrc"
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$HOME/.npmrc"
+          fi
+
+          name=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+
+          # 幂等：手动重跑时主包可能已发出，重发会被 npm 403 拒绝
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "⏭  $name@$ver 已存在，跳过"
+            exit 0
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "🔍 [dry_run] 将发布 $name@$ver"
+            exit 0
+          fi
+
+          echo "📦 Publishing $name@$ver"
+          npm publish --access public

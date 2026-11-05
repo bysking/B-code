@@ -45,7 +45,7 @@ import { checkForUpdate, localVersion } from './version-check.js';
 /**
  * CLI 外壳（施工图 L1 cli.ts）
  *
- * 全局安装后 bcode 即当前工具（开发态等价于 pnpm dev）：
+ * 全局安装后 bcode 即当前工具（开发态等价于 bun run dev）：
  *   bcode "Read x"               one-shot：执行一条指令后保存退出（可含权限确认）
  *   bcode                        REPL：交互式多轮，每轮自动保存
  *   bcode --resume               REPL，先恢复上次会话（--session <id> 恢复指定会话）

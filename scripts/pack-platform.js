@@ -17,11 +17,23 @@
  * ## 命名规则
  *
  * 包名 `@bysking/b-code-<platform>-<arch>`，os/cpu 字段让 npm 精确匹配。
- * linux 的 musl 变体额外加 `-musl` 后缀（Alpine 等），用 `libc` 字段区分。
+ *
+ * linux 的 musl 变体（Alpine 等）额外加 `-musl` 后缀并用 `libc` 字段区分。
+ * 它**必须**同时登记在主包 optionalDependencies、bin/bcode.js 的 SUPPORTED、
+ * 本文件的 supported 三处，否则会出现"发了包但启动器不认"的错配；
+ * `scripts/check-version.js` 会校验这三处是否对齐。
  */
 
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,12 +60,12 @@ function main() {
   const arch = process.arch;
   const musl = isMusl();
 
-  // 只支持 4 个主流平台（win32-arm64 用户太少，暂不提供）
-  const supported = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'];
+  // 支持清单（含 musl 变体）；win32-arm64 用户太少，暂不提供
+  const supported = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-x64-musl', 'win32-x64'];
   const suffix = musl ? '-musl' : '';
   const key = `${platform}-${arch}${suffix}`;
 
-  if (!supported.includes(`${platform}-${arch}`) || (musl && platform !== 'linux')) {
+  if (!supported.includes(key)) {
     console.error(`❌ 不支持的平台：${key}`);
     console.error(`   支持：${supported.join(', ')}`);
     process.exit(1);
@@ -72,9 +84,11 @@ function main() {
   mkdirSync(outDir, { recursive: true });
 
   // 复制二进制（不复制到 dist-pkg 之外，保持发布目录干净）
+  // copyFile 会连权限一起带过来，但 Windows 无执行位概念，chmod 会失败 —— 用原生 API 按需设置
   copyFileSync(binPath, join(outDir, binName));
-  // 保留可执行权限
-  execFileSync('chmod', ['+x', join(outDir, binName)], { stdio: 'pipe' });
+  if (platform !== 'win32') {
+    chmodSync(join(outDir, binName), 0o755);
+  }
 
   const pkgJson = {
     name: pkgName,
@@ -96,13 +110,13 @@ function main() {
 
   writeFileSync(join(outDir, 'package.json'), JSON.stringify(pkgJson, null, 2) + '\n');
 
-  const size = execFileSync('du', ['-h', join(outDir, binName)], { encoding: 'utf-8' })
-    .split('\t')[0];
+  // 用 statSync 而非 du：Windows runner 上 du 不一定存在
+  const sizeMb = (statSync(join(outDir, binName)).size / 1024 / 1024).toFixed(1);
 
   console.log('✅ 平台包已生成\n');
   console.log(`   包名:  ${pkgName}@${rootPkg.version}`);
   console.log(`   目录:  dist-pkg/${key}/`);
-  console.log(`   体积:  ${size}`);
+  console.log(`   体积:  ${sizeMb}MB`);
   console.log(`   平台:  os=${platform} cpu=${arch}${musl ? ' libc=musl' : ''}`);
   console.log(`\n   发布：cd dist-pkg/${key} && npm publish`);
 }

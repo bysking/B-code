@@ -14,6 +14,57 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **修复 v3.0.0 发布链路**（此前按现状打 tag 会在第一个 job 就失败）：
+  - CI 的 test / publish-main 两个 job 仍在用 pnpm，而 `pnpm-lock.yaml` 是 ink 时代的
+    （没有 `@opentui/*`），`--frozen-lockfile` 必然报 OUTDATED_LOCKFILE，且
+    `pnpm test` 调的是 `bun test`。统一改为 Bun。
+  - `publish-platforms` 的发布循环路径多套了一层 `/*`，导致 `package.json` 检测恒假、
+    一个平台包都不会发。改为直接遍历 `dist-pkg/bcode-*/`，并在目录为空或缺少
+    `package.json` 时报错退出（不再静默跳过）。
+  - `publish-main` 原本跑 `pnpm build` 产出 77MB 的 `dist/bcode`，而主包 `main`
+    指向的 `dist/cli.mjs` 是已废弃的 ink 回退版。主包现在不含构建产物。
+  - `package.json` 的 `main` 指向已 gitignore 的 `dist/cli.mjs`，npm 仍会把它塞进
+    tarball（实测 2.5MB / 681KB 压缩）。改为 `lib/index.js`，tarball 降到约 30KB。
+  - 发布版主包原本挂了 12 个运行时依赖（`@opentui/*`、`react`、`@anthropic-ai/sdk` 等），
+    但启动器只用 node 内置模块、二进制自带一切。全部移入 `devDependencies`。
+  - `pack-platform.js` 用 `chmod` / `du` 外部命令，Windows runner 上不一定存在，
+    改用 `fs.chmodSync` / `fs.statSync`。
+  - **CI 的 macOS runner 标签已失效**：`macos-13` 早已不可用，`macos-14` 全部镜像
+    于 2026-11-02 退役（actions/runner-images#15226），两个 darwin job 会直接排队失败。
+    改用 `macos-15`（arm64）与 `macos-15-intel`（x64）。`build-bun.js --all-check`
+    里的提示同步更新。
+  - musl 检测与打包逻辑存在，但平台清单未登记，导致 Alpine 用户会得到
+    "暂不支持"。`pack-platform.js` 的 `supported` 补入 `linux-x64-musl`，
+    README 说明其启用方式。
+
+### Added
+
+- **发布改用 npm Trusted Publishing (OIDC)**，不再依赖长期 `NPM_TOKEN`：
+  `publish-platforms` / `publish-main` 声明 `permissions: id-token: write`，
+  npm 自动换取短时令牌并生成 provenance。CI 的 Node 从 22 升到 24（Node 22 自带
+  npm 10.9.x，低于 Trusted Publishing 要求的 11.5.1），并加了一步硬校验防止
+  回退到旧 npm 后静默失效。
+  - **首次发布仍需 token**：npm 不允许用 OIDC 发布尚不存在的包（npm/cli#8544 仍 open），
+    4 个平台包的 0.1 版本必须先手动发一次。workflow 保留 `NPM_TOKEN` 作回退：
+    secret 存在则使用，不存在则走 OIDC。
+  - 发布步骤改为自建 `.npmrc` 且**不给 `setup-node` 传 `registry-url`**——后者会写入
+    占位 token，OIDC 交换失败后回退到假 token，报出与真实原因无关的 E404/ENEEDAUTH。
+  - 发布循环加幂等：已存在的版本跳过，避免"4 个平台发了 2 个后失败"的重跑从头报错。
+  - 新增手动触发支持：`workflow_dispatch` 可选 `dry_run`（只构建校验、不发布）；
+    tag 校验在手动触发时自动跳过（此时 `GITHUB_REF_NAME` 是分支名）。
+- `scripts/check-version.js`：校验 `package.json` 版本与 4 行平台包版本一致、平台清单在
+  `optionalDependencies` / `bin/bcode.js` / `lib/index.js` / `scripts/pack-platform.js`
+  四处对齐、`files` 覆盖 `main` 与 `bin`、以及 git tag（CI 传入）与版本号一致。
+  已挂到 `prepublishOnly`（`bun run check:version`）和 CI 的 `check-version` job——
+  npm 对 optionalDependencies 的解析失败是静默的，漏改版本号会让用户"装成功却跑不起来"。
+- `lib/index.js`：主包库入口，`import('@bysking/b-code')` 可拿到 `name` / `version` /
+  `platforms`，不再一 `require` 就启动 TUI。
+- [`docs/RELEASING.md`](./docs/RELEASING.md)：发布手册。记录 5 包结构、OIDC 认证机制与
+  「首次发布必须用 token」的过渡步骤、各平台必须原生编译的原因、runner 标签会过期的注记、
+  发布前自检清单，以及按症状查的排错表。
+
 ## [3.0.0] - 2026-11-05
 
 渲染层全面重写：从 ink 切换到 [OpenTUI](https://github.com/anomalyco/opentui)（Zig 原生核心）。
