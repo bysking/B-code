@@ -81,7 +81,14 @@ function inlineMathMerged(segs: MathSegment[]): MathSegment[] {
   return out;
 }
 
-export function MarkdownText({ content }: { content: string }) {
+export function MarkdownText({
+  content,
+  selectable = true,
+}: {
+  content: string;
+  /** 是否允许鼠标拖选复制（默认开：用户要能复制 AI 的回复） */
+  selectable?: boolean;
+}) {
   const renderer = useRenderer();
 
   const style = useMemo(() => {
@@ -102,7 +109,16 @@ export function MarkdownText({ content }: { content: string }) {
 
   // 没有公式：直接走原生 markdown，省掉额外的 box 层级
   if (segments.every((s) => s.kind === 'text')) {
-    return <markdown content={content} syntaxStyle={style} fg={COLORS.text} />;
+    // 注：`selectable` 在 Markdown 组件的类型声明里没暴露，但运行时支持
+  // （它是 NonStyledProps 的成员，所有 renderable 都有）。这里用展开绕过类型收窄。
+  return (
+    <markdown
+      content={content}
+      syntaxStyle={style}
+      fg={COLORS.text}
+      {...({ selectable } as Record<string, unknown>)}
+    />
+  );
   }
 
   // 有公式：按段渲染。

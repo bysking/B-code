@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useKeyboard, usePaste, useTerminalDimensions } from '@opentui/react';
+import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from '@opentui/react';
 import type { AppController, SlashItem, ToolCallDisplay } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';
@@ -75,6 +75,11 @@ export function App({
   useEffect(() => ctrl.subscribe(() => force((v) => v + 1)), [ctrl]);
 
   const { width: termCols, height: termRows } = useTerminalDimensions();
+  const renderer = useRenderer() as unknown as {
+    getSelection(): { getSelectedText(): string } | null;
+    copyToClipboardOSC52(text: string): boolean;
+    clearSelection?(): void;
+  };
 
   const [input, setInput] = useState('');
   const [quitArmed, setQuitArmed] = useState(false);
@@ -95,6 +100,42 @@ export function App({
    * 不需要 ink 时代的 KeyLike 归一化。输入字符由 <textarea> 自己处理，这里只管快捷键。
    */
   useKeyboard((e) => {
+    /**
+     * Ctrl+Shift+C：复制鼠标选中的文本。
+     *
+     * ## 为什么需要自己实现
+     *
+     * OpenTUI 开启鼠标追踪（1000h/1002h/1003h）后，终端把"按下-拖动-释放"
+     * 整套手势交给应用，**不再执行原生文本选中**——用户按住左键拖选，
+     * 屏幕上没有任何高亮，Ctrl+C 也复制不到东西。
+     *
+     * OpenTUI 自己实现了选中（`renderer.getSelection()`）与 OSC52 写剪贴板
+     * （`copyToClipboardOSC52`，跨 SSH 也有效），但复制动作原本只绑在它内置的
+     * console overlay 里。这里把它接到主 UI：选中 → Ctrl+Shift+C → 进系统剪贴板。
+     *
+     * 快捷键：macOS 用 **Cmd+C**，其他平台用 **Ctrl+Shift+C**。
+     * 都不是裸 Ctrl+C——那个在我们这里是"取消/退出"。
+     */
+    // Cmd+C（macOS）与 Ctrl+Shift+C（Linux/Windows 惯例）都触发复制
+    if (((e.meta || (e.ctrl && e.shift)) && e.name === 'c')) {
+      const sel = renderer.getSelection?.();
+      const text = sel?.getSelectedText?.() ?? '';
+      if (text) {
+        const ok = renderer.copyToClipboardOSC52?.(text);
+        ctrl.pushOutput(
+          ok
+            ? `(已复制 ${text.length} 个字符到剪贴板)`
+            : '(复制失败：当前终端不支持 OSC52)',
+        );
+        // 复制后清掉选中态：否则下一次拖动会接着上次的锚点继续扩选，
+        // 表现为"再拖就选不中新的地方"
+        renderer.clearSelection?.();
+      } else {
+        ctrl.pushOutput('(没有选中文本——按住左键拖动选中后再按 Ctrl+Shift+C)');
+      }
+      return;
+    }
+
     // Ctrl+C：有交互 → 取消；否则双击退出
     if (e.ctrl && e.name === 'c') {
       if (ctrl.askState) {
@@ -185,6 +226,12 @@ export function App({
 
     // Esc
     if (e.name === 'escape') {
+      // 有选中态时优先清选中（用户想取消选择，而不是中断对话）
+      const sel = renderer.getSelection?.();
+      if (sel?.getSelectedText?.()) {
+        renderer.clearSelection?.();
+        return;
+      }
       if (ctrl.outputPanel) {
         ctrl.toggleOutputPanel(false);
         return;

@@ -31,7 +31,7 @@ function formatTokens(n: number): string {
 function ToolLine({ tool }: { tool: ToolCallDisplay }) {
   const color = tone(TOOL_TONE[tool.status]);
   return (
-    <text fg={color} wrapMode="none">
+    <text fg={color} wrapMode="none" selectable>
       {TOOL_SYMBOL[tool.status]} {tool.name}
       {tool.input ? <span fg={COLORS.muted}> {tool.input}</span> : null}
     </text>
@@ -43,7 +43,7 @@ function UsageLine({ turn }: { turn: Turn }) {
   // 用量元信息用 statusText（#8C8C8C）而非 muted（#858889）：
   // VS Code 的状态栏文字就是这个亮度，比行号稍亮一档——原来偏暗，几乎看不清。
   return (
-    <text fg={COLORS.statusText}>
+    <text fg={COLORS.statusText} selectable>
       (⏱ {Math.round((turn.elapsedMs ?? 0) / 1000)}s · ↓ {formatTokens(turn.usage.input_tokens)} · ↑{' '}
       {formatTokens(turn.usage.output_tokens)} tokens)
     </text>
@@ -57,7 +57,9 @@ function TurnView({ turn }: { turn: Turn }) {
         <text fg={COLORS.user} attributes={attrs('bold')}>
           User
         </text>
-        <text fg={COLORS.text}>{turn.text}</text>
+        <text fg={COLORS.text} selectable>
+        {turn.text}
+      </text>
       </box>
     );
   }
@@ -79,7 +81,7 @@ function TurnView({ turn }: { turn: Turn }) {
       {turn.tools.map((t) => (
         <ToolLine key={t.id} tool={t} />
       ))}
-      {turn.text.trim() ? <MarkdownText content={turn.text} /> : null}
+      {turn.text.trim() ? <MarkdownText content={turn.text} selectable /> : null}
       <UsageLine turn={turn} />
     </box>
   );
