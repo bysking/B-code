@@ -463,22 +463,30 @@ export class Agent {
    * 追逐目标（施工图 §13.3）：执行 → 评估 → 未达成则原因回灌 → 再执行，最多 5 轮。
    * 评估器是独立模型调用（不带工具），原因回灌给主模型继续干活。
    */
-  async pursueGoal(condition: string, prompt: string, maxRounds = 5): Promise<void> {
+  /**
+   * 追目标直到达成/判定不可能/轮次耗尽。
+   *
+   * @returns 是否达成。返回布尔而不仅是 void 的原因：调用方（one-shot 的 --goal）
+   * 需要在退出码与终端提示里体现结果——UI 画在备用屏里，退出后用户只看得到
+   * 补打的那几行，必须把"成没成"写进去。
+   */
+  async pursueGoal(condition: string, prompt: string, maxRounds = 5): Promise<boolean> {
     await this.chat(prompt);
     for (let round = 0; round < maxRounds; round++) {
       const verdict = await this.evaluateGoal(condition);
       if (verdict.met) {
         log.info(`✓ goal met: ${condition}`);
-        return;
+        return true;
       }
       if (verdict.impossible) {
         log.warn(`goal impossible: ${verdict.reason}`);
-        return;
+        return false;
       }
       log.info(`(goal not met — ${verdict.reason}; continuing)`);
       await this.chat(`The goal "${condition}" is not met yet: ${verdict.reason}. Keep working toward it.`);
     }
     log.warn(`(gave up after ${maxRounds} iterations without meeting: ${condition})`);
+    return false;
   }
 
   private async evaluateGoal(condition: string): Promise<Awaited<ReturnType<typeof evaluateGoal>>> {

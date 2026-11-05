@@ -375,6 +375,17 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
 
   const oneShot = Boolean(args.instruction) && !args.goal && args.loop <= 0;
 
+  /**
+   * loop 模式的累积输出。
+   *
+   * loop 跑在备用屏里，Ctrl-C 退出后屏幕上什么都不剩。用户要来的是"每一轮都
+   * 输出了什么"，所以把每轮结果攒起来，退出时一次性补打到真实终端。
+   *
+   * 上限保护：长跑会攒出巨量文本，超过 MAX 就丢最早的（保留最近的更符合直觉）。
+   */
+  const LOOP_OUTPUT_MAX = 20000;
+  let loopHarvest = '';
+
   let running = false;
   /**
    * 退出：先恢复终端状态，再退进程。
@@ -421,7 +432,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
   const { unmount: unmountApp } = await mountTtyApp(
     ctrl,
     {
-      onExit: () => void quit(130),
+      onExit: () =>
+        // loop 模式下退出前补打累积输出（UI 在备用屏里，退出即销毁）
+        void quit(130, args.loop > 0 && loopHarvest ? `本轮循环的输出：\n${loopHarvest}` : undefined),
       onInterrupt: () => agent.interrupt(), // Esc：软中断当前 chat
       onSubmit: (text) => void handle(text),
       onSetMode: (mode) => {
@@ -573,9 +586,11 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       ctrl.pushUser(trimmed);
 
       if (args.goal) {
-        await agent.pursueGoal(args.goal, effective || 'Continue working toward the goal.');
+        const met = await agent.pursueGoal(args.goal, effective || 'Continue working toward the goal.');
         await saveSession(agent.history(), sessionId);
-        void quit(0);
+        // 目标模式的结论必须带回真实终端：UI 在备用屏里，退出即销毁
+        const verdict = met ? '✓ 目标达成' : '✗ 目标未达成';
+        void quit(met ? 0 : 1, `${verdict}\n\n${finalAssistantText(agent.history())}`);
         return;
       }
       await agent.chat(effective);
@@ -584,9 +599,25 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       if (agent.interruptedByUser) {
         // Esc 硬中断已生效：模型请求/shell 子进程被立即终止，此处仅提示可继续输入
         ctrl.pushOutput('(interrupted — 可以输入新指令或继续)');
+        // one-shot 被中断时没有"后续对话"——已产出的部分回复要带回真实终端，
+        // 否则用户敲完命令按 Esc，回到 shell 什么都看不到（连"我中断了什么"都不知道）
+        if (oneShot) {
+          const partial = finalAssistantText(agent.history());
+          void quit(130, partial ? `(已中断) 部分回复：\n\n${partial}` : '(已中断，模型尚未产出内容)');
+          return;
+        }
       }
 
       if (args.loop > 0) {
+        // 攒本轮结果（loop 退出后要补打到真实终端）
+        const reply = finalAssistantText(agent.history());
+        if (reply) {
+          const stamp = new Date().toLocaleTimeString();
+          loopHarvest += `\n[${stamp}] ${reply}\n`;
+          if (loopHarvest.length > LOOP_OUTPUT_MAX) {
+            loopHarvest = `…(更早的输出已省略)\n${loopHarvest.slice(-LOOP_OUTPUT_MAX)}`;
+          }
+        }
         setTimeout(() => void handle(args.instruction ?? ''), args.loop * 1000);
       } else if (oneShot) {
         // one-shot：把最终回复带回真实终端（UI 画在备用屏里，退出后会消失）
@@ -594,10 +625,12 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // P1：API 调用错误直接输出到 stderr，确保用户看到（UI 输出可能被滚动冲掉）
-      console.error('\n\x1b[31m❌ 接口调用出错:\x1b[0m');
-      console.error(`   ${msg.replace(/\n/g, '\n   ')}`);
-      ctrl.pushOutput(`\x1b[31m❌ 接口调用出错: ${msg}\x1b[0m`);
+      // 错误走 ctrl.pushOutput（进 UI 消息流），**不能** console.error：
+      // OpenTUI 接管后 console 输出进的是 console overlay，而 overlay 默认关闭，
+      // 写进去等于石沉大海。UI 消息流是用户一定能看到的地方。
+      ctrl.pushOutput(`❌ 接口调用出错: ${msg}`);
+      // one-shot 场景没有"后续对话"，错误必须带到真实终端才算交付
+      if (oneShot) void quit(1, `❌ 接口调用出错: ${msg}`);
     } finally {
       running = false;
     }
