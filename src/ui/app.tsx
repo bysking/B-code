@@ -113,8 +113,14 @@ export function App({
      * （`copyToClipboardOSC52`，跨 SSH 也有效），但复制动作原本只绑在它内置的
      * console overlay 里。这里把它接到主 UI：选中 → Ctrl+Shift+C → 进系统剪贴板。
      *
-     * 快捷键：macOS 用 **Cmd+C**，其他平台用 **Ctrl+Shift+C**。
-     * 都不是裸 Ctrl+C——那个在我们这里是"取消/退出"。
+     * 快捷键：**Ctrl+Shift+C**。
+     *
+     * 为什么不是 mac 惯例的 Cmd+C：macOS 上 Cmd+C 是**系统/终端级快捷键**
+     * （Terminal.app、VS Code 终端都自己先吃掉），根本传不到运行在里面的程序。
+     * 只有实现了 Kitty 键盘协议的终端（Kitty / WezTerm）才能把 super 修饰键
+     * 报给应用。所以 Cmd+C 也监听（支持的终端自然生效），但主推 Ctrl+Shift+C
+     * ——它在 raw mode 下能可靠传到应用，也是终端里复制的事实标准
+     * （GNOME Terminal / VS Code / iTerm2 默认都是这个）。
      */
     // Cmd+C（macOS）与 Ctrl+Shift+C（Linux/Windows 惯例）都触发复制
     if (((e.meta || (e.ctrl && e.shift)) && e.name === 'c')) {
@@ -131,7 +137,7 @@ export function App({
         // 表现为"再拖就选不中新的地方"
         renderer.clearSelection?.();
       } else {
-        ctrl.pushOutput('(没有选中文本——按住左键拖动选中后再按 Ctrl+Shift+C)');
+        ctrl.pushOutput('(没有选中文本——按住左键拖动选中后按 Ctrl+Shift+C 复制)');
       }
       return;
     }

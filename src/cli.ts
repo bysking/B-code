@@ -153,7 +153,7 @@ const HELP_TEXT = [
   '  PgUp / PgDn / 滚轮   回看历史',
   '  ↑ / ↓            输入历史导航（已滚离底部时优先滚回）',
   '  Ctrl+V           粘贴图片（文本走括号粘贴自动处理）',
-  '  拖选 + Cmd+C     复制选中的文本（Linux/Windows 用 Ctrl+Shift+C）',
+  '  拖选 + Ctrl+Shift+C  复制选中的文本',
 ].join('\n');
 
 /** choice → 单步向导（模型驱动选择统一为 Wizard 的适配） */

@@ -1,5 +1,5 @@
 import React from 'react';
-import { createCliRenderer, type CliRenderer } from '@opentui/core';
+import { createCliRenderer, MarkdownRenderable, type CliRenderer } from '@opentui/core';
 import { createRoot, type Root } from '@opentui/react';
 import { App } from './app.js';
 import { setLogSink } from '../utils/log.js';
@@ -31,6 +31,45 @@ import type { ClipboardImage } from '../utils/clipboard.js';
  * 处理：`consoleMode: 'console-overlay'` + 挂载后 `renderer.console.show()`。
  * 业务日志仍走 `setLogSink` 收进 Ctrl+O 面板（与之前一致）。
  */
+
+/**
+ * 让 `<markdown>` 支持鼠标拖选。
+ *
+ * ## 为什么必须打这个补丁
+ *
+ * OpenTUI 的选中判定入口是 `renderable.shouldStartSelection(x, y)`。
+ * 基类 `Renderable` 的实现是**硬编码 `return false`**——只有
+ * `TextBufferRenderable`（`<text>`）和 `EditBufferRenderable` 覆盖了它。
+ *
+ * `<markdown>` 直接继承 `Renderable`，所以它**永远不允许开始选中**。
+ * 而鼠标事件走 `hitTest`，命中的正是最顶层的 `<markdown>` 节点，
+ * 于是点击 AI 回复区域根本走不到内部的 `<text>`——用户拖选毫无反应。
+ *
+ * 补丁逻辑与 `TextBufferRenderable` 的官方实现一致：`selectable` +
+ * 点击点落在自身范围内就允许。
+ *
+ * 这是唯一一处"改上游原型"的地方，收敛在这里并留注释；
+ * 等 OpenTUI 给 Markdown 补上实现后可整段删除。
+ */
+let markdownPatched = false;
+function patchMarkdownSelection(): void {
+  if (markdownPatched) return;
+  markdownPatched = true;
+  const proto = MarkdownRenderable.prototype as unknown as {
+    selectable: boolean;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    shouldStartSelection(x: number, y: number): boolean;
+  };
+  proto.shouldStartSelection = function (x: number, y: number): boolean {
+    if (!this.selectable) return false;
+    const lx = x - this.x;
+    const ly = y - this.y;
+    return lx >= 0 && lx < this.width && ly >= 0 && ly < this.height;
+  };
+}
 
 export interface TtyMount {
   /**
@@ -78,6 +117,8 @@ export async function mountTtyApp(
    * 文件落地（B_CODE_LOG_FILE）不受影响，仍在 log.ts 里照写。
    */
   const restoreLogSink = setLogSink((line) => ctrl.pushLog(line));
+
+  patchMarkdownSelection();
 
   const renderer = await createCliRenderer({
     // 关闭默认的 Ctrl+C 退出：我们要自己实现"第一次提示、第二次退出"协议
