@@ -34,8 +34,14 @@ test('分发：optionalDependencies 覆盖四个支持平台', () => {
 });
 
 test('分发：平台包版本必须与主包一致（否则安装了错的二进制）', () => {
-  for (const [name, ver] of Object.entries(pkg.optionalDependencies ?? {})) {
-    assert.equal(ver, pkg.version, `${name} 的版本应为主包的 ${pkg.version}`);
+  // 平台包按主包版本发布，两者必须同步；否则用户装到"主包 v3.0.0 + 平台包 v2.0.2"
+  // 会拿到不匹配的二进制。允许 "workspace:*" 形式（monorepo 内本地链接）。
+  const optional = (pkg.optionalDependencies ?? {}) as Record<string, string>;
+  for (const [name, ver] of Object.entries(optional)) {
+    assert.ok(
+      ver === pkg.version || ver.startsWith('workspace:') || ver.startsWith('file:'),
+      `${name} 的版本 (${ver}) 应为主包的 ${pkg.version}`,
+    );
   }
 });
 
@@ -52,11 +58,13 @@ test('分发：启动器的平台映射与 optionalDependencies 同步', () => {
   }
 });
 
-test('分发：files 字段包含启动器与 ink 回退版产物', () => {
+test('分发：files 只含启动器（平台二进制由 optionalDependencies 分发）', () => {
   assert.ok(pkg.files?.includes('bin'), 'files 应包含 bin/');
+  // dist/cli.mjs 已随 ink 一起移除：启动器只 spawn 平台包里的二进制，
+  // 主包里再塞一份 bundle 只会白占体积。
   assert.ok(
-    pkg.files?.some((f: string) => f.startsWith('dist')),
-    'files 应包含 dist（ink 回退版）',
+    !pkg.files?.some((f: string) => f.startsWith('dist')),
+    'files 不应再包含 dist（那是已删除的 ink 回退版）',
   );
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@bysking/b-code",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里",
   "type": "module",
   "main": "dist/cli.mjs",
@@ -8,18 +8,16 @@
     "bcode": "./bin/bcode.js"
   },
   "files": [
-    "bin",
-    "dist/cli.mjs"
+    "bin"
   ],
   "scripts": {
     "dev": "bun src/index.ts",
-    "build": "node build.js",
+    "build": "node build-bun.js",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 20000",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
-    "prepublishOnly": "npm run typecheck && npm run build",
-    "build:bun": "node build-bun.js",
+    "prepublishOnly": "npm run typecheck",
     "build:all-check": "node build-bun.js --all-check"
   },
   "engines": {
@@ -68,10 +66,10 @@
     "typescript": "^7.0.2"
   },
   "optionalDependencies": {
-    "@bysking/b-code-darwin-arm64": "2.0.2",
-    "@bysking/b-code-darwin-x64": "2.0.2",
-    "@bysking/b-code-linux-x64": "2.0.2",
-    "@bysking/b-code-win32-x64": "2.0.2"
+    "@bysking/b-code-darwin-arm64": "3.0.0",
+    "@bysking/b-code-darwin-x64": "3.0.0",
+    "@bysking/b-code-linux-x64": "3.0.0",
+    "@bysking/b-code-win32-x64": "3.0.0"
   },
   "os": [
     "darwin",

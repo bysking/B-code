@@ -6,26 +6,20 @@
 
 > 版本变更见 [CHANGELOG.md](./CHANGELOG.md)。
 
-```
-npm i -g @bysking/b-code    # 全局安装
-# 或
-npx -y @bysking/b-code      # 免安装直接使用
-```
-
 ## 安装
 
 ```bash
-# 从 npm 全局安装（推荐）
-npm i -g @bysking/b-code
-
-# 或从本仓库安装（需要先构建，见「开发」）
-npm run build && npm i -g .
+npm i -g @bysking/b-code    # 全局安装（推荐）
+npx -y @bysking/b-code      # 或免安装直接运行
 ```
 
-安装后得到 `bcode` 命令。开发模式直接运行：
+安装后得到 `bcode` 命令。**无需安装 Node 或 Bun** —— 发布版是单文件可执行程序，
+运行时已嵌入（支持平台见「[安装与分发](#安装与分发)」）。
+
+从本仓库开发：
 
 ```bash
-npm run dev            # 相当于 tsx src/index.ts
+bun install && bun run dev     # OpenTUI 只能跑在 Bun 上
 ```
 
 ## 快速开始
@@ -82,7 +76,7 @@ bcode
 
 ## 交互界面（TTY）
 
-TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、权限确认、斜杠菜单均为声明式 UI。
+TTY 下使用 [OpenTUI](https://github.com/anomalyco/opentui) 渲染：思考过程、工具调用块、Markdown 回复、权限确认、斜杠菜单均为声明式 UI。
 
 **斜杠命令（输入 `/` 可唤起补全菜单，菜单超长时随选中项滚动）：**
 
@@ -102,6 +96,7 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 | `/default`         | 切换回默认模式                               |
 | `/skills`          | 技能面板：空格启用/禁用（禁用的不发给模型）  |
 | `/mcp`             | MCP 面板：空格启用/禁用，`R` 重连            |
+| `/export [路径]`   | 导出当前会话为 markdown（默认 `./bcode-<id>.md`） |
 | `/remember <事实>` | 保存一条长期记忆                             |
 | `exit` / `quit`    | 退出                                         |
 
@@ -110,24 +105,24 @@ TTY 下使用 Ink 渲染：思考过程、工具调用块、Markdown 回复、�
 - `Esc`：硬中断当前对话——立即取消在飞的模型请求、终止 `run_shell` 子进程，回到输入等待新指令（可继续输入）
 - `Ctrl+O`：切换工具输出面板（回看本轮全部工具/子 agent 的真实输出）
 - `Shift+Tab`：循环切换模式（default → plan → auto → bypass）
-- 历史回看：`PgUp` / `PgDn` 翻页、`↑` / `↓` 逐行、或**鼠标滚轮**
-- `↑` / `↓`：输入历史导航
+- `↑` / `↓`：输入历史导航（输入框为空时）
 - `Ctrl+V` / `Cmd+V`：粘贴图片（存为 `[image #N]`）；纯文本粘贴由括号粘贴模式自动处理
-- `Meta+Enter`（Option+Enter）：输入框内换行
+- **拖选 + `Ctrl+Shift+C`**：复制选中的文本（跨 SSH 也有效，走 OSC52）
 - `Ctrl+C`：第一次提示、2 秒内再按一次退出
 
 非 TTY（管道 / CI / 脚本）下自动退化为 readline 交互，语义保持一致；权限确认只消费 `y/n` 行。
 
-> **关于历史与滚动**：历史渲染在应用内的滚动视口里（不交给终端 scrollback），
-> 滚动位置由应用自己管理。三种方式都可用：`PgUp`/`PgDn` 翻页、`↑`/`↓` 逐行、
-> **鼠标滚轮**（每格 3 行）。
+> **关于历史与滚动**：历史渲染在应用内的 `<scrollbox>` 里（原生视口裁剪 + 粘性贴底），
+> 鼠标滚轮直接可用。
 >
-> 为什么不交给终端 scrollback：那样 history 会进 scrollback，但窗口 resize 时 ink
-> 需要按新布局重写已打印内容，流式长输出还容易出现"擦除行数对不上导致内容重复"。
-> 应用内视口把这些风险都消除了——resize 只是重新布局同一帧，流式再长也只是滚动。
+> **退出后终端不会保留本次历史**——OpenTUI 用备用屏全屏渲染，退出即销毁。
+> 三种方式把内容带走：
+>   - 退出时自动补打最近 3 轮对话
+>   - `/export [路径]` 导出完整会话为 markdown
+>   - `bcode --resume` 重新进入会话
 >
-> 代价是退出后终端里看不到本次历史，用 `bcode --resume` 回看。另外开启鼠标追踪后
-> 终端的原生选中复制会被接管，按住 `Shift` 拖动即可恢复。
+> 拖选用 `Ctrl+Shift+C` 复制（不是 Cmd+C：macOS 上它是终端自己的快捷键，
+> 传不到应用；只有 Kitty / WezTerm 这类实现 Kitty 协议的终端才能收到）。
 
 ## 安装与分发
 
@@ -200,9 +195,9 @@ bun test
 ### 构建
 
 ```bash
-npm run build        # ink 版（Node，1.9MB）— 开发与回退
-npm run build:bun    # OpenTUI 版（Bun，~75MB）— 发布
-node scripts/pack-platform.js   # 生成平台包
+npm run build                   # 当前平台可执行文件 → dist/bcode（~75MB）
+node scripts/pack-platform.js   # 打成可发布的平台包 → dist-pkg/<platform>/
+npm run build:all-check         # 查看各平台构建前置条件
 ```
 
 **各平台必须原生编译**：OpenTUI 的动态 import 让打包器把所有平台的
@@ -537,16 +532,20 @@ server 会据此自行降级，而不是发一个永远没人处理的请求然�
 
 ## 开发
 
+依赖 Bun ≥ 1.3.14（OpenTUI 原生 FFI 只支持 Bun 运行时）。
+
 ```bash
-npm install        # 安装依赖
-npm run dev        # 开发运行（tsx 直跑 TS 源码）
-npm run typecheck  # 类型检查
-npm test           # 单元测试
-npm run build      # esbuild 打包 → dist/cli.mjs（单文件，含全部依赖）
-node dist/cli.mjs  # 验证产物
+bun install        # 安装依赖
+bun run dev        # 开发运行（直跑 TS 源码）
+bun run typecheck  # 类型检查
+bun test           # 单元测试
+bun run build      # 编译单文件可执行程序 → dist/bcode（当前平台）
+./dist/bcode       # 验证产物
 ```
 
-发布前 `prepublishOnly` 会自动执行 `npm run build && npm test`。
+发布前 `prepublishOnly` 会自动跑类型检查；实际构建由
+`.github/workflows/release.yml` 的 CI 矩阵在各平台原生完成
+（OpenTUI 的跨平台原生包无法在单机上交叉编译）。
 
 ## License
 

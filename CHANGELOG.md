@@ -12,48 +12,85 @@
 
 ---
 
-## [released]
+## [Unreleased]
 
-### Added
+## [3.0.0] - 2026-11-05
 
-- 调整命令执行白名单避免无限累计
-- 优化项目已完成的待办任务的清空
-- **结构化任务清单**：新增 `todo_write` 工具，模型可维护 `pending / in_progress / completed`
-  状态的任务清单，底部固定面板展示完成度；按项目隔离存储（`projects/{hash}/todo.json`），
-  跨会话存续。新增 `/todos` 查看命令。
-- **运行时命令**：`/help`（命令与快捷键）、`/cost`（本次会话 token 用量与估算成本）、
-  `/model [名字]`（运行时切换模型）、`/compact`（立即压缩上下文）。
-- **`--output-format json`**：headless 结构化输出（结果 / 工具调用 / 用量 / 错误），
-  供 CI 与脚本消费，退出码 0/1。
-- **生命周期钩子（Hooks）**：`settings.json` 的 `hooks` 字段可挂外部命令，支持
-  `UserPromptSubmit` / `PreToolUse`（可拦截）/ `PostToolUse`；协议对齐 Claude Code
-  （事件 JSON 走 stdin、退出码 2 拦截），超时与异常一律 fail-open。
-- **检查点回退**：`/rewind` 可把 `write_file` / `edit_file` 的改动按逆序还原（回退前确认）。
-- **MCP 资源**：支持 `resources/list` + `resources/read`，聚合为只读工具
-  `mcp__<server>__read_resource`；不支持的 server 自动跳过。
-- **`.gitignore` 支持**：`grep_search` / `list_files` 现在尊重 `.gitignore`
-  （含锚定、`!` 取反、仅目录、`**/` 等 git 语义与目录级作用域）。
+渲染层全面重写：从 ink 切换到 [OpenTUI](https://github.com/anomalyco/opentui)（Zig 原生核心）。
+这不是一次普通升级——约 1350 行补偿代码被删除，构建与分发方式也一并更换。
 
 ### Changed
 
-- **权限白名单去噪**：持久化键先归一化 shell 命令空白（消除多行/缩进造成的同义重复键）；
-  一次性命令（`node -e` / heredoc / 命令替换等每次内容都不同）与超长（>200 字符）条目
-  不再落盘，仅本次会话免问；白名单条目数封顶 100，超出自动截断，避免 `settings.json`
-  被一次性 inline 脚本撑爆。启动载入时顺手清洗历史冗余条目并回写。
-- **权限白名单持久化**：确认框选择授权后写入 `settings.json` 的 `permissions.allow`，
-  下次启动仍免问（此前仅会话内有效）。
-- **`git push` 改为可授权**：从"无条件 deny"改为"一律确认、可持久化免问"（`plan` 模式仍只读拦截）。
-- **斜杠菜单滚动**：候选超过 12 项时窗口随选中项滚动并显示位置提示（此前超出部分不可见）。
-- **`/skills`、`/mcp` 改走 Ink 渲染通道**（此前直写 stdout，会与实时渲染抢屏）。
+- **渲染引擎：ink → OpenTUI**。业务代码直接写 OpenTUI 原生标签
+  （`<box>` / `<text>` / `<scrollbox>` / `<input>` / `<markdown>`），
+  `tsconfig.json` 配 `jsxImportSource: "@opentui/react"`，不再有适配层。
+  换来的是原生视口裁剪滚动、原生输入框（光标/选区/undo）、原生 markdown
+  解析（tree-sitter + 代码高亮）。
+- **运行时改为 Bun**。OpenTUI 的原生 FFI 只实现了 Bun 绑定（Node 26 实测同样报
+  `native FFI is not available`），因此 `dev` / `build` / `test` 全部走 Bun。
+- **发布形态改为单文件可执行程序**（`bun build --compile`，~75MB，内含 Bun 运行时）。
+  用户 `npm i -g @bysking/b-code` 后即可用 `bcode`，**无需安装 Node 或 Bun**。
+  按平台拆成 optionalDependencies（darwin-arm64 / darwin-x64 / linux-x64 / win32-x64），
+  npm 通过 `os`/`cpu` 字段只装匹配的那一份。
+- **主题换成 VS Code「2026 深色」**。色值直接取自 VS Code 默认主题文件
+  （`editor.background` / `statusBar.foreground` / `input.placeholderForeground` 等），
+  不是凭印象调的；用户/助手角色标题用绿/蓝区分。
+- **测试运行器：`node --test` → `bun test`**。测试用 OpenTUI 的 `createTestRenderer`
+  替代 `ink-testing-library`。
+
+### Added
+
+- **`/export [路径]`**：把当前会话导出为 markdown（默认 `./bcode-<sessionId>.md`），
+  含会话 ID / 模型 / 时间 / 轮次与完整问答。TTY 与非 TTY 都支持。
+- **退出补打**：备用屏退出即销毁，现在会把最近 3 轮对话打到真实终端。
+- **拖选复制**：会话内容可鼠标拖选，`Ctrl+Shift+C` 复制（走 OSC52，跨 SSH 也有效）。
+- **LaTeX 公式**：markdown 里的 `$$…$$` / `\[…\]` / `$…$` / ` ```latex ` 代码块
+  自动转成 Unicode 数学符号（`∫₍-∞₎⁽+∞⁾ e⁽-x^2⁾ dx = √(π)`）。
+- **空态欢迎横幅**：全新会话时展示 ASCII 大字、slogan 与快捷键提示，
+  有对话内容后自动让位。
+- **`--goal` / `--loop` / 中断的输出恢复**：目标结论、循环累积输出、
+  中断前的部分回复，退出后都能在真实终端看到。
+
+### Removed
+
+- 依赖 `ink` / `ink-text-input` / `ink-testing-library`
+- 手写虚拟滚动与位置收敛（`ScrollView` / `viewport`，~270 行）——`<scrollbox>` 原生提供
+- 手写输入框光标管理（`input-box`，~150 行）——`<input>` 原生提供
+- marked + marked-terminal 的 markdown 管线（~100 行）——`<markdown>` 原生提供
+- 滚轮 SGR 序列解析（`mouse.ts`，~200 行）——OpenTUI 原生处理鼠标
+- 渲染引擎适配层（`ui/ui/`，~520 行）——不再需要兼容两套引擎
+- `build.js`（esbuild 打 ink 版）——产物在 Node 下无法初始化 OpenTUI
 
 ### Fixed
 
-- 优化slash指令打印的显示
-- **子 Agent 无限递归**：`agent` 工具不再出现在子 Agent 的工具面，执行路径同样拦截（fail-closed）。
-- **globstar 语义**：`**/*.ts` 等模式此前漏配根级文件（`**/` 被误编译为"至少一层目录"）。
-- **危险命令误杀**：`kill` / `dd` / `reboot` / `shutdown` 改为按命令边界匹配，
-  `npm run kill-port`、`git add .`、`ls dd-utils` 不再被误拦。
-- **记忆召回噪声过滤**：纯噪声词查询（如 `is`）不再召回无关记忆（此前过滤逻辑未生效）。
-- **`/clear` 后页面跳动**：清空时重置消息流渲染层，避免残留与高度骤变导致的抖动。
+- 退出时鼠标追踪未关闭，回 shell 后一动鼠标刷出 `35;41;30M` 裸转义序列
+- session id 提示打在备用屏上，退出后看不到（无法 `--resume`）
+- one-shot 结果、goal 结论、loop 输出、中断内容退出后全部消失
+- `<markdown>` 区域无法拖选（OpenTUI 基类 `shouldStartSelection` 硬编码返回 false，
+  而鼠标命中的是最顶层节点）
+- 单行输入框用 `<textarea>` 导致回车不提交（其默认绑定是 Enter 插入换行）
+- `Ctrl+C` 的"再按一次退出"提示被斜杠菜单/输出面板挤出可见区
+- 超长流式输出导致帧高失控、内容重复显示
 
----
+## [2.0.2] 及更早
+
+见 [git 历史](https://github.com/bysking/b-code/commits/main)。
+
+以下为此前累积的能力（渲染层仍为 ink）：
+
+- **结构化任务清单**：`todo_write` 工具维护 `pending / in_progress / completed`，
+  底部面板展示完成度；按项目隔离存储，跨会话存续。`/todos` 查看。
+- **运行时命令**：`/help` / `/cost` / `/model [名字]` / `/compact`。
+- **`--output-format json`**：headless 结构化输出，供 CI 与脚本消费。
+- **生命周期钩子（Hooks）**：`UserPromptSubmit` / `PreToolUse`（可拦截）/ `PostToolUse`，
+  协议对齐 Claude Code，超时与异常一律 fail-open。
+- **检查点回退**：`/rewind` 按逆序还原 `write_file` / `edit_file` 的改动。
+- **MCP**：stdio + Streamable HTTP 双传输（官方 SDK）；`resources/list` + `resources/read`
+  聚合为只读工具；`/mcp` 面板启停与重连；`readOnlyHint` 自动判定只读；
+  动态工具变更（`notifications/tools/list_changed`）；反向调用（`roots` / `sampling`）。
+- **技能系统**：`/技能名 参数` 调用，支持平铺 `.md` 与 `SKILL.md` 目录两种形态；
+  `/skills` 面板启停（禁用的不注入 system prompt）。
+- **`.gitignore` 支持**：`grep_search` / `list_files` 尊重 git 语义
+  （锚定、`!` 取反、仅目录、`**/`）。
+- **权限系统**：`default` / `plan` / `auto` / `bypass` 四模式；危险命令任何模式都拦得住；
+  白名单持久化 + 通配折叠 + 噪声过滤；MCP 工具一次确认授权整个 server。
