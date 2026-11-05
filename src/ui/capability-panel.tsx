@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './ui/index.js';
 import type { CapabilityItem, CapabilityKind } from './controller.js';
 import { isCompactTerminal, terminalCols, useTerminalSize } from './scroll-budget.js';
 import { scrollWindow } from './scroll-budget.js';

@@ -7,6 +7,7 @@
  */
 
 import type { Mode } from '../permissions.js';
+import type { Color } from './ui/index.js';
 import type { UserTodo } from '../user-todo.js';
 
 export type ToolStatus = 'queued' | 'running' | 'done';
@@ -17,7 +18,7 @@ export const TOOL_SYMBOL: Record<ToolStatus, string> = {
   running: '⠒',
   done: '✓',
 };
-export const TOOL_COLOR: Record<ToolStatus, string | undefined> = {
+export const TOOL_COLOR: Record<ToolStatus, Color | undefined> = {
   queued: undefined,
   running: 'yellow',
   done: 'green',

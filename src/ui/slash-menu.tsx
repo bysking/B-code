@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './ui/index.js';
 import type { SlashItem } from './controller.js';
 import { clampIndex, filterSlash, slashWindow } from './slash.js';
 

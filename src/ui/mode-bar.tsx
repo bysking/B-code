@@ -1,9 +1,9 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, type Color } from './ui/index.js';
 import type { Mode } from '../permissions.js';
 
 /** 模式展示名与配色 */
-const MODE_META: Record<Mode, { label: string; color: string }> = {
+const MODE_META: Record<Mode, { label: string; color: Color }> = {
   default: { label: 'default', color: 'cyan' },
   plan: { label: 'plan', color: 'yellow' },
   auto: { label: 'auto', color: 'green' },

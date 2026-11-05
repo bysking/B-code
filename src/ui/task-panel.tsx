@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './ui/index.js';
 import type { TaskPanelState } from './controller.js';
 import { TOOL_SYMBOL, TOOL_COLOR } from './controller.js';
 import { clampByLines, isCompactTerminal } from './scroll-budget.js';

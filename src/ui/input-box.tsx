@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './ui/index.js';
 
 /**
  * 自定义文本输入 — 替代 ink-text-input。

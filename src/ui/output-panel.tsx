@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './ui/index.js';
 import type { ToolCallDisplay } from './controller.js';
 import { estimateLines, useTerminalSize } from './scroll-budget.js';
 

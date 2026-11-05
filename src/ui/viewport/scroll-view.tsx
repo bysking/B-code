@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Box, useBoxMetrics } from 'ink';
+import { Box, useElementSize } from '../ui/index.js';
 import {
   adjustForResize,
   clamp,
@@ -46,8 +46,11 @@ export function ScrollView({
 }) {
   const viewportRef = useRef(null);
   const contentRef = useRef(null);
-  const { clientHeight, hasMeasured: viewportMeasured } = useBoxMetrics(viewportRef);
-  const content = useBoxMetrics(contentRef);
+  // 走适配层：ink 的 useBoxMetrics / OpenTUI 的元素测量都归一成 {width,height,measured}
+  const viewport = useElementSize(viewportRef);
+  const content = useElementSize(contentRef);
+  const clientHeight = viewport.height;
+  const viewportMeasured = viewport.measured;
 
   // 视口高度变化（终端 resize / 面板出现消失）→ 修正距底行数，保持用户看到的内容不跳。
   // 这是新架构相对旧实现的核心优势：旧实现只能祈祷 ink 擦对位置，这里可以主动补偿。
@@ -79,13 +82,13 @@ export function ScrollView({
    * 依赖 `content.height` 与 `clientHeight`，二者都由 useBoxMetrics 实测，已含虚拟滚动的占位高度。
    */
   useEffect(() => {
-    if (!content.hasMeasured || clientHeight <= 0) return;
+    if (!content.measured || clientHeight <= 0) return;
     const realMax = maxScrollTop(content.height, clientHeight);
     const cur = scrollRef.current;
     // 跟随态由别的 effect 管；这里只管"超限但仍在手动滚动"的情形
     if (cur.following || cur.fromBottom <= realMax) return;
     onScrollRef.current?.({ fromBottom: realMax, following: realMax === 0 });
-  }, [content.height, content.hasMeasured, clientHeight]);
+  }, [content.height, content.measured, clientHeight]);
 
   // 内容长高（新消息/工具块）→ 若仍在跟随态，继续贴底。
   //
@@ -95,9 +98,9 @@ export function ScrollView({
   // 调用等于空转，必须提前返回。
   useEffect(() => {
     const cur = scrollRef.current;
-    if (!cur.following || cur.fromBottom === 0 || !content.hasMeasured) return;
+    if (!cur.following || cur.fromBottom === 0 || !content.measured) return;
     onScrollRef.current?.(scrollToBottom());
-  }, [content.height, content.hasMeasured]);
+  }, [content.height, content.measured]);
 
   const viewportH = height ?? clientHeight;
   /**

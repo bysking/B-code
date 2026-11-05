@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput, usePaste } from 'ink';
+import { Box, Text, useInput, usePaste } from './ui/index.js';
 import type { AppController, SlashItem, ToolCallDisplay, Turn } from './controller.js';
 import type { Mode } from '../permissions.js';
 import type { ClipboardImage } from '../utils/clipboard.js';

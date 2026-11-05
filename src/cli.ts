@@ -392,7 +392,7 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     ctrl.setCapabilityItems(buildCapabilityItems(panel.kind, agent));
   };
 
-  const { unmount: unmountApp } = mountTtyApp(
+  const { unmount: unmountApp } = await mountTtyApp(
     ctrl,
     {
       onExit: () => quit(130),

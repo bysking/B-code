@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text } from 'ink';
+import { Text } from './ui/index.js';
 import { marked } from 'marked';
 import TerminalRenderer from 'marked-terminal';
 import { latexToUnicode } from '@devhub-io/latex-to-unicode';

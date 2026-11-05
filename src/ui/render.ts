@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, type Instance } from 'ink';
+import { mount as engineMount } from './ui/index.js';
 import { App } from './app.js';
 import { setLogSink } from '../utils/log.js';
 import {
@@ -31,11 +31,10 @@ import type { ClipboardImage } from '../utils/clipboard.js';
 
 export interface TtyMount {
   unmount(): void;
-  instance: Instance;
 }
 
 /** 挂载UI入口 */
-export function mountTtyApp(
+export async function mountTtyApp(
   ctrl: AppController,
   hooks: {
     onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void;
@@ -54,7 +53,7 @@ export function mountTtyApp(
   initialOutput?: string[],
   /** 输出/输入流（缺省 process.stdout / process.stdin）。注入供测试与未来复用。 */
   streams?: { stdout?: NodeJS.WriteStream; stdin?: NodeJS.ReadStream },
-): TtyMount {
+): Promise<TtyMount> {
   /**
    * 接管系统日志：TTY 下不写 stderr，而是收进 controller 供 Ctrl+O 的"日志"页查看。
    *
@@ -85,7 +84,7 @@ export function mountTtyApp(
   const mouseEnabled = Boolean(process.stdout.isTTY && realStdin.isTTY);
   if (mouseEnabled) out.write(MOUSE_ENABLE);
 
-  const instance = render(
+  const app = await engineMount(
     React.createElement(App, {
       ctrl,
       onSubmit: hooks.onSubmit,
@@ -97,14 +96,17 @@ export function mountTtyApp(
       refreshCapability: hooks.refreshCapability,
       initialOutput,
     }),
-    // 关闭 ink 默认 exitOnCtrlC：否则 Ctrl+C 被 ink 吞掉，我们自己的
-    // "第一次提示 / 第二次退出 / 打印恢复命令" 协议永远收不到事件
-    { exitOnCtrlC: false, stdin: mouse.input, stdout: out },
+    {
+      stdout: out,
+      stdin: mouse.input,
+      // 关闭引擎默认的 exitOnCtrlC：否则 Ctrl+C 被引擎吞掉，我们自己的
+      // "第一次提示 / 第二次退出 / 打印恢复命令" 协议永远收不到事件
+      exitOnCtrlC: false,
+    },
   );
   return {
-    instance,
     unmount: () => {
-      instance.unmount();
+      app.unmount();
       // 关掉鼠标追踪并摘掉过滤流：否则退出后终端仍在鼠标模式下（原生选中失效）
       if (mouseEnabled) {
         try {

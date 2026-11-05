@@ -1,10 +1,10 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, type Color } from './ui/index.js';
 import { clampByLines, isCompactTerminal } from './scroll-budget.js';
 
 /** 待办状态符号与配色 */
 const TODO_SYMBOL: Record<string, string> = { pending: '☐', in_progress: '◐', completed: '☑' };
-const TODO_COLOR: Record<string, string | undefined> = {
+const TODO_COLOR: Record<string, Color | undefined> = {
   pending: undefined,
   in_progress: 'yellow',
   completed: 'green',

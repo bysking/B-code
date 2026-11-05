@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './ui/index.js';
 import TextInput from 'ink-text-input';
 import type { AskWizardState, WizardStepOption } from './controller.js';
 

@@ -18,7 +18,7 @@
  * 组件内一律用 `useTerminalSize()`（基于 ink 的 `useWindowSize`，读的是**当前
  * 渲染流**，且 resize 时自动重渲染）。
  */
-import { useWindowSize } from 'ink';
+import { useTerminalSize as engineTerminalSize } from './ui/index.js';
 import wrapAnsi from 'wrap-ansi';
 
 /**
@@ -31,11 +31,8 @@ import wrapAnsi from 'wrap-ansi';
  * `useWindowSize` 读的是 ink 自己的 stdout context，且 resize 时自动重渲染。
  */
 export function useTerminalSize(): { rows: number; columns: number } {
-  const { rows, columns } = useWindowSize();
-  return {
-    rows: rows > 0 ? rows : 40,
-    columns: columns > 0 ? columns : 80,
-  };
+  // 走适配层：ink → OpenTUI 时这里不用改（各引擎实现自己处理尺寸来源）
+  return engineTerminalSize();
 }
 
 /** 终端行数兜底（仅供非组件场景；组件内用 useTerminalSize） */

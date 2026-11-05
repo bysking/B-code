@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './ui/index.js';
 import { SimpleTextInput } from './input-box.js';
 import {
   addUserTodo,

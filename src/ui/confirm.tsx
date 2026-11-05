@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './ui/index.js';
 import type { AskState } from './controller.js';
 
 /** 选项下标移动（全向键共用：↑↓←→ 与 vim j/k/h/l 都走这里） */

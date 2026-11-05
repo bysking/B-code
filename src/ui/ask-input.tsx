@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './ui/index.js';
 import { SimpleTextInput } from './input-box.js';
 
 /**
