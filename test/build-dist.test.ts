@@ -122,3 +122,36 @@ test('启动器：版本判定按主版本，预发布版与垃圾输入都不�
   assert.equal(nodeMajor('abc'), null);
   assert.equal(nodeMajor(''), null);
 });
+
+test('启动器：能识别 registry 是否为官方源（私有镜像导致缺包时给出正确提示）', () => {
+  const launcher = readFileSync(join(ROOT, 'bin', 'bcode.js'), 'utf-8');
+  const fn = /function isOfficialRegistry\([\s\S]*?\n\}/.exec(launcher);
+  assert.ok(fn, 'bin/bcode.js 里应有 isOfficialRegistry 函数');
+  // 该函数依赖模块级常量，提取时一并带上
+  const constDecl = /const OFFICIAL_REGISTRY = '[^']*';/.exec(launcher);
+  assert.ok(constDecl, 'bin/bcode.js 里应有 OFFICIAL_REGISTRY 常量');
+  const isOfficial = new Function(`${constDecl[0]} ${fn[0]}; return isOfficialRegistry;`)() as (
+    u: string | null,
+  ) => boolean;
+
+  // 官方源的几种写法都应识别（尾斜杠、大小写、协议差异）
+  assert.equal(isOfficial('https://registry.npmjs.org/'), true);
+  assert.equal(isOfficial('https://registry.npmjs.org'), true);
+  assert.equal(isOfficial('http://REGISTRY.NPMJS.ORG/'), true);
+  // 私有镜像/镜像站必须判为「非官方」，否则不会提示用户去查源
+  assert.equal(isOfficial('https://packages.aliyun.com/xxx/npm/npm-registry'), false);
+  assert.equal(isOfficial('https://registry.npmmirror.com/'), false);
+  assert.equal(isOfficial(null), false);
+});
+
+test('启动器：缺平台包时提示应指出 registry 而非只提 optionalDependencies', () => {
+  // 这个报错最常见的根因是私有镜像未同步公共包（npm 静默跳过可选依赖），
+  // 若提示只让用户加 --include=optional，会把人带偏。
+  const launcher = readFileSync(join(ROOT, 'bin', 'bcode.js'), 'utf-8');
+  const fn = /function reportMissingPlatformPackage\([\s\S]*?\n\}/.exec(launcher);
+  assert.ok(fn, 'bin/bcode.js 里应有 reportMissingPlatformPackage 函数');
+  assert.ok(fn[0].includes('registry'), '提示里必须打印当前 registry');
+  assert.ok(fn[0].includes('@bysking:registry'), '提示里应给出 scope 级源配置方案');
+  assert.ok(fn[0].includes('--registry=https://registry.npmjs.org/'), '应给出临时换源命令');
+  assert.ok(fn[0].includes('--include=optional'), '仍应保留跳过可选依赖的排查项');
+});

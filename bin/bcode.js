@@ -18,8 +18,11 @@
  * 用 `createRequire` 拿到 require 才能 require.resolve 平台包。
  */
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -89,13 +92,106 @@ if (!pkg) {
 
 const exe = platform === 'win32' ? 'bcode.exe' : 'bcode';
 
+/** 官方 registry —— 用于判断用户是否在用镜像源 */
+const OFFICIAL_REGISTRY = 'registry.npmjs.org';
+
+/**
+ * 读取用户实际生效的 npm registry。
+ *
+ * 只做文件级解析（不 spawn `npm config get`）：启动器要快，且 npm 可能不在 PATH 上。
+ * 查找顺序与 npm 一致：项目 .npmrc → 用户 .npmrc → 全局 npmrc → 内置默认值。
+ * 找到 `@bysking:registry` 则优先（scope 级覆盖对整个包生效）。
+ *
+ * 解析失败一律返回 null，绝不因为诊断信息本身抛错而干扰用户。
+ */
+function readRegistry() {
+  try {
+    const files = [
+      // 项目级：从 cli 入口往上找（全局安装时通常没有）
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.npmrc'),
+      // 用户级
+      join(os.homedir(), '.npmrc'),
+      // 全局（npm 的全局前缀因平台而异，这里只覆盖常见位置）
+      process.env.npm_config_globalconfig,
+      process.env.PREFIX ? join(process.env.PREFIX, 'etc', 'npmrc') : null,
+    ].filter(Boolean);
+
+    let registry = null;
+    let scopeRegistry = null;
+    for (const f of files) {
+      if (!existsSync(f)) continue;
+      let text;
+      try {
+        text = readFileSync(f, 'utf-8');
+      } catch {
+        continue;
+      }
+      for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+        const eq = line.indexOf('=');
+        if (eq < 0) continue;
+        const k = line.slice(0, eq).trim();
+        const v = line.slice(eq + 1).trim();
+        if (!v) continue;
+        if (k === 'registry') registry = v;
+        else if (k === '@bysking:registry') scopeRegistry = v;
+      }
+    }
+    // scope 级配置优先于全局 registry
+    return scopeRegistry ?? registry ?? 'https://registry.npmjs.org/';
+  } catch {
+    return null;
+  }
+}
+
+/** 判断是否为官方 registry（大小写、尾斜杠、协议差异都归一化） */
+function isOfficialRegistry(url) {
+  if (!url) return false;
+  return url.toLowerCase().replace(/\/+$/, '').includes(OFFICIAL_REGISTRY);
+}
+
+/**
+ * 平台包缺失时的诊断输出。
+ *
+ * 这条路径最常见的根因**不是** optionalDependencies 被跳过，而是用户的 npm 默认
+ * registry 指向私有镜像（企业 npm 源、淘宝源等），镜像上没有同步这个公共包。
+ * npm 对 optionalDependencies 的解析失败是**静默**的——不报错、不中断安装，
+ * 只是少装一个包，用户直到运行时才发现。
+ *
+ * 所以这里先打印用户实际用的 registry，再按概率给出排查顺序。
+ */
+function reportMissingPlatformPackage(pkgName) {
+  const registry = readRegistry();
+  const official = isOfficialRegistry(registry);
+
+  console.error(`\n  缺少平台包 ${pkgName}\n`);
+  console.error(`  当前 npm registry: ${registry ?? '(无法读取)'}`);
+  if (registry && !official) {
+    console.error('  ⚠️  这不是 npm 官方源。私有镜像/镜像站常常没有同步这类公共包，');
+    console.error('     而 npm 装不上可选依赖时**不会报错**，只会静默跳过。');
+    console.error('     这是本错误最常见的原因。\n');
+  } else {
+    console.error('');
+  }
+
+  console.error('  按以下顺序排查：');
+  console.error('    1) 私有镜像未同步该包（若上面不是官方源，优先查这个）');
+  console.error('       临时用官方源重装：');
+  console.error(`         npm  i -g  ${'@bysking/b-code'} --registry=https://registry.npmjs.org/`);
+  console.error(`         pnpm add -g ${'@bysking/b-code'} --registry=https://registry.npmjs.org/`);
+  console.error('       或长期配置（只影响本包，不动公司私有源）：');
+  console.error('         echo "@bysking:registry=https://registry.npmjs.org/" >> ~/.npmrc');
+  console.error('    2) 安装时跳过了可选依赖');
+  console.error('         npm install -g @bysking/b-code --include=optional');
+  console.error('    3) 平台不受支持（见上方支持的平台列表）\n');
+}
+
 let binaryPath;
 try {
   binaryPath = require.resolve(`${pkg}/${exe}`);
 } catch {
-  console.error(`\n  缺少平台包 ${pkg}\n`);
-  console.error('  这通常意味着安装时跳过了 optionalDependencies。请重试：');
-  console.error('    npm install -g @bysking/b-code --include=optional\n');
+  reportMissingPlatformPackage(pkg);
   process.exit(1);
 }
 

@@ -285,7 +285,8 @@ node build-bun.js --all-check
 | `403 You cannot publish over the previously published versions` | 版本号没改就重跑                                      | workflow 已加幂等跳过，若仍报错说明该版本已被别人占用 |
 | job 一直排队不动                                                | runner 标签已退役                                     | 见「runner 标签」一节                                 |
 | `Could not resolve: @opentui/core-<platform>`                   | 该平台的原生包没装上                                  | 在目标平台 `bun install`，不要交叉编译                |
-| 用户装完 `bcode` 报「缺少平台包」                               | 发布顺序反了，或版本号漂移                            | 确认平台包先于主包发布，并跑 `check:version`          |
+| 用户装完 `bcode` 报「缺少平台包」                               | ① 用户 registry 指向私有镜像（**最常见**）② 发布顺序反了 ③ 版本号漂移 | 见下方「用户侧 registry」；发布侧跑 `check:version`   |
+| **只有某一类用户报缺包，本地用官方源复现不了**                    | 该用户 `~/.npmrc` 的 `registry` 是公司私有源/镜像站，未同步公共包；npm 对可选依赖解析失败**静默跳过** | 让用户 `npm config get registry` 确认；用 `@bysking:registry=https://registry.npmjs.org/` 单独指向官方源 |
 | **装完报「缺少平台包」但 tarball 里明明有 `optionalDependencies`** | registry **元数据**里该字段为空（安装读的是元数据，不是 tarball）。常见于用 `postpack` 钩子删字段——它在元数据组装前就跑了 | 查 `curl -s https://registry.npmjs.org/<包名> \| jq '.versions[version].optionalDependencies'`；修复见「不要用 prepack/postpack 注入」 |
 | 安装时**一个平台包都没装**，且无任何报错                          | `optionalDependencies` 解析失败被 npm 静默忽略       | 同上——字段必须在 registry 元数据里                    |
 
