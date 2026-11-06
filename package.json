@@ -1,6 +1,6 @@
 {
   "name": "@bysking/b-code",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里 要求nodejs版本>=24.22.2， 推荐>=26.2.0",
   "type": "module",
   "main": "lib/index.js",
@@ -18,11 +18,9 @@
     "test": "bun test --timeout 20000",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
-    "check:version": "node scripts/check-version.js && node scripts/sync-version.js --check",
+    "check:version": "node scripts/check-version.js",
     "version:sync": "node scripts/sync-version.js",
-    "prepack": "node scripts/sync-version.js --inject",
-    "postpack": "node scripts/sync-version.js --restore",
-    "prepublishOnly": "npm run typecheck && npm run check:version",
+    "prepublishOnly": "npm run typecheck && npm run version:sync",
     "build:all-check": "node build-bun.js --all-check"
   },
   "engines": {
@@ -74,5 +72,11 @@
     "darwin",
     "linux",
     "win32"
-  ]
+  ],
+  "optionalDependencies": {
+    "@bysking/b-code-darwin-arm64": "3.2.2",
+    "@bysking/b-code-darwin-x64": "3.2.2",
+    "@bysking/b-code-linux-x64": "3.2.2",
+    "@bysking/b-code-win32-x64": "3.2.2"
+  }
 }

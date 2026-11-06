@@ -16,6 +16,17 @@
 
 ### Fixed
 
+- **v3.2.1 安装后报「缺少平台包」**：`optionalDependencies` 在 registry **元数据**里是
+  空的，npm/pnpm 因此根本不去拉取 4 个平台包，且安装过程**没有任何报错**。
+  - 根因是上一版引入的 `prepack` 注入 / `postpack` 还原方案：npm publish 的顺序是
+    `prepack → 打 tarball → postpack → 读取 package.json 组装元数据 → 上传`，
+    `postpack` 在元数据组装**之前**就把字段删了。症状极具迷惑性——
+    **tarball 里的 package.json 有该字段，registry 元数据里没有**，而安装时读的是元数据。
+  - 改为把 4 行 `optionalDependencies` **直接写进 package.json 并提交**，
+    `version` 仍是唯一手改点，由 `bun run version:sync` 展开；`prepublishOnly`
+    强制执行，忘记跑也会被拦。彻底消除对钩子时序的依赖。
+  - CI 新增发布前断言：`package.json` 必须含该字段且版本等于 `version`
+    （脚本会提示"不要用 postpack 删除该字段"）。
 - **v3.0.1 的二进制在用户机器上执行报 `EACCES`**：发布的 tarball 里 `bcode` 权限是
   `644` 而非 `755`。根因是 `actions/upload-artifact` 用 zip 跨 job 传递产物，
   **官方明确不保留 Unix 权限**（所有文件变 `644`），`pack-platform.js` 里设的

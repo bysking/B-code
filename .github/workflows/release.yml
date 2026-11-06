@@ -78,13 +78,12 @@ jobs:
             bun scripts/check-version.js
           fi
 
-      # 确认 optionalDependencies 能被正确派生（源文件不含该字段，
-      # 由 prepack 按 version 注入——这里只读校验派生结果）
-      - name: Check derived optionalDependencies
+      # 确认 package.json 里的平台包版本 == 主包 version
+      - name: Check optionalDependencies
         run: bun scripts/sync-version.js --check
 
       # 实际打一次包，断言 tarball 里的 4 个平台包版本 == 主包版本。
-      # 这是发布前最后一道防线：注入逻辑若被改坏，用户会"装成功但跑不起来"。
+      # 这是发布前最后一道防线：字段若在 publish 流程中被还原，用户会"装成功但跑不起来"。
       - name: Verify packed manifest
         run: |
           set -euo pipefail
@@ -370,6 +369,27 @@ jobs:
             echo "::error::tarball 里出现了 dist/ 或 src/，检查 package.json 的 files 字段"
             exit 1
           fi
+
+      # ⚠️ 发布**前**最后确认一次：npm 组装 registry 元数据时读的就是这份 package.json。
+      # v3.2.1 的事故是 postpack 钩子在元数据组装前删掉了 optionalDependencies，
+      # 结果 tarball 里有、元数据里没有，用户装完缺平台包（且安装时没有任何报错）。
+      - name: Assert optionalDependencies present before publish
+        run: |
+          set -euo pipefail
+          node -e "
+            const p=require('./package.json');
+            const od=p.optionalDependencies||{};
+            const keys=Object.keys(od).filter(k=>k.startsWith(p.name+'-'));
+            if (keys.length===0) {
+              console.error('::error::package.json 缺少 optionalDependencies');
+              console.error('   npm 用它组装 registry 元数据；缺失会让用户装不到平台包。');
+              console.error('   不要用 postpack 钩子删除该字段，它必须在元数据组装时仍存在。');
+              process.exit(1);
+            }
+            const bad=keys.filter(k=>od[k]!==p.version);
+            if (bad.length) { console.error('::error::平台包版本不匹配: '+bad.join(', ')); process.exit(1); }
+            console.log('✅ optionalDependencies 就绪：'+keys.length+' 个平台包 @ '+p.version);
+          "
 
       - name: Publish main package
         env:

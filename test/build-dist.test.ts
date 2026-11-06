@@ -43,14 +43,23 @@ test('分发：平台清单覆盖四个支持平台', () => {
   }
 });
 
-test('分发：源 package.json 不残留 optionalDependencies（否则会造成版本漂移）', () => {
-  // 该字段由 prepack 注入、postpack 还原。若源文件里有，说明某次注入后没清干净，
-  // 下次改 version 时它会与 version 不一致 → 用户装不上平台包（npm 静默失败）。
-  assert.equal(
-    pkg.optionalDependencies,
-    undefined,
-    '源 package.json 不应包含 optionalDependencies（由 scripts/sync-version.js 自动派生）',
+test('分发：optionalDependencies 已写进 package.json 且版本等于主包', () => {
+  // 该字段**必须**存在于 package.json（不是靠 prepack 临时注入）：
+  // npm 用 package.json 组装 registry 元数据，而安装时读的正是元数据。
+  // v3.2.1 用 prepack 注入 + postpack 还原，postpack 在元数据组装前就删了字段，
+  // 导致 tarball 里有、元数据里没有 → 用户装完缺平台包。
+  const optional = (pkg.optionalDependencies ?? {}) as Record<string, string>;
+  assert.ok(
+    Object.keys(optional).length > 0,
+    'optionalDependencies 必须写进 package.json（否则 registry 元数据缺失，用户装不到平台包）',
   );
+  for (const [name, ver] of Object.entries(optional)) {
+    assert.equal(
+      ver,
+      pkg.version,
+      `${name} 的版本 (${ver}) 必须等于主包 ${pkg.version}（否则会装到不匹配的二进制）`,
+    );
+  }
 });
 
 test('分发：启动器的 SUPPORTED 与平台清单同步', () => {

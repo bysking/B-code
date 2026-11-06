@@ -46,28 +46,46 @@ git tag v3.2.1 && git push origin v3.2.1
 ### 版本号为什么只改一处
 
 主包的 `optionalDependencies` 必须指向**与主包同版本**的 4 个平台包，否则用户
-`npm i -g` 时静默解析失败（症状是"装成功了但 `bcode` 跑不起来"）。原来这 4 行要手工
-跟 `version` 一起改，共 5 处，极易漏。
+`npm i -g` 时静默解析失败（症状是"装成功了但 `bcode` 跑不起来"）。
 
-现在改为**发布时注入**：
-
-```
-package.json 的 version（唯一手改）
-      ↓ prepack: sync-version.js --inject
-tarball 里的 optionalDependencies（自动 = version）
-      ↓ postpack: sync-version.js --restore
-源文件恢复原状，git 里永远看不到该字段
-```
-
-好处：源文件与 `bun.lock` 里都不会留下会漂移的版本号。想确认派生结果：
+改版本的流程：
 
 ```bash
-node scripts/sync-version.js          # 打印将派生的 4 个版本
+# ① 只改 package.json 的 version
+# ② 展开那 4 行（不跑也行，prepublishOnly 会强制跑）
+bun run version:sync
+```
+
+`version` 是唯一手改点，其余由 `scripts/sync-version.js` 派生。
+
+> ### ⚠️ 不要用 prepack/postpack 注入这个字段
+>
+> 曾经这么做过，踩了个很隐蔽的坑（v3.2.1 事故）。npm publish 的真实顺序是：
+>
+> ```
+> prepack → 打 tarball → postpack → 读取 package.json 组装 registry 元数据 → 上传
+> ```
+>
+> `postpack` 在**元数据组装之前**就把字段删了，于是：
+>
+> - tarball 里的 `package.json` **有** `optionalDependencies`
+> - registry **元数据**里 **没有**
+>
+> 而 npm / pnpm 安装时读的是**元数据**，不是 tarball 内的 package.json。结果平台包
+> 根本不会被拉取，用户装完报「缺少平台包」，**安装过程却没有任何报错**。
+>
+> 所以这 4 行必须**真实存在于提交进仓库的 package.json 里**。
+
+想确认发布前的状态：
+
+```bash
+node scripts/sync-version.js --check      # 校验 4 行与 version 是否一致
 npm pack && tar -xzOf *.tgz package/package.json | grep -A6 optional
 ```
 
-CI 的 `check-version` job 会打一次真实包并断言 tarball 内 4 个平台包版本 == 主包版本，
-注入逻辑被改坏时会在发布前拦住。
+CI 有两道防线：`check-version` job 打真实包断言 tarball 内的版本，
+`publish-main` job 在 `npm publish` **之前**再断言一次 package.json 里字段仍存在
+（正是这一步能拦住上面那个坑）。
 
 CI（`.github/workflows/release.yml`）随后自动跑：
 
@@ -268,6 +286,8 @@ node build-bun.js --all-check
 | job 一直排队不动                                                | runner 标签已退役                                     | 见「runner 标签」一节                                 |
 | `Could not resolve: @opentui/core-<platform>`                   | 该平台的原生包没装上                                  | 在目标平台 `bun install`，不要交叉编译                |
 | 用户装完 `bcode` 报「缺少平台包」                               | 发布顺序反了，或版本号漂移                            | 确认平台包先于主包发布，并跑 `check:version`          |
+| **装完报「缺少平台包」但 tarball 里明明有 `optionalDependencies`** | registry **元数据**里该字段为空（安装读的是元数据，不是 tarball）。常见于用 `postpack` 钩子删字段——它在元数据组装前就跑了 | 查 `curl -s https://registry.npmjs.org/<包名> \| jq '.versions[version].optionalDependencies'`；修复见「不要用 prepack/postpack 注入」 |
+| 安装时**一个平台包都没装**，且无任何报错                          | `optionalDependencies` 解析失败被 npm 静默忽略       | 同上——字段必须在 registry 元数据里                    |
 
 ---
 

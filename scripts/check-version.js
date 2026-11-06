@@ -35,9 +35,9 @@ const errors = [];
 /**
  * 平台清单的权威来源是 scripts/sync-version.js 的 PLATFORMS。
  *
- * 注意：源 package.json **不再**包含 optionalDependencies——那 4 行由
- * `sync-version.js --inject` 在 prepack 时按 version 自动写入（见该脚本注释）。
- * 所以这里不能再去读 pkg.optionalDependencies，否则永远为空。 */
+ * 注意：`package.json` 里的 optionalDependencies 是**提交进仓库**的（由
+ * `bun run version:sync` 从 version 展开），不再用 prepack 临时注入——
+ * 那种做法会让 registry 元数据丢字段（详见 sync-version.js 顶部注释）。 */
 const syncer = readFileSync(join(root, 'scripts', 'sync-version.js'), 'utf-8');
 const platformsBlock = /const PLATFORMS = \[([^\]]*)\]/.exec(syncer);
 if (!platformsBlock) {
@@ -51,16 +51,15 @@ if (optionalPlatforms.length === 0) {
   errors.push('scripts/sync-version.js 的 PLATFORMS 为空');
 }
 
-// ── 1. 版本号派生自检：源文件若残留 optionalDependencies，必须与 version 一致 ──
-// （正常情况下源文件不该有该字段；有的话说明注入后没还原，属于污染）
+// ── 1. 平台包版本必须与主包一致（不一致 → 用户装不上，且 npm 不报错）──
 const optional = pkg.optionalDependencies ?? {};
-for (const [name, version] of Object.entries(optional)) {
-  if (!name.startsWith(`${pkg.name}-`)) continue;
-  if (version !== pkg.version) {
-    errors.push(
-      `源 package.json 里残留 optionalDependencies：${name} 为 ${version}，应为 ${pkg.version}` +
-        '（该字段由 prepack 注入、postpack 还原，不应留在源文件里）',
-    );
+for (const platform of optionalPlatforms) {
+  const name = `${pkg.name}-${platform}`;
+  const version = optional[name];
+  if (version === undefined) {
+    errors.push(`${name} 缺失于 optionalDependencies（用户在该平台装不到二进制）`);
+  } else if (version !== pkg.version) {
+    errors.push(`${name} 为 ${version}，应为 ${pkg.version}（运行 bun run version:sync 修复）`);
   }
 }
 
