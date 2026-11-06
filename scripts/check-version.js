@@ -130,17 +130,30 @@ if (tag) {
   }
 }
 
-// ── 7. Node 版本要求：bin/bcode.js 的 MIN_NODE 与 package.json 的 engines.node ──
+// ── 7. Node 版本要求：bin/bcode.js 的 MIN_NODE_MAJOR 与 package.json 的 engines.node ──
 // 启动器的运行时探查和 engines 是同一件事的两处声明：engines 决定 npm 装不装，
-// MIN_NODE 决定装了之后跑不跑。只改一处就会出现"npm 放行、运行时报错"（或反之）。
-const minNode = /const MIN_NODE = '([^']+)'/.exec(launcher);
+// MIN_NODE_MAJOR 决定装了之后跑不跑。只改一处就会出现"npm 放行、运行时报错"（或反之）。
+//
+// 只校验主版本：门槛是 >= 24 这种粗粒度要求，写次/修订号（如 >=24.22.2）会误伤
+// 25.x、26.x 以及预发布版以外的正常版本，也让 yarn 的 engine 检查更容易拦人。
+const minNodeMajor = /const MIN_NODE_MAJOR = (\d+)/.exec(launcher);
 const enginesNode = pkg.engines?.node ?? '';
-if (!minNode) {
-  errors.push('bin/bcode.js 里找不到 MIN_NODE');
-} else if (enginesNode !== `>=${minNode[1]}`) {
-  errors.push(
-    `package.json 的 engines.node 是 ${enginesNode || '(空)'}，应为 >=${minNode[1]}（与 bin/bcode.js 的 MIN_NODE 一致）`,
-  );
+if (!minNodeMajor) {
+  errors.push('bin/bcode.js 里找不到 MIN_NODE_MAJOR');
+} else {
+  const want = `>=${minNodeMajor[1]}`;
+  if (enginesNode !== want) {
+    errors.push(
+      `package.json 的 engines.node 是 ${enginesNode || '(空)'}，应为 ${want}（与 bin/bcode.js 的 MIN_NODE_MAJOR 一致）`,
+    );
+  }
+  // engines 若带了次/修订号，说明有人又把粗粒度门槛改细了 —— 会误伤正常版本
+  const enginesMinor = /^>=\d+\.\d+/.exec(enginesNode);
+  if (enginesMinor) {
+    errors.push(
+      `engines.node (${enginesNode}) 不应指定次版本/修订号，只写 >=${minNodeMajor[1]} 即可`,
+    );
+  }
 }
 
 if (errors.length > 0) {

@@ -1,7 +1,7 @@
 {
   "name": "@bysking/b-code",
   "version": "3.2.2",
-  "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里 要求nodejs版本>=24.22.2， 推荐>=26.2.0",
+  "description": "从零构建的编码助手 — 你自己的 B-Code，运行在终端里（要求 Node.js >= 24, 推荐>=26.2.0）",
   "type": "module",
   "main": "lib/index.js",
   "bin": {
@@ -24,7 +24,7 @@
     "build:all-check": "node build-bun.js --all-check"
   },
   "engines": {
-    "node": ">=24.22.2"
+    "node": ">=24"
   },
   "repository": {
     "type": "git",

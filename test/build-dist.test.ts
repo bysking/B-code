@@ -84,3 +84,41 @@ test('分发：files 只含启动器（平台二进制由 optionalDependencies �
 test('分发：engines 声明 node（启动器是 Node 脚本）', () => {
   assert.ok(pkg.engines?.node, 'engines.node 必须声明——启动器需要 Node 执行');
 });
+
+test('分发：Node 版本门槛只卡主版本（误写成次版本会拦掉正常版本）', () => {
+  // 只要求 >= 24 这种粗粒度。写成 >=24.22.2 会把 24.0.0 拦掉，
+  // 且 24.22.2 只是发布时的环境，不是真实下限。
+  assert.match(
+    pkg.engines.node,
+    /^>=\d+$/,
+    `engines.node 应形如 ">=24"（只卡主版本），实际是 ${pkg.engines.node}`,
+  );
+});
+
+test('分发：启动器的 MIN_NODE_MAJOR 与 engines.node 一致', () => {
+  const launcher = readFileSync(join(ROOT, 'bin', 'bcode.js'), 'utf-8');
+  const m = /const MIN_NODE_MAJOR = (\d+)/.exec(launcher);
+  assert.ok(m, 'bin/bcode.js 里应有 MIN_NODE_MAJOR');
+  assert.equal(
+    pkg.engines.node,
+    `>=${m[1]}`,
+    'engines.node 与 MIN_NODE_MAJOR 必须一致（一个是 npm 的准入，一个是运行时自查）',
+  );
+});
+
+test('启动器：版本判定按主版本，预发布版与垃圾输入都不误判', () => {
+  const launcher = readFileSync(join(ROOT, 'bin', 'bcode.js'), 'utf-8');
+  // 取出 nodeMajor 的实现，在测试里跑真实逻辑而不是复制一份
+  const fn = /function nodeMajor\([\s\S]*?\n\}/.exec(launcher);
+  assert.ok(fn, 'bin/bcode.js 里应有 nodeMajor 函数');
+  const nodeMajor = new Function(`${fn[0]}; return nodeMajor;`)() as (v: string) => number | null;
+
+  // 预发布版主版本够就放行（曾因比较次版本而误报）
+  assert.equal(nodeMajor('27.0.0-alpha.0.0'), 27);
+  assert.equal(nodeMajor('26.2.0'), 26);
+  assert.equal(nodeMajor('24.0.0'), 24);
+  assert.equal(nodeMajor('23.11.1'), 23);
+  // 垃圾输入返回 null（不能返回 NaN，否则 NaN < 24 为 false 会错误放行）
+  assert.equal(nodeMajor('abc'), null);
+  assert.equal(nodeMajor(''), null);
+});
