@@ -25,6 +25,10 @@
     git tag 与版本一致、`engines.node` 与 `MIN_NODE_MAJOR` 一致）**保留**——
     这些是真实配置错误，不会、也不该被自动修复。
   - tarball 实际内容的校验（`Verify packed manifest`）照旧，它才决定用户最终装到什么。
+  - 测试同步调整：`optionalDependencies 已写进 package.json 且版本等于主包` 拆成两条——
+    一条只断言"字段存在"（守住 v3.2.1 那个事故），一条断言"每个平台的键都在"；
+    不再断言版本号字面相等，因为改完 version 未同步是正常中间状态。
+    （原写法会让"本地只改 version"时 `bun test` 直接失败。）
 - **「缺少平台包」的提示会把人带偏**：原来的输出只让用户加 `--include=optional`，
   但这条错误最常见的根因其实是**npm 默认 registry 指向了私有镜像**（企业源、淘宝源等），
   镜像上没有同步这个公共包，而 npm 装不上可选依赖时**不报错、只静默跳过**。

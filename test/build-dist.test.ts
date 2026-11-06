@@ -43,21 +43,36 @@ test('分发：平台清单覆盖四个支持平台', () => {
   }
 });
 
-test('分发：optionalDependencies 已写进 package.json 且版本等于主包', () => {
+test('分发：optionalDependencies 确实写进了 package.json（不能靠钩子临时注入）', () => {
   // 该字段**必须**存在于 package.json（不是靠 prepack 临时注入）：
   // npm 用 package.json 组装 registry 元数据，而安装时读的正是元数据。
   // v3.2.1 用 prepack 注入 + postpack 还原，postpack 在元数据组装前就删了字段，
   // 导致 tarball 里有、元数据里没有 → 用户装完缺平台包。
+  //
+  // 只断言"字段存在"、不断言版本号是否等于 version：
+  // 改 version 后没跑 version:sync 是**正常中间状态**，发布时
+  // prepublishOnly / CI 会自动补齐。断言版本号会让"只改一处"的工作流失败。
   const optional = (pkg.optionalDependencies ?? {}) as Record<string, string>;
   assert.ok(
     Object.keys(optional).length > 0,
     'optionalDependencies 必须写进 package.json（否则 registry 元数据缺失，用户装不到平台包）',
   );
-  for (const [name, ver] of Object.entries(optional)) {
-    assert.equal(
-      ver,
-      pkg.version,
-      `${name} 的版本 (${ver}) 必须等于主包 ${pkg.version}（否则会装到不匹配的二进制）`,
+});
+
+test('分发：platform 清单与 optionalDependencies 的键一致（派生输入正确）', () => {
+  // 不断言 optionalDependencies[n].version === pkg.version：
+  // 改完 version 还没跑 version:sync 是**正常中间状态**，发布时
+  // prepublishOnly / CI 会自动补齐，断言它会让"只改一处"的流程失败。
+  //
+  // 但必须守住"派生输入正确"——若 package.json 里缺了某个平台的键，
+  // sync 也无从补起，用户在那个平台就装不到二进制。
+  const optional = Object.keys((pkg.optionalDependencies ?? {}) as Record<string, string>).filter(
+    (n) => n.startsWith(`${pkg.name}-`),
+  );
+  for (const platform of platformList()) {
+    assert.ok(
+      optional.includes(`${pkg.name}-${platform}`),
+      `optionalDependencies 缺少 ${pkg.name}-${platform}（sync 无从补起，该平台用户装不到二进制）`,
     );
   }
 });
