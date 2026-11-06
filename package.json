@@ -74,9 +74,9 @@
     "win32"
   ],
   "optionalDependencies": {
-    "@bysking/b-code-darwin-arm64": "3.2.4",
-    "@bysking/b-code-darwin-x64": "3.2.4",
-    "@bysking/b-code-linux-x64": "3.2.4",
-    "@bysking/b-code-win32-x64": "3.2.4"
+    "@bysking/b-code-darwin-arm64": "3.2.5",
+    "@bysking/b-code-darwin-x64": "3.2.5",
+    "@bysking/b-code-linux-x64": "3.2.5",
+    "@bysking/b-code-win32-x64": "3.2.5"
   }
 }

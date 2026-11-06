@@ -1,4 +1,4 @@
-import { test, beforeAll, afterAll } from 'bun:test';
+import { test, beforeAll, afterAll, setDefaultTimeout } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,17 @@ import {
 } from '../src/mcp.js';
 import { MCP_CONFIG_ENV, transportKind } from '../src/mcp-config.js';
 import { Registry, type RuntimeContext } from '../src/registry.js';
+
+/**
+ * 本文件是 MCP **集成**测试：每个用例都 spawn 一个真实的 JSON-RPC 子进程并做多轮
+ * 往返（initialize → tools/list → resources/list → 调用…），全文件 28 个用例累计
+ * 约 19s。而 bunfig.toml 的全局 timeout 是 20s，在全量并发下（concurrency=6）
+ * 偶尔被击穿，出现「CI 上偶发超时、单独跑却通过」的假失败。
+ *
+ * 只给本文件放宽，不动全局配置：其余 45 个纯逻辑测试仍受 20s 保护，
+ * 一旦真正卡死能快速暴露。
+ */
+setDefaultTimeout(60000);
 
 /**
  * 假 MCP server：一个实现 JSON-RPC(stdio) 的 node 脚本，

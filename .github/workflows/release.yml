@@ -352,6 +352,11 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # ⚠️ 每个 job 各自 checkout，check-version job 里 sync 的结果**不会**传到这里。
+      # 所以这里必须再同步一次，否则「只改 version」的提交会卡在下面的 assert。
+      - name: Sync optionalDependencies from version
+        run: bun scripts/sync-version.js
+
       # 主包本体只是 bin/bcode.js 启动器（~3KB），不含二进制也不含源码；
       # 跑二进制的是各平台包。这里不构建，只做发布前的类型检查与内容校验。
       - run: bun run typecheck

@@ -16,11 +16,22 @@
 
 ### Fixed
 
+- **CI 的 `test` job 偶发超时失败**（MCP 集成测试被 20s 全局超时击穿）：
+  `test/mcp.test.ts` 有 28 个用例，每个都 spawn 一个真实 JSON-RPC 子进程并做多轮往返，
+  单文件累计约 19s——正好卡在 `bunfig.toml` 的 20s 全局上限边缘，全量并发
+  （`concurrency=6`）下偶尔被击穿。表现为「CI 上随机挂一个 MCP 用例、单独跑却通过」，
+  极易被误认为功能回归。
+  - 该文件单独 `setDefaultTimeout(60000)`，**不动全局配置**：其余 45 个纯逻辑测试
+    仍受 20s 保护，真正的死循环能快速暴露（已用死循环用例验证防护未被削弱）。
 - **只改 `version` 就会被 CI 拦下**：`check-version` job 在 `version:sync` 之前跑，
   于是「本地只改了 version、4 行平台包还是旧版本」这种**正常状态**被当成错误拦下——
   而发布流程本身（`prepublishOnly`）会自动补上，产物是对的。
   - CI 改为先执行 `bun scripts/sync-version.js` 同步，再校验，与本地 `prepublishOnly`
     的行为对齐。
+  - `publish-main` job 也要同步：**每个 job 各自 checkout，`check-version` job 里
+    sync 的结果不会传递过来**。漏掉这处会让「只改 version」的提交卡在
+    `Assert optionalDependencies present before publish`（已在发布前拦住，不会产出坏包，
+    但流水线发不出去）。
   - `check-version.js` 的其余 6 项校验（平台清单四处一致、`files` 覆盖 main/bin、
     git tag 与版本一致、`engines.node` 与 `MIN_NODE_MAJOR` 一致）**保留**——
     这些是真实配置错误，不会、也不该被自动修复。
