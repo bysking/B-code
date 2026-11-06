@@ -23,6 +23,12 @@
         "undici": "^6.28.0",
         "wrap-ansi": "^10.0.1",
       },
+      "optionalDependencies": {
+        "@bysking/b-code-darwin-arm64": "3.2.6",
+        "@bysking/b-code-darwin-x64": "3.2.6",
+        "@bysking/b-code-linux-x64": "3.2.6",
+        "@bysking/b-code-win32-x64": "3.2.6",
+      },
     },
   },
   "packages": {

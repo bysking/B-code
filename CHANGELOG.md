@@ -14,6 +14,22 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`version:sync` 升级为「一条命令统一全部版本」**：改版本时不再需要手工同步多处。
+  ```bash
+  bun run version:sync 3.2.7   # 同时改 version、4 行平台包、bun.lock
+  bun run version:sync         # 或先手改 version，再让脚本展开其余
+  ```
+  - 新增 `bun.lock` 同步：`version` 和 `optionalDependencies` 都会写进 lockfile，
+    版本一变 lockfile 就失配，CI 的 `bun install --frozen-lockfile` 会直接报
+    `lockfile had changes, but lockfile is frozen`。脚本调用 `bun install` 重算，
+    比手写正则改 lockfile 可靠。
+  - 新增 `--check` 只读模式（CI 用）与版本号格式校验（拒绝 `abc`、`1.2` 这类手误）。
+  - CI 的 `check-version` job 相应改为只校验、不改写：版本应在**提交前**统一好，
+    CI 里悄悄改写只会掩盖"忘了跑脚本"，还会让下次本地 diff 莫名其妙。
+  - `prepublishOnly` 从"跑 sync"改为"跑 check"——发布时不该再改仓库文件。
+
 ### Fixed
 
 - **CI 的 `test` job 偶发超时失败**（MCP 集成测试被 20s 全局超时击穿）：
