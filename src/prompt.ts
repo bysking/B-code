@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { execSync } from 'node:child_process';
+import { execSync, type ExecSyncOptionsWithStringEncoding } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -85,11 +85,16 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
   const parts: string[] = [`# Environment\n- Platform: ${process.platform}`, `- Working directory: ${cwd}`];
 
   // Git 状态（非 git 目录静默跳过）
+  // stdio 必须显式指定：execSync 默认把子进程 stderr 继承到父进程，
+  // 非 git 目录时 git 的 "fatal: not a git repository" 会直接打到终端（catch 拦不住）
   try {
-    const branch = execSync('git branch --show-current', { cwd, encoding: 'utf-8' }).trim();
-    const dirty = execSync('git -c color.ui=never status --porcelain', { cwd, encoding: 'utf-8' })
-      .toString()
-      .trim();
+    const gitOpts: ExecSyncOptionsWithStringEncoding = {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    };
+    const branch = execSync('git branch --show-current', gitOpts).trim();
+    const dirty = execSync('git -c color.ui=never status --porcelain', gitOpts).toString().trim();
     parts.push(`\n# Git\n- Branch: ${branch || '(detached)'}`);
     if (dirty) parts.push(`- Uncommitted changes:\n${dirty.slice(0, 500)}`);
   } catch {

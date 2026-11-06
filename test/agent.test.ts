@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Agent, compactToolEcho } from '../src/agent.js';
 import type { ModelInput, ModelOutput } from '../src/backend.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import { writeScriptCommand, writeSleepCommand } from './helpers/script-command.js';
 
 /**
  * 脚本化假后端：按预写剧本依次回复
@@ -274,7 +275,10 @@ test('Hooks：PreToolUse 拦截 → 工具不执行，结果回给模型', async
     print: () => {},
     mode: 'bypass', // 跳过权限确认，只验证 hook 层
     hooks: {
-      PreToolUse: [{ command: `node -e 'process.stderr.write("forbidden"); process.exit(2)'` }],
+      // 脚本文件而非 `node -e '...'`：Windows 的 cmd.exe 不认单引号（见 helpers/script-command.ts）
+      PreToolUse: [
+        { command: await writeScriptCommand(dir, 'process.stderr.write("forbidden"); process.exit(2);') },
+      ],
     },
   });
   await agent.chat('write it');
@@ -298,7 +302,9 @@ test('Hooks：UserPromptSubmit 拦截 → 原因追加进 prompt', async () => {
     },
     print: () => {},
     hooks: {
-      UserPromptSubmit: [{ command: `node -e 'process.stderr.write("nope"); process.exit(2)'` }],
+      UserPromptSubmit: [
+        { command: await writeScriptCommand(dir, 'process.stderr.write("nope"); process.exit(2);') },
+      ],
     },
   });
   await agent.chat('do something');
@@ -476,10 +482,19 @@ test('并发子 Agent：同一批的多个 agent 调用并行执行，日志按 
   const [first, second] = starts.map((s) => s.id);
   const aLogs = logsOf(first!);
   const bLogs = logsOf(second!);
-  assert.ok(aLogs.some((l) => l.startsWith('tool   read_file')), `A 有自己的工具步骤：${aLogs}`);
-  assert.ok(aLogs.some((l) => l.includes('任务A完成')), 'A 有自己的收尾');
+  assert.ok(
+    aLogs.some((l) => l.startsWith('tool   read_file')),
+    `A 有自己的工具步骤：${aLogs}`,
+  );
+  assert.ok(
+    aLogs.some((l) => l.includes('任务A完成')),
+    'A 有自己的收尾',
+  );
   assert.ok(!bLogs.some((l) => l.includes('read_file')), `B 不该混进 A 的步骤：${bLogs}`);
-  assert.ok(bLogs.some((l) => l.includes('B 一轮就完事')), 'B 有自己的收尾');
+  assert.ok(
+    bLogs.some((l) => l.includes('B 一轮就完事')),
+    'B 有自己的收尾',
+  );
 
   const ends = events.filter((e) => e.type === 'subagent_end');
   assert.equal(ends.length, 2, '两个都有 end（不会漏收口）');
@@ -557,12 +572,15 @@ test('硬中断：interrupt() 立即 abort 模型请求的 signal，取消不上
 });
 
 test('硬中断：shell 工具执行中被取消——子进程立即终止，结果带中断标记', async () => {
+  const longCmd = await writeSleepCommand(dir);
   let step = 0;
   const fn = async (_input: ModelInput): Promise<ModelOutput> => {
     step++;
     if (step === 1) {
       return {
-        content: [{ type: 'tool_use', id: 'tu-shell', name: 'run_shell', input: { command: 'sleep 30' } }],
+        // 用脚本文件跑一个长任务，而不是 `sleep 30`：sleep.exe 只在 Git Bash 的
+        // PATH 里，PowerShell/cmd 下跑测试会因为"找不到 sleep"而瞬间退出（见 helpers/script-command.ts）
+        content: [{ type: 'tool_use', id: 'tu-shell', name: 'run_shell', input: { command: longCmd } }],
       };
     }
     return { content: [{ type: 'text', text: 'done' }] };
@@ -574,7 +592,7 @@ test('硬中断：shell 工具执行中被取消——子进程立即终止，�
   agent.interrupt(); // Esc → SIGTERM 子进程
   await p;
 
-  assert.ok(Date.now() - start < 10_000, '远早于 sleep 30s：子进程被真正终止');
+  assert.ok(Date.now() - start < 10_000, '远早于 30s 长命令结束：子进程被真正终止');
   assert.equal(agent.interruptedByUser, true);
   assert.equal(step, 1, '中断后不再发起第二轮模型调用');
   // 中断标记落进喂回的 tool_result

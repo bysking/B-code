@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { registerBuiltinTools, snippetDiff } from '../src/tools.js';
 import { Registry, type RuntimeContext } from '../src/registry.js';
 import { FileStore } from '../src/file-store.js';
+import { writeSleepCommand } from './helpers/script-command.js';
 
 /** 经注册表执行内置工具（P5：测试走真实解析路径，而非旧 switch） */
 const registry = new Registry();
@@ -306,15 +307,19 @@ test('run_shell 实时日志：逐块经 ctx.onToolOutput 转发', async () => {
 });
 
 test('run_shell 硬中断：ctx.signal abort → 子进程立即终止，结果带中断标记', async () => {
+  // 长命令用脚本文件跑 setTimeout，不用 `sleep 30`：sleep.exe 来自 Git for Windows
+  // 的 usr\bin，只有从 Git Bash 启动的进程 PATH 里才有；PowerShell/cmd 下会因
+  // "'sleep' is not recognized" 秒退，中断标记根本没机会出现（见 helpers/script-command.ts）
+  const longCmd = await writeSleepCommand(dir);
   const ac = new AbortController();
   const rctx = { ...ctx, signal: ac.signal } as RuntimeContext;
   const mp = registry.resolve('run_shell')!;
   const start = Date.now();
-  const pending = Promise.resolve(mp.handler({ command: 'sleep 30' }, rctx) as string);
+  const pending = Promise.resolve(mp.handler({ command: longCmd }, rctx) as string);
   await new Promise((r) => setTimeout(r, 200)); // 等子进程起来
   ac.abort(); // 用户取消
   const out = await pending;
-  assert.ok(Date.now() - start < 10_000, '远早于 sleep 30s：进程被真正杀掉');
+  assert.ok(Date.now() - start < 10_000, '远早于 30s 长命令结束：进程被真正杀掉');
   assert.ok(out.includes('interrupted'), `结果带中断标记，实际：${out}`);
 });
 
@@ -323,7 +328,7 @@ test('run_shell 硬中断：signal 已 abort 时调用 → 立即返回中断标
   ac.abort();
   const rctx = { ...ctx, signal: ac.signal } as RuntimeContext;
   const mp = registry.resolve('run_shell')!;
-  const out = await Promise.resolve(mp.handler({ command: 'sleep 30' }, rctx) as string);
+  const out = await Promise.resolve(mp.handler({ command: await writeSleepCommand(dir) }, rctx) as string);
   assert.ok(out.includes('interrupted'));
 });
 

@@ -166,11 +166,14 @@ test('renderCompaction：read_file 但 store 无快照 → 退化为脱敏', () 
 
 test('buildFileIndex：列出已读文件 + dirty 标记', () => {
   const store = new FileStore();
-  store.set(resolve('/tmp/a.ts'), { mtimeMs: 1, size: 5, hash: 'h1', content: 'a\nb', dirty: false });
+  // 断言用 resolve() 后的真实 key，不能写字面量 '/tmp/a.ts'：
+  // Windows 上 store 的 key 是 'E:\\tmp\\a.ts'，写死 POSIX 路径必然失败
+  const a = resolve('/tmp/a.ts');
+  store.set(a, { mtimeMs: 1, size: 5, hash: 'h1', content: 'a\nb', dirty: false });
   store.set(resolve('/tmp/b.ts'), { mtimeMs: 2, size: 7, hash: 'h2', content: 'x\ny\nz', dirty: true });
   const out = buildFileIndex(store);
   assert.ok(out.includes('# Read files this session'), '索引标题');
-  assert.ok(out.includes('/tmp/a.ts: 2 行, hash h1'), '正常条目');
+  assert.ok(out.includes(`${a}: 2 行, hash h1`), `正常条目：${out}`);
   assert.ok(out.includes('changed since read'), 'dirty 条目标记');
 });
 
