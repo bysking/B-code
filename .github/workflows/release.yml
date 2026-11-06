@@ -78,6 +78,31 @@ jobs:
             bun scripts/check-version.js
           fi
 
+      # 确认 optionalDependencies 能被正确派生（源文件不含该字段，
+      # 由 prepack 按 version 注入——这里只读校验派生结果）
+      - name: Check derived optionalDependencies
+        run: bun scripts/sync-version.js --check
+
+      # 实际打一次包，断言 tarball 里的 4 个平台包版本 == 主包版本。
+      # 这是发布前最后一道防线：注入逻辑若被改坏，用户会"装成功但跑不起来"。
+      - name: Verify packed manifest
+        run: |
+          set -euo pipefail
+          npm pack >/dev/null 2>&1
+          tgz=$(ls *.tgz | head -1)
+          node -e "
+            const {execSync}=require('child_process');
+            const pkg=JSON.parse(execSync('tar -xzOf $tgz package/package.json').toString());
+            const want=pkg.version;
+            const od=pkg.optionalDependencies||{};
+            const keys=Object.keys(od).filter(k=>k.startsWith(pkg.name+'-'));
+            if (keys.length===0) { console.error('::error::tarball 缺少平台包依赖'); process.exit(1); }
+            const bad=keys.filter(k=>od[k]!==want);
+            if (bad.length) { console.error('::error::tarball 平台包版本不是 '+want+': '+bad.map(k=>k+'@'+od[k]).join(', ')); process.exit(1); }
+            console.log('✅ tarball 内 '+keys.length+' 个平台包均为 '+want);
+          "
+          rm -f "$tgz"
+
   # ── 各平台编译 ──
   build:
     needs: test

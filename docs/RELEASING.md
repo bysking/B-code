@@ -23,25 +23,51 @@ npm 的 Trusted Publishing **只能给已存在的包配置**，所以这 4 个�
 先手工发布了 `1.0.0` 占位版本——只含 `README.md` + `package.json`（~1KB），
 **不含任何可执行文件**，仅用于占住包名、让 OIDC 配置成为可能。
 
-主包的 `optionalDependencies` 指向 `3.0.1`，与占位的 `1.0.0` 不匹配，所以用户
-**不会**装上占位包——这是预期行为。等真实版本发布后，占位版本自然被取代（无法删除，
-npm 不允许复用已发布的版本号，但它不会被安装）。
+主包的 `optionalDependencies` 始终等于主包 `version`（当前 3.2.x），与占位的 `1.0.0`
+不匹配，所以用户**不会**装上占位包——这是预期行为。等真实版本发布后，占位版本自然被
+取代（无法删除，npm 不允许复用已发布的版本号，但它不会被安装）。
 
 ---
 
 ## 一、日常发版（已配置好 Trusted Publishing 之后）
 
 ```bash
-# ① 改版本号——两处都要改，漏一处用户就装不上
+# ① 改版本号——只改一处
 #    package.json 的 version
-#    package.json 的 optionalDependencies 里 4 行平台包版本
-#    （scripts/check-version.js 会拦，但知道为什么要改比被拦下更好）
+#    4 个平台包的版本由 scripts/sync-version.js 在 prepack 时自动派生，
+#    源文件的 package.json 里根本不存在 optionalDependencies 字段
 
 # ② CHANGELOG.md：把 [Unreleased] 内容移到新版本小节并标日期
 
 # ③ 提交后打 tag
-git tag v3.0.1 && git push origin v3.0.1
+git tag v3.2.1 && git push origin v3.2.1
 ```
+
+### 版本号为什么只改一处
+
+主包的 `optionalDependencies` 必须指向**与主包同版本**的 4 个平台包，否则用户
+`npm i -g` 时静默解析失败（症状是"装成功了但 `bcode` 跑不起来"）。原来这 4 行要手工
+跟 `version` 一起改，共 5 处，极易漏。
+
+现在改为**发布时注入**：
+
+```
+package.json 的 version（唯一手改）
+      ↓ prepack: sync-version.js --inject
+tarball 里的 optionalDependencies（自动 = version）
+      ↓ postpack: sync-version.js --restore
+源文件恢复原状，git 里永远看不到该字段
+```
+
+好处：源文件与 `bun.lock` 里都不会留下会漂移的版本号。想确认派生结果：
+
+```bash
+node scripts/sync-version.js          # 打印将派生的 4 个版本
+npm pack && tar -xzOf *.tgz package/package.json | grep -A6 optional
+```
+
+CI 的 `check-version` job 会打一次真实包并断言 tarball 内 4 个平台包版本 == 主包版本，
+注入逻辑被改坏时会在发布前拦住。
 
 CI（`.github/workflows/release.yml`）随后自动跑：
 
@@ -211,16 +237,19 @@ node build-bun.js --all-check
 
 `check:version` 校验的是：
 
-- `optionalDependencies` 里 4 行平台包版本 == 主包 `version`
-- 平台清单在 `optionalDependencies` / `bin/bcode.js` / `lib/index.js` /
+- 源 `package.json` 里**没有残留** `optionalDependencies`（有则说明注入后没还原）
+- 平台清单在 `scripts/sync-version.js` / `bin/bcode.js` / `lib/index.js` /
   `scripts/pack-platform.js` **四处**一致
 - `files` 覆盖 `main` 与 `bin` 所在目录
 - （CI 传入时）git tag 与 `package.json` 版本一致
 
-第一条最要紧：npm 对 `optionalDependencies` 的解析失败是**静默**的。版本号漂移的症状是
-用户「装成功了但 `bcode` 跑不起来」——不会在安装时报错。
+平台包版本与主包的一致性则由**打包后**校验：CI 的 `check-version` job 会 `npm pack`
+一次并断言 tarball 内 4 个平台包版本 == 主包版本。这条最要紧——npm 对
+`optionalDependencies` 的解析失败是**静默**的，版本号漂移的症状是用户
+「装成功了但 `bcode` 跑不起来」，不会在安装时报错。
 
-它已挂在 `prepublishOnly` 和 CI 的 `check-version` job 上，`npm publish` 时自动跑。
+两处校验都已挂到 `prepublishOnly`（本地 `npm publish` 自动跑）和 CI 的
+`check-version` job（发布前跑）。
 
 ---
 

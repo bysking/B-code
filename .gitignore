@@ -9,3 +9,6 @@ dist/
 
 # 平台包产物（发布用，不入库）
 dist-pkg/
+
+# prepack 注入状态的临时文件（用完即删）
+.version-inject-state.json

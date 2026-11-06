@@ -32,21 +32,35 @@ const root = join(__dirname, '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
 const errors = [];
 
-/** 平台后缀清单：以主包 optionalDependencies 为准 */
-const optional = pkg.optionalDependencies ?? {};
-const optionalPlatforms = Object.keys(optional)
-  .filter((name) => name.startsWith(`${pkg.name}-`))
-  .map((name) => name.slice(pkg.name.length + 1));
+/**
+ * 平台清单的权威来源是 scripts/sync-version.js 的 PLATFORMS。
+ *
+ * 注意：源 package.json **不再**包含 optionalDependencies——那 4 行由
+ * `sync-version.js --inject` 在 prepack 时按 version 自动写入（见该脚本注释）。
+ * 所以这里不能再去读 pkg.optionalDependencies，否则永远为空。 */
+const syncer = readFileSync(join(root, 'scripts', 'sync-version.js'), 'utf-8');
+const platformsBlock = /const PLATFORMS = \[([^\]]*)\]/.exec(syncer);
+if (!platformsBlock) {
+  errors.push('scripts/sync-version.js 里找不到 PLATFORMS 清单');
+}
+const optionalPlatforms = platformsBlock
+  ? [...platformsBlock[1].matchAll(/'([\w-]+)'/g)].map((m) => m[1])
+  : [];
 
 if (optionalPlatforms.length === 0) {
-  errors.push('package.json 的 optionalDependencies 里没有任何平台包');
+  errors.push('scripts/sync-version.js 的 PLATFORMS 为空');
 }
 
-// ── 1. 平台包版本必须与主包版本一致 ──
+// ── 1. 版本号派生自检：源文件若残留 optionalDependencies，必须与 version 一致 ──
+// （正常情况下源文件不该有该字段；有的话说明注入后没还原，属于污染）
+const optional = pkg.optionalDependencies ?? {};
 for (const [name, version] of Object.entries(optional)) {
   if (!name.startsWith(`${pkg.name}-`)) continue;
   if (version !== pkg.version) {
-    errors.push(`optionalDependencies 中 ${name} 为 ${version}，应为 ${pkg.version}`);
+    errors.push(
+      `源 package.json 里残留 optionalDependencies：${name} 为 ${version}，应为 ${pkg.version}` +
+        '（该字段由 prepack 注入、postpack 还原，不应留在源文件里）',
+    );
   }
 }
 
