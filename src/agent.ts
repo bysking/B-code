@@ -8,7 +8,8 @@ import { registerBuiltinTools } from './tools.js';
 import { registerPlanTools } from './plan.js';
 import { registerTodoTool, loadTodos, type TodoItem } from './todo.js';
 import { CheckpointStore, withCheckpoints } from './checkpoint.js';
-import { runSubAgent } from './subagent.js';
+import { runSubAgent, SUBAGENT_INTERRUPTED } from './subagent.js';
+import { oneLine } from './utils/format.js';
 import { FileStore } from './file-store.js';
 import {
   loadMcpServers,
@@ -74,7 +75,15 @@ export type AgentEvent =
   /** busy 行 input token 回填：调用前为估算值，结束后真实值覆盖 */
   | { type: 'busy_tokens'; input_tokens: number }
   /** 模型调用完成的真实 token 用量（落 turn 元信息） */
-  | { type: 'usage'; usage: { input_tokens: number; output_tokens: number } };
+  | { type: 'usage'; usage: { input_tokens: number; output_tokens: number } }
+  /**
+   * 子 Agent（`agent` 工具 / review_plan 的对抗审查）的生命周期与逐步日志。
+   * id 由 Agent 分配（sa1、sa2…），一个 id 内 start → log* → end 成对出现；
+   * role 用来区分人设（explore / plan-critic）。UI 收进 Ctrl+O「子 Agent」页。
+   */
+  | { type: 'subagent_start'; id: string; role: string; task: string }
+  | { type: 'subagent_log'; id: string; line: string }
+  | { type: 'subagent_end'; id: string; status: 'done' | 'interrupted'; summary?: string };
 
 /**
  * 该工具是否幂等（重复执行无副作用）——决定失败后能否自动重试。
@@ -298,7 +307,7 @@ export class Agent {
     registerPlanTools(this.registry, {
       plansDir: dirs.plansDir(),
       // review_plan 派独立对抗性审查子 Agent：绑定本会话的 registry + ctx（handler 拿不到 registry）
-      runSubAgent: (task, system) => runSubAgent(task, this.ctx, this.registry, system),
+      runSubAgent: (task, system) => this.runTrackedSubAgent('plan-critic', task, system),
     });
     this.registry.register({
       name: 'agent',
@@ -311,8 +320,42 @@ export class Agent {
       },
       mode: 'read',
       kind: 'subagent',
-      handler: (input) => runSubAgent(String(input.task ?? ''), this.ctx, this.registry),
+      handler: (input) => this.runTrackedSubAgent('explore', String(input.task ?? '')),
     });
+  }
+
+  /** 子 Agent 序号：id 形如 sa1、sa2…（UI 按 id 把 start/log/end 归到同一条） */
+  private subAgentSeq = 0;
+
+  /**
+   * 派子 Agent 并把它内层的每一步转成 UI 事件。
+   *
+   * 为什么要包一层：`runSubAgent` 是纯内核（不依赖 UI），它只认一个 `onStep(line)`
+   * 回调；把它翻成带 id 的结构化事件、并在首尾补 start/end，是 Agent（事件拥有者）
+   * 的职责。start 必须在**调用之前**发——否则面板里要等第一次模型调用返回才有条目，
+   * 而那一等可能就是十几秒。
+   */
+  private async runTrackedSubAgent(role: string, task: string, system?: string): Promise<string> {
+    const id = `sa${++this.subAgentSeq}`;
+    this.events?.({ type: 'subagent_start', id, role, task: oneLine(task, 80) });
+    try {
+      const summary = await runSubAgent(task, this.ctx, this.registry, system, (line) =>
+        this.events?.({ type: 'subagent_log', id, line }),
+      );
+      // 中断是**正常返回**（哨兵字符串）而不是抛错——状态得据此判，不能靠 catch
+      const interrupted = summary.trim() === SUBAGENT_INTERRUPTED;
+      this.events?.({
+        type: 'subagent_end',
+        id,
+        status: interrupted ? 'interrupted' : 'done',
+        ...(interrupted ? {} : { summary: oneLine(summary, 100) }),
+      });
+      return summary;
+    } catch (err) {
+      // 抛错（模型调用失败等）：面板里也得收口，不能让条目永远停在 running
+      this.events?.({ type: 'subagent_end', id, status: 'interrupted' });
+      throw err;
+    }
   }
 
   /**

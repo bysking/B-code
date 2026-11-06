@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Registry, type RuntimeContext } from '../src/registry.js';
 import { registerBuiltinTools } from '../src/tools.js';
-import { runSubAgent, CRITIC_SYSTEM } from '../src/subagent.js';
+import { runSubAgent, summarizeResult, CRITIC_SYSTEM, SUBAGENT_INTERRUPTED } from '../src/subagent.js';
 import type { ModelInput, ModelOutput } from '../src/backend.js';
 
 let dir: string;
@@ -160,4 +160,98 @@ test('硬中断：父级 signal 透传给子 Agent 的模型调用；abort 后�
 
   assert.equal(calls, 1, 'abort 后不再发起第二轮模型调用');
   assert.ok(result.includes('interrupted'), '返回中断标记而非继续执行');
+});
+
+// ── 逐步播报（Ctrl+O「子 Agent」页的数据来源）─────────────────
+
+test('逐步播报：text / tool / 结果摘要 / done 各一行，按序', async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+  let step = 0;
+  const callModel = async (): Promise<ModelOutput> => {
+    step++;
+    if (step === 1) {
+      return {
+        content: [
+          { type: 'text', text: '先读这个文件看看' },
+          { type: 'tool_use', id: 's-1', name: 'read_file', input: { file_path: filePath } },
+        ],
+      };
+    }
+    return { content: [{ type: 'text', text: '结论：文件里写着 subagent sees this' }] };
+  };
+  const ctx: RuntimeContext = { callModel, model: 'm', setMode: () => {} };
+  const lines: string[] = [];
+  const result = await runSubAgent('explore', ctx, registry, undefined, (l) => lines.push(l));
+
+  assert.equal(lines.length, 4, `应是 text/tool/结果/done 四行，实际: ${JSON.stringify(lines)}`);
+  assert.ok(lines[0]!.startsWith('text   '), '模型文本行');
+  assert.ok(lines[0]!.includes('先读这个文件看看'), '文本内容在内');
+  assert.ok(lines[1]!.startsWith('tool   read_file'), '工具名在内');
+  // 参数摘要按 INPUT_LABEL_MAX(60) 截断，长临时路径的尾段会被切掉——断言前缀即可
+  assert.ok(lines[1]!.includes(filePath.slice(0, 20)), '参数摘要（路径）在内');
+  assert.ok(lines[2]!.startsWith('←'), '结果摘要行');
+  assert.match(lines[2]!, /\d+ 行/, `读文件应报行数：${lines[2]}`);
+  assert.ok(lines[3]!.startsWith('done   '), '结束行');
+  assert.ok(result.includes('subagent sees this'), '返回值不受播报影响');
+});
+
+test('逐步播报：长文本压成一行并截断（不把转录搬进面板）', async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+  let step = 0;
+  const long = 'A'.repeat(500);
+  const callModel = async (): Promise<ModelOutput> => {
+    step++;
+    // 第一轮带工具调用，长文本才会作为"中间轮的 text 行"被播报
+    if (step === 1) {
+      return {
+        content: [
+          { type: 'text', text: `第一行\n第二行\n${long}` },
+          { type: 'tool_use', id: 's-1', name: 'read_file', input: { file_path: filePath } },
+        ],
+      };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  };
+  const ctx: RuntimeContext = { callModel, model: 'm', setMode: () => {} };
+  const lines: string[] = [];
+  await runSubAgent('explore', ctx, registry, undefined, (l) => lines.push(l));
+
+  const textLine = lines.find((l) => l.startsWith('text   '))!;
+  assert.ok(!textLine.includes('\n'), '日志行必须单行');
+  assert.ok(textLine.length <= 110, `应截断到 ~100 字符：${textLine.length}`);
+});
+
+test('中断时也播报收口行（面板不会停在半截）', async () => {
+  const registry = new Registry();
+  registerBuiltinTools(registry);
+  const ac = new AbortController();
+  const callModel = async (): Promise<ModelOutput> => {
+    ac.abort(); // 第一轮模型调用后立刻取消
+    return {
+      content: [{ type: 'tool_use', id: 's-1', name: 'read_file', input: { file_path: filePath } }],
+    };
+  };
+  const ctx: RuntimeContext = { callModel, model: 'm', setMode: () => {}, signal: ac.signal };
+  const lines: string[] = [];
+  const result = await runSubAgent('explore', ctx, registry, undefined, (l) => lines.push(l));
+
+  assert.equal(result, SUBAGENT_INTERRUPTED);
+  assert.ok(
+    lines.some((l) => l.includes('中断')),
+    `应有中断收口行：${JSON.stringify(lines)}`,
+  );
+});
+
+test('summarizeResult：按工具返回形态给一眼可读的摘要', () => {
+  assert.match(
+    summarizeResult('read_file', 'body\n\n📄 /tmp/a.ts (42 行, 900 字节, hash abc)'),
+    /^42 行$/,
+    '读文件取指针行里的行数',
+  );
+  assert.equal(summarizeResult('grep_search', '(no matches)'), '无命中');
+  assert.equal(summarizeResult('grep_search', 'a.ts:1: x\nb.ts:2: y'), '2 处命中');
+  assert.equal(summarizeResult('list_files', 'a.ts\nb.ts\nc.ts'), '3 项');
+  assert.equal(summarizeResult('mcp__github__get', '第一行内容\n第二行'), '第一行内容');
 });

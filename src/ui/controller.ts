@@ -9,6 +9,8 @@
 import type { Mode } from '../permissions.js';
 import type { Tone } from './primitives/theme.js';
 import type { UserTodo } from '../user-todo.js';
+// 工具参数摘要：与子 Agent 步骤行共用一个实现（内核层也用，故放 utils）
+import { prettyInput } from '../utils/format.js';
 
 export type ToolStatus = 'queued' | 'running' | 'done';
 
@@ -167,44 +169,32 @@ export interface CapabilityPanelState {
   items: CapabilityItem[];
 }
 
-/**
- * 工具块里展示的参数摘要。
- *
- * 不再整段 JSON：早期实现直接 `JSON.stringify(input)` 截 80 字符，结果工具块长这样
- * `⠒ read_file {"file_path":"/very/long/.../file-22.component.tsx"}` —— 一条占 2 行，
- * 一批 30 个工具就是 60 行，直接把 live 帧撑过终端高度 → ink 整屏清屏（ESC[3J
- * 连 scrollback 一起清），用户回看位置丢失。
- *
- * 现在只取最具辨识度的单个参数（file_path / pattern / command / url / name），
- * 且压成一行短摘要：30 个工具也只占 30 行以内，且一眼能看出操作对象。
- * 完整参数与输出仍在 Ctrl+O 面板。
- */
-function prettyInput(input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const o = input as Record<string, unknown>;
-  // 按辨识度优先级挑一个关键参数展示
-  for (const key of ['file_path', 'pattern', 'command', 'url', 'name', 'id']) {
-    const v = o[key];
-    if (typeof v === 'string' && v.trim()) return clip(v.trim(), INPUT_LABEL_MAX);
-  }
-  // 没有白名单参数：退回第一个字符串值，仍受长度约束
-  for (const v of Object.values(o)) {
-    if (typeof v === 'string' && v.trim()) return clip(v.trim(), INPUT_LABEL_MAX);
-  }
-  return '';
-}
-
-/** 工具块参数展示上限：足够看清路径/命令主体，又不至于自己就折成两行 */
-const INPUT_LABEL_MAX = 60;
-
-/** 截断并保证**单行**（换行会额外占行，是撑高 live 帧的隐形来源） */
-function clip(s: string, max: number): string {
-  const oneLine = s.replace(/\s*\n\s*/g, ' ⏎ ').replace(/\s+/g, ' ');
-  return oneLine.length > max ? oneLine.slice(0, max - 1) + '…' : oneLine;
-}
-
 /** 内存里保留的系统日志行数上限（Ctrl+O 面板可翻页查看） */
 export const MAX_LOG_LINES = 2000;
+
+/** 每个子 Agent 保留的日志行数上限（超出丢最旧的：面板是回看用，不是审计日志） */
+export const MAX_SUBAGENT_LINES = 400;
+
+/** 保留的子 Agent 条目数上限（长会话里反复派发，不能无限涨） */
+export const MAX_SUBAGENTS = 10;
+
+/**
+ * 一个子 Agent 的可视化状态：Ctrl+O 面板「子 Agent」页的一页。
+ *
+ * 只在内存里活一轮会话：子 Agent 的中间过程是**视图态**，不进会话历史、
+ * 不落盘（要留档应另接 log.debug）。
+ */
+export interface SubAgentView {
+  /** 'sa1'、'sa2'…（Agent 侧的序号，start/log/end 靠它对上） */
+  id: string;
+  /** 人设：explore（agent 工具）/ plan-critic（review_plan 对抗审查） */
+  role: string;
+  /** 任务首行摘要 */
+  task: string;
+  status: 'running' | 'done' | 'interrupted';
+  /** 逐步日志（每步一行，见 subagent.ts 的播报格式） */
+  lines: string[];
+}
 
 /** 固定输出行：id 与 Turn.id 共用同一自增序列，供 MessageList 按时序合并进同一个 <Static> */
 export interface OutputLine {
@@ -222,6 +212,8 @@ export class AppController {
    * 拉到光标处，用户回看历史时会被日志拽回底部。
    */
   logs: string[] = [];
+  /** 派出去的子 Agent 及其逐步日志（Ctrl+O 面板第三页，←/→ 切换） */
+  subagents: SubAgentView[] = [];
   /** 顶部 busy/thinking 文案（null = 空闲） */
   busy: string | null = null;
   /** busy 开始时间戳（elapsed 计算基准；null = 空闲） */
@@ -305,6 +297,52 @@ export class AppController {
     this.bump();
   }
 
+  // ── 子 Agent 日志（Ctrl+O 面板第三页）────────────────────────
+  /**
+   * 刷新策略与 pushLog 同源但不同：**面板开着才 bump**。
+   * 关着时子 Agent 每一步都重渲染整个会话纯属浪费（一次探索几十步）；
+   * 开着时用户正盯着这一页，必须实时刷新——否则"看它在干什么"就落空了。
+   */
+  private bumpIfPanelOpen() {
+    if (this.outputPanel) this.bump();
+  }
+
+  /**
+   * 子 Agent 开跑：立刻建条目（面板头部随即显示"人设 · 任务"，不必等第一次
+   * 模型调用返回——那一等可能十几秒）。
+   *
+   * 刻意不写一行 `▶ start <task>`：任务已经由面板头部常驻显示，
+   * 再在正文里重复一遍只是噪音。
+   */
+  startSubAgent(id: string, role: string, task: string) {
+    this.subagents.push({ id, role, task, status: 'running', lines: [] });
+    // 上限保护：长会话反复派发时丢最旧的条目
+    if (this.subagents.length > MAX_SUBAGENTS) {
+      this.subagents.splice(0, this.subagents.length - MAX_SUBAGENTS);
+    }
+    this.bumpIfPanelOpen();
+  }
+
+  /** 子 Agent 走了一步（工具调用 / 模型文本 / 结果摘要） */
+  pushSubAgentStep(id: string, line: string) {
+    const sa = this.subagents.find((s) => s.id === id);
+    if (!sa) return; // 条目已被上限淘汰：静默丢弃，不值得为它重建一条
+    sa.lines.push(line);
+    if (sa.lines.length > MAX_SUBAGENT_LINES) {
+      sa.lines.splice(0, sa.lines.length - MAX_SUBAGENT_LINES);
+    }
+    this.bumpIfPanelOpen();
+  }
+
+  /** 子 Agent 收口：状态落地（done / interrupted）+ 末行摘要 */
+  endSubAgent(id: string, status: SubAgentView['status'], summary?: string) {
+    const sa = this.subagents.find((s) => s.id === id);
+    if (!sa) return;
+    sa.status = status;
+    sa.lines.push(status === 'interrupted' ? '■ 中断   已停止' : `✓ done   ${summary ?? '(无摘要)'}`);
+    this.bumpIfPanelOpen();
+  }
+
   /** /clear：重置对话与固定输出行（resetEpoch 自增 → 消息流 remount，防跳动） */
   clearAll() {
     this.turns = [];
@@ -315,6 +353,7 @@ export class AppController {
     this.busyInputTokens = 0;
     this.task = null;
     this.todos = [];
+    this.subagents = []; // 子 Agent 日志属上一轮会话的视图态，一并清掉
     this.resetEpoch++;
     this.bump();
   }

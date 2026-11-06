@@ -372,6 +372,140 @@ test('events：tool_end 携带工具真实输出（Ctrl+O 面板数据源）', a
   assert.ok(String(end.output).includes('hello world'), 'tool_end 带文件内容');
 });
 
+// ── 子 Agent 事件（Ctrl+O「子 Agent」页的数据源）────────────────
+//
+// 脚本后端按**调用顺序**取脚本，而子 Agent 的模型调用夹在父级那次工具调用
+// 中间，所以序号天然是：父 → 子(若干轮) → 父。
+
+test('events：子 Agent 的 start/log/end 成对出现，id 与 role 正确', async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: 'agent', input: { task: '看看 target.txt 写了什么' } }] }, // 1 父：派子 Agent
+    { tools: [{ name: 'read_file', input: { file_path: filePath } }] }, // 2 子：读文件
+    { text: '文件里是 hello world' }, // 3 子：收尾
+    { text: '父收到摘要' }, // 4 父：继续
+  ]);
+  const events: import('../src/agent.js').AgentEvent[] = [];
+  const agent = new Agent({ callModel: fn, print: () => {}, events: (e) => events.push(e) });
+  await agent.chat('派个子 agent 去看看');
+
+  const start = events.find((e) => e.type === 'subagent_start');
+  assert.ok(start?.type === 'subagent_start', '有 subagent_start');
+  assert.equal(start.role, 'explore', 'agent 工具的人设是 explore');
+  assert.ok(start.task.includes('target.txt'), `任务摘要进事件：${start.task}`);
+
+  const logs = events.filter((e) => e.type === 'subagent_log');
+  assert.ok(logs.length >= 3, `至少 tool/结果/done 三步：${JSON.stringify(logs)}`);
+  assert.ok(
+    logs.every((l) => l.type === 'subagent_log' && l.id === start.id),
+    '所有步骤与 start 同 id（面板据此归到同一页）',
+  );
+  assert.ok(
+    logs.some((l) => l.type === 'subagent_log' && l.line.startsWith('tool   read_file')),
+    `子 Agent 的工具调用被播报：${JSON.stringify(logs)}`,
+  );
+
+  const end = events.find((e) => e.type === 'subagent_end');
+  assert.ok(end?.type === 'subagent_end', '有 subagent_end');
+  assert.equal(end.id, start.id);
+  assert.equal(end.status, 'done');
+  assert.ok(String(end.summary).includes('hello world'), '末行带摘要首段');
+
+  // 时序：start 在首个步骤之前，end 在最后一个步骤之后
+  assert.ok(
+    events.indexOf(start) < events.indexOf(logs[0]!),
+    'start 必须先于步骤（否则面板要等第一次模型调用才有条目）',
+  );
+  assert.ok(events.indexOf(logs[logs.length - 1]!) < events.indexOf(end), 'end 收口在最后');
+});
+
+test('并发子 Agent：同一批的多个 agent 调用并行执行，日志按 id 各归各的页', async () => {
+  // 并行性的判定用**屏障**而不是计时：A 的第一轮模型调用会一直等到 B 也开跑。
+  // 若执行是串行的，A 永远等不到 → 测试超时失败。
+  let releaseB!: () => void;
+  const bStarted = new Promise<void>((r) => {
+    releaseB = r;
+  });
+  const calls = new Map<string, number>();
+  const fn = async (input: ModelInput): Promise<ModelOutput> => {
+    const head = input.messages[0]!.content;
+    const task = typeof head === 'string' ? head : '';
+    if (task.startsWith('任务')) {
+      const n = (calls.get(task) ?? 0) + 1;
+      calls.set(task, n);
+      if (task.startsWith('任务A') && n === 1) {
+        await bStarted; // 等 B 开跑：串行执行会在这里死等
+        return {
+          content: [{ type: 'tool_use', id: 'a1', name: 'read_file', input: { file_path: filePath } }],
+        };
+      }
+      if (task.startsWith('任务B') && n === 1) {
+        releaseB();
+        return { content: [{ type: 'text', text: 'B 一轮就完事' }] };
+      }
+      return { content: [{ type: 'text', text: `${task.slice(0, 3)}完成` }] };
+    }
+    // 父级：第一轮同时派两个子 Agent
+    if (calls.size === 0) {
+      return {
+        content: [
+          { type: 'tool_use', id: 'p1', name: 'agent', input: { task: '任务A：查输入框' } },
+          { type: 'tool_use', id: 'p2', name: 'agent', input: { task: '任务B：查面板' } },
+        ],
+      };
+    }
+    return { content: [{ type: 'text', text: '父完成' }] };
+  };
+
+  const events: import('../src/agent.js').AgentEvent[] = [];
+  const agent = new Agent({ callModel: fn, print: () => {}, events: (e) => events.push(e) });
+  await agent.chat('派两个子 agent 并行查');
+
+  const starts = events.filter((e) => e.type === 'subagent_start');
+  assert.equal(starts.length, 2, '两个 subagent_start');
+  assert.equal(new Set(starts.map((s) => s.id)).size, 2, 'id 不重复');
+  assert.ok(
+    starts.every((s) => s.role === 'explore'),
+    '两个都走 explore 人设',
+  );
+
+  // 归页：每个 id 的步骤里只有自己的痕迹（并发交错也不会串页）
+  const logsOf = (id: string) =>
+    events
+      .filter((e) => e.type === 'subagent_log' && e.id === id)
+      .map((e) => (e.type === 'subagent_log' ? e.line : ''));
+  const [first, second] = starts.map((s) => s.id);
+  const aLogs = logsOf(first!);
+  const bLogs = logsOf(second!);
+  assert.ok(aLogs.some((l) => l.startsWith('tool   read_file')), `A 有自己的工具步骤：${aLogs}`);
+  assert.ok(aLogs.some((l) => l.includes('任务A完成')), 'A 有自己的收尾');
+  assert.ok(!bLogs.some((l) => l.includes('read_file')), `B 不该混进 A 的步骤：${bLogs}`);
+  assert.ok(bLogs.some((l) => l.includes('B 一轮就完事')), 'B 有自己的收尾');
+
+  const ends = events.filter((e) => e.type === 'subagent_end');
+  assert.equal(ends.length, 2, '两个都有 end（不会漏收口）');
+  assert.ok(
+    ends.every((e) => e.type === 'subagent_end' && e.status === 'done'),
+    '两个都是 done',
+  );
+});
+
+test('events：review_plan 派出的审查子 Agent，role 标记为 plan-critic', async () => {
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: 'review_plan', input: { plan: '1. 改 schema\n2. 上线' } }] }, // 1 父
+    { text: 'REVISE: 第 2 步没有回滚' }, // 2 子（对抗审查）
+    { text: '父收到审查结论' }, // 3 父
+  ]);
+  const events: import('../src/agent.js').AgentEvent[] = [];
+  const agent = new Agent({ callModel: fn, print: () => {}, events: (e) => events.push(e) });
+  await agent.chat('审查一下这个计划');
+
+  const start = events.find((e) => e.type === 'subagent_start');
+  assert.ok(start?.type === 'subagent_start');
+  assert.equal(start.role, 'plan-critic', '复用同一循环但人设不同');
+  const end = events.find((e) => e.type === 'subagent_end');
+  assert.ok(end?.type === 'subagent_end' && String(end.summary).includes('REVISE'));
+});
+
 test('interrupt：Esc 软中断在循环边界生效，不再发起新的模型调用', async () => {
   let calls = 0;
   let release!: () => void;

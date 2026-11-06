@@ -36,6 +36,9 @@ const MIN_WIDTH_FOR_BANNER = BANNER_WIDTH + 6;
 const TIPS: { key: string; desc: string }[] = [
   { key: '/', desc: '唤起命令菜单' },
   { key: 'Shift+Tab', desc: '切换工具权限模式' },
+  // 多行草稿的换行键：Shift+Enter 好按但依赖终端支持 Kitty 键盘协议，
+  // Ctrl+J 是所有终端都发得出来的兜底——两个都写出来，用户至少有一个能用
+  { key: 'Shift+Enter / Ctrl+J', desc: '换行（Enter 仍是提交）' },
   { key: 'Ctrl+O', desc: '查看工具输出' },
   { key: 'Esc', desc: '中断当前对话' },
   { key: 'Ctrl+C', desc: '连续按下组合键，退出终端' },

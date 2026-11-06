@@ -52,11 +52,14 @@ export function stripAnsi(s: string): string {
  */
 export async function renderOtui(
   node: React.ReactNode,
-  opts: { width?: number; height?: number } = {},
+  opts: { width?: number; height?: number; kitty?: boolean } = {},
 ): Promise<OtuiTestFrame> {
   const setup = await createTestRenderer({
     width: opts.width ?? 100,
     height: opts.height ?? 40,
+    // Kitty 键盘协议：开启后终端把修饰键显式编码进序列（Shift+Enter 才可辨）。
+    // 默认关＝传统终端行为，绝大多数用例要的是这个。
+    kittyKeyboard: opts.kitty ?? false,
   });
 
   const root = createRoot(setup.renderer as never);

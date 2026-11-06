@@ -1,6 +1,6 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { AppController, deriveTaskPanel } from '../src/ui/controller.js';
+import { AppController, deriveTaskPanel, MAX_SUBAGENT_LINES, MAX_SUBAGENTS } from '../src/ui/controller.js';
 
 test('streamText：首个 delta 开 assistant turn，后续追加，finishStream 停流', () => {
   const c = new AppController();
@@ -226,4 +226,66 @@ test('subscribe：每次变更触发一次，返回退订可用', () => {
   off();
   c.pushUser('b');
   assert.equal(count, 1);
+});
+
+// ── 子 Agent 日志（Ctrl+O 第三页）─────────────────────────────
+
+test('子 Agent：start 立刻建条目（任务归头部），步骤与收口行追加', () => {
+  const c = new AppController();
+  c.startSubAgent('sa1', 'explore', '看看 src/ui');
+  assert.equal(c.subagents.length, 1);
+  const sa = c.subagents[0]!;
+  assert.equal(sa.status, 'running');
+  assert.equal(sa.role, 'explore');
+  assert.equal(sa.task, '看看 src/ui', '任务由面板头部常驻显示');
+  assert.equal(sa.lines.length, 0, '不写重复的 start 行（头部已有任务）');
+
+  c.pushSubAgentStep('sa1', 'tool   read_file src/ui/app.tsx');
+  c.endSubAgent('sa1', 'done', '结论…');
+  assert.equal(sa.status, 'done');
+  assert.ok(sa.lines.some((l) => l.includes('read_file')));
+  assert.ok(sa.lines.at(-1)!.includes('结论…'), '末行带摘要');
+});
+
+test('子 Agent：未知 id 的步骤静默丢弃（条目已被上限淘汰）', () => {
+  const c = new AppController();
+  c.pushSubAgentStep('nope', 'tool   whatever');
+  c.endSubAgent('nope', 'done', 'x');
+  assert.equal(c.subagents.length, 0, '不凭一个步骤就重建条目');
+});
+
+test('子 Agent：行数上限裁掉最旧的，条目数上限裁掉最旧的', () => {
+  const c = new AppController();
+  c.startSubAgent('sa1', 'explore', 't');
+  for (let i = 0; i < MAX_SUBAGENT_LINES + 50; i++) c.pushSubAgentStep('sa1', `line-${i}`);
+  assert.equal(c.subagents[0]!.lines.length, MAX_SUBAGENT_LINES, '行数封顶');
+  assert.ok(c.subagents[0]!.lines.at(-1)!.includes(`line-${MAX_SUBAGENT_LINES + 49}`), '保留最新');
+
+  for (let i = 2; i <= MAX_SUBAGENTS + 3; i++) c.startSubAgent(`sa${i}`, 'explore', `t${i}`);
+  assert.equal(c.subagents.length, MAX_SUBAGENTS, '条目封顶');
+  assert.ok(!c.subagents.some((s) => s.id === 'sa1'), '淘汰最旧的');
+});
+
+test('子 Agent：面板关着时不触发重渲染，开着时实时刷新', () => {
+  const c = new AppController();
+  let renders = 0;
+  c.subscribe(() => renders++);
+
+  // 面板关闭：一次探索几十步，不该步步重渲染整个会话
+  c.startSubAgent('sa1', 'explore', 't');
+  c.pushSubAgentStep('sa1', 'tool   read_file a.ts');
+  assert.equal(renders, 0, '关着时静默累积');
+
+  // 打开面板后必须实时刷新——否则"看它在干什么"落空
+  c.toggleOutputPanel(true);
+  renders = 0;
+  c.pushSubAgentStep('sa1', 'tool   read_file b.ts');
+  assert.equal(renders, 1, '开着时逐步刷新');
+});
+
+test('clearAll：子 Agent 日志一并清空（/clear 后不残留上一轮的视图态）', () => {
+  const c = new AppController();
+  c.startSubAgent('sa1', 'explore', 't');
+  c.clearAll();
+  assert.equal(c.subagents.length, 0);
 });

@@ -7,7 +7,7 @@ import { readClipboardImage } from '../utils/clipboard.js';
 import { Transcript, BusyLine } from './views/transcript.js';
 import { PromptInput } from './views/input.js';
 import { SlashMenu } from './views/slash-menu.js';
-import { OutputPanel, outputPanelMaxScroll } from './views/output-panel.js';
+import { OutputPanel, outputPanelMaxScroll, PANEL_TABS, type PanelTab } from './views/output-panel.js';
 import { TaskPanel } from './views/task-panel.js';
 import { TodoPanel } from './views/todo-panel.js';
 import { ModeBar } from './views/mode-bar.js';
@@ -16,7 +16,7 @@ import { Wizard } from './views/wizard.js';
 import { CapabilityPanel } from './views/capability.js';
 import { UserTodoEditor } from './views/user-todo.js';
 import { AskInput } from './views/ask-input.js';
-import { buildSubmitLine, filterSlash } from './slash.js';
+import { buildSubmitLine, clampIndex, filterSlash } from './slash.js';
 import { COLORS } from './primitives/theme.js';
 
 /**
@@ -84,7 +84,9 @@ export function App({
   const [input, setInput] = useState('');
   const [quitArmed, setQuitArmed] = useState(false);
   const [panelScroll, setPanelScroll] = useState(0);
-  const [panelTab, setPanelTab] = useState<'tools' | 'logs'>('tools');
+  const [panelTab, setPanelTab] = useState<PanelTab>('tools');
+  /** 「子 Agent」页当前看第几个（←/→ 切换；黏性跟随见下面的 effect） */
+  const [subAgentIdx, setSubAgentIdx] = useState(0);
   const inputHistory = useRef<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
   const imagesRef = useRef<ClipboardImage[]>([]);
@@ -169,8 +171,15 @@ export function App({
     // Ctrl+O：工具输出面板
     if (ctrl.outputPanel) {
       if (e.name === 'tab') {
-        setPanelTab((t) => (t === 'tools' ? 'logs' : 'tools'));
+        // 三页轮换（工具输出 → 系统日志 → 子 Agent）
+        setPanelTab((t) => PANEL_TABS[(PANEL_TABS.indexOf(t) + 1) % PANEL_TABS.length] ?? 'tools');
         setPanelScroll(0);
+        return;
+      }
+      // ←/→：在「子 Agent」页里切换看第几个（面板里这两个键原本没被占用）
+      if (panelTab === 'subagents' && (e.name === 'left' || e.name === 'right')) {
+        const n = ctrl.subagents.length;
+        if (n > 0) setSubAgentIdx((i) => clampIndex(i + (e.name === 'right' ? 1 : -1), n));
         return;
       }
       const step = e.name === 'pageup' || e.name === 'pagedown' ? Math.max(termRows - 12, 5) : 1;
@@ -178,7 +187,14 @@ export function App({
         setPanelScroll((s) =>
           Math.min(
             s + step,
-            outputPanelMaxScroll(allToolOutputs(ctrl), panelTab, ctrl.logs, termRows),
+            outputPanelMaxScroll(
+              allToolOutputs(ctrl),
+              panelTab,
+              ctrl.logs,
+              ctrl.subagents,
+              subAgentIdx,
+              termRows,
+            ),
           ),
         );
         return;
@@ -251,6 +267,25 @@ export function App({
       }
     }
   });
+
+  /**
+   * 子 Agent 条数变化时收敛「子 Agent」页的选中项。
+   *
+   * **黏性跟随**：新子 Agent 开始时，只有用户本来正停在最后一个才跟着切过去
+   * ——他要是正在翻前面的步骤，就被抢走视线了。条数变少（/clear、上限淘汰）
+   * 时把下标收进有效范围。
+   */
+  const subAgentCount = ctrl.subagents.length;
+  const prevSubAgentCount = useRef(0);
+  useEffect(() => {
+    const prev = prevSubAgentCount.current;
+    prevSubAgentCount.current = subAgentCount;
+    if (subAgentCount > prev) {
+      setSubAgentIdx((i) => (prev === 0 || i === prev - 1 ? subAgentCount - 1 : i));
+    } else if (subAgentCount < prev) {
+      setSubAgentIdx((i) => Math.min(i, Math.max(0, subAgentCount - 1)));
+    }
+  }, [subAgentCount]);
 
   /* ── 粘贴 ─────────────────────────────────────────── */
   usePaste((event) => {
@@ -381,6 +416,8 @@ export function App({
         <OutputPanel
           tools={allToolOutputs(ctrl)}
           logs={ctrl.logs}
+          subAgents={ctrl.subagents}
+          subAgentIdx={subAgentIdx}
           tab={panelTab}
           scroll={panelScroll}
           termRows={termRows}

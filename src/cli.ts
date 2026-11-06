@@ -332,6 +332,16 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
           ctrl.setBusyTokens(ev.usage.input_tokens);
           ctrl.setTurnUsage(ev.usage, Date.now() - (ctrl.busySince ?? Date.now()));
           break;
+        // 子 Agent：Ctrl+O 面板第三页（←/→ 切换看第几个）
+        case 'subagent_start':
+          ctrl.startSubAgent(ev.id, ev.role, ev.task);
+          break;
+        case 'subagent_log':
+          ctrl.pushSubAgentStep(ev.id, ev.line);
+          break;
+        case 'subagent_end':
+          ctrl.endSubAgent(ev.id, ev.status, ev.summary);
+          break;
       }
     },
   });
