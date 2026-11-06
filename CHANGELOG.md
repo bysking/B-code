@@ -16,6 +16,15 @@
 
 ### Fixed
 
+- **只改 `version` 就会被 CI 拦下**：`check-version` job 在 `version:sync` 之前跑，
+  于是「本地只改了 version、4 行平台包还是旧版本」这种**正常状态**被当成错误拦下——
+  而发布流程本身（`prepublishOnly`）会自动补上，产物是对的。
+  - CI 改为先执行 `bun scripts/sync-version.js` 同步，再校验，与本地 `prepublishOnly`
+    的行为对齐。
+  - `check-version.js` 的其余 6 项校验（平台清单四处一致、`files` 覆盖 main/bin、
+    git tag 与版本一致、`engines.node` 与 `MIN_NODE_MAJOR` 一致）**保留**——
+    这些是真实配置错误，不会、也不该被自动修复。
+  - tarball 实际内容的校验（`Verify packed manifest`）照旧，它才决定用户最终装到什么。
 - **「缺少平台包」的提示会把人带偏**：原来的输出只让用户加 `--include=optional`，
   但这条错误最常见的根因其实是**npm 默认 registry 指向了私有镜像**（企业源、淘宝源等），
   镜像上没有同步这个公共包，而 npm 装不上可选依赖时**不报错、只静默跳过**。

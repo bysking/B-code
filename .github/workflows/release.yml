@@ -66,6 +66,12 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      # 开发时只需要改 version，4 行平台包版本由脚本派生——这里主动同步一次，
+      # 不要因为"忘了跑 version:sync"就拦下流水线。真正的产物正确性由下方
+      # Verify packed manifest 兜底（它检查的是 tarball 实际内容）。
+      - name: Sync optionalDependencies from version
+        run: bun scripts/sync-version.js
+
       # tag 触发时校验 tag 与版本号一致；手动触发时 GITHUB_REF_NAME 是分支名，
       # 传空串跳过 tag 校验（其余一致性校验照常跑）。
       - name: Check version consistency
@@ -77,10 +83,6 @@ jobs:
           else
             bun scripts/check-version.js
           fi
-
-      # 确认 package.json 里的平台包版本 == 主包 version
-      - name: Check optionalDependencies
-        run: bun scripts/sync-version.js --check
 
       # 实际打一次包，断言 tarball 里的 4 个平台包版本 == 主包版本。
       # 这是发布前最后一道防线：字段若在 publish 流程中被还原，用户会"装成功但跑不起来"。
