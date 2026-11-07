@@ -54,12 +54,27 @@ function savePathFrom(script: string): string {
   return raw.replace(/''/g, "'");
 }
 
+/** mock 之前先拿到真身，供「未激活」时转发 */
+const realChildProcess = require('node:child_process') as typeof import('node:child_process');
+
+/**
+ * 替换只在 win32 路径执行期间生效（见 asWin32）。
+ *
+ * `mock.module` 是**进程级**的：本文件把 `node:child_process` 整个换掉后，同一个
+ * test run 里其它测试文件也会拿到替身——prompt.ts 的 `git branch --show-current`
+ * 就会撞上「execSync 一调用就抛」的哨兵，git 段落静默消失，prompt.test.ts 挂掉。
+ * 所以未激活时一律转发真实实现，把影响面收在 asWin32 的 try 里。
+ */
+let win32PathActive = false;
+
 mock.module('node:child_process', () => ({
-  ...require('node:child_process'),
-  execSync: () => {
+  ...realChildProcess,
+  execSync: (...args: Parameters<typeof realChildProcess.execSync>) => {
+    if (!win32PathActive) return realChildProcess.execSync(...args);
     throw new Error('win32 路径不应调用 execSync（那条路径要经 shell，引号规则不同）');
   },
   execFileSync: (cmd: string, args: string[]) => {
+    if (!win32PathActive) return realChildProcess.execFileSync(cmd, args);
     invocations.push({ cmd, args });
     if (cmd !== 'powershell') throw new Error(`意外的命令：${cmd}`);
     if (clipboardHasImage) {
@@ -76,13 +91,15 @@ mock.module('node:child_process', () => ({
 
 const { readClipboardImage } = await import('../src/utils/clipboard.js');
 
-/** 把平台伪装成 win32 执行 fn，结束后还原 */
+/** 把平台伪装成 win32 执行 fn，结束后还原；期间才启用 child_process 替身 */
 function asWin32<T>(fn: () => T): T {
   const orig = process.platform;
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  win32PathActive = true;
   try {
     return fn();
   } finally {
+    win32PathActive = false;
     Object.defineProperty(process, 'platform', { value: orig, configurable: true });
   }
 }
