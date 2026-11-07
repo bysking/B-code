@@ -3,6 +3,7 @@ import type { KeyBinding, KeyEvent, PasteEvent, TextareaRenderable } from '@open
 import { useTerminalDimensions } from '@opentui/react';
 import wrapAnsi from 'wrap-ansi';
 import { COLORS, attrs } from '../primitives/theme.js';
+import { backspaceSpan, charIndexToColumn, deleteSpan } from '../image-placeholder.js';
 
 /**
  * 输入框（OpenTUI 原生 `<textarea>`）：多行草稿 + Enter 提交。
@@ -107,12 +108,47 @@ export function PromptInput({
    * 需要 `insertText()` 把占位符插在**光标处**，只有拿到 textarea 实例才做得到。
    */
   const handleKeyDown = (e: KeyEvent): void => {
+    // 图片占位符整块删除：优先于 Ctrl+V 判断（两者键名不会撞，但顺序上先处理
+    // 更常见的退格）
+    if (handlePlaceholderDelete(e)) return;
+
     if (!((e.ctrl || e.meta || e.super) && e.name === 'v')) return;
     const placeholder = onImagePaste?.();
     if (!placeholder) return; // 剪贴板没有图片：交给默认处理（什么都不会插入）
     // 抢在 textarea 的 handleKeyPress 之前吃掉这个键，否则它会当普通按键处理
     e.preventDefault();
     ref.current?.insertText(placeholder);
+  };
+
+  /**
+   * Backspace / Delete 落在图片占位符上时，**整块删掉**。
+   *
+   * 占位符是纯文本 `[image #1]`，编辑器只当 10 个普通字符。不拦的话用户要连按
+   * 10 次才能清掉一张图，中途还会留下 `[image #` 这种半截标签——提交时正则
+   * 匹配不上，占位符就成了正文里的噪声文本。
+   *
+   * 实现走"选中 + deleteSelection"而不是自己拼 replaceText：这样撤销栈、
+   * 高亮、撤销的粒度都由编辑器维护，和普通删除行为一致（一次 Ctrl+Z 能还原）。
+   *
+   * 命中判定见 `image-placeholder.ts`（边界语义与编辑器一致，且有单测）。
+   */
+  const handlePlaceholderDelete = (e: KeyEvent): boolean => {
+    const el = ref.current;
+    if (!el) return false;
+    const isBackspace = e.name === 'backspace' && !e.ctrl && !e.meta && !e.super;
+    const isDelete = e.name === 'delete' && !e.ctrl && !e.meta && !e.super;
+    if (!isBackspace && !isDelete) return false;
+
+    const text = el.plainText;
+    const offset = el.cursorOffset;
+    const span = isBackspace ? backspaceSpan(text, offset) : deleteSpan(text, offset);
+    if (!span) return false; // 不在占位符上：走原生逐字符删除
+
+    e.preventDefault(); // 拦住 textarea 自己的删除，否则会先删掉一个字符
+    // setSelection 吃的也是列宽偏移，不是字符下标——占位符前面有汉字时两者不同
+    el.setSelection(charIndexToColumn(text, span.start), charIndexToColumn(text, span.end));
+    el.deleteSelection();
+    return true;
   };
 
   /**

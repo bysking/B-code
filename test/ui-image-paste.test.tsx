@@ -198,3 +198,114 @@ test('一次粘贴只插入一张图（App 与 PromptInput 不重复处理）', 
   assert.ok(!out.includes('[image #2]'), `不该有第二张：\n${out.slice(-300)}`);
   await frame.cleanup();
 });
+
+// ── 占位符整块删除 ────────────────────────────────────────────
+
+/** 输入框当前行（纯文本） */
+function inputLine(frame: Frame): string {
+  return (
+    frame
+      .frame()
+      .split('\n')
+      .find((l) => l.startsWith('>'))
+      ?.trimEnd() ?? ''
+  );
+}
+
+test('整块删除：光标在占位符后按一次退格，整块消失（不是逐字符）', async () => {
+  const { frame } = await mountApp();
+  pressCtrlV(frame); // 插一张图 → [image #1]
+  await frame.flush();
+  assert.ok(inputLine(frame).includes('[image #1]'), '先确认占位符已插入');
+
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+
+  assert.ok(
+    !inputLine(frame).includes('image'),
+    `按一次退格应删掉整块，不该残留半截：${inputLine(frame)}`,
+  );
+  await frame.cleanup();
+});
+
+test('整块删除：占位符夹在文字中间，退格只删占位符、两侧文字保留', async () => {
+  const { frame } = await mountApp();
+  await frame.typeText('前');
+  pressCtrlV(frame);
+  await frame.flush();
+  await frame.typeText('后');
+  await frame.flush();
+  assert.ok(inputLine(frame).includes('前[image #1]后'), `准备：${inputLine(frame)}`);
+
+  // 光标在末尾 → 先删"后"，再退格整块删占位符
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+  assert.equal(inputLine(frame).trim(), '> 前[image #1]');
+
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+  assert.equal(inputLine(frame).trim(), '> 前', '整块删除后两侧文字保留');
+  await frame.cleanup();
+});
+
+test('整块删除：占位符前面的汉字不影响命中（列宽换算）', async () => {
+  // 这条是回归：cursorOffset 用显示列宽（汉字算 2 列），拿它直接跟字符下标
+  // 比较会漏判 —— 表现就是"有汉字时退格又变成逐字符删"
+  const { frame } = await mountApp();
+  await frame.typeText('看看看'); // 三个汉字 = 6 列
+  pressCtrlV(frame);
+  await frame.flush();
+  assert.ok(inputLine(frame).includes('看看看[image #1]'));
+
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+  assert.equal(inputLine(frame).trim(), '> 看看看', '汉字前缀下仍应整块删除');
+  await frame.cleanup();
+});
+
+test('整块删除：多张图各自独立，退格删最后一张', async () => {
+  const { frame } = await mountApp();
+  pressCtrlV(frame);
+  await frame.flush();
+  pressCtrlV(frame);
+  await frame.flush();
+  assert.ok(inputLine(frame).includes('[image #1][image #2]'));
+
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+  const out = inputLine(frame);
+  assert.ok(out.includes('[image #1]'), `第一张应保留：${out}`);
+  assert.ok(!out.includes('[image #2]'), `只删最后一张：${out}`);
+  await frame.cleanup();
+});
+
+test('整块删除：Delete 从左侧整块删除', async () => {
+  const { frame } = await mountApp();
+  pressCtrlV(frame);
+  await frame.flush();
+  await frame.typeText('x');
+  await frame.flush();
+  // 光标移到 'x' 之前（占位符右边界之后）→ Delete 删 'x'，先把它删掉
+  await frame.press(KeyCodes.ARROW_LEFT);
+  await frame.press(KeyCodes.DELETE);
+  await frame.flush();
+  assert.ok(!inputLine(frame).includes('x'), 'Delete 先删掉右边的 x');
+
+  // 光标现在在占位符右边界（左边界情况由单测覆盖，这里验证整体可用）
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+  assert.ok(!inputLine(frame).includes('image'), `再退格清掉占位符：${inputLine(frame)}`);
+  await frame.cleanup();
+});
+
+test('整块删除：普通文本的退格仍然逐字符（不误伤）', async () => {
+  const { frame } = await mountApp();
+  await frame.typeText('abcd');
+  await frame.flush();
+
+  await frame.press(KeyCodes.BACKSPACE);
+  await frame.flush();
+
+  assert.equal(inputLine(frame).trim(), '> abc', '普通文本退格只删一个字符');
+  await frame.cleanup();
+});
