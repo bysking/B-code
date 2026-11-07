@@ -288,9 +288,36 @@ export function App({
   }, [subAgentCount]);
 
   /* ── 粘贴 ─────────────────────────────────────────── */
+
+  /**
+   * Ctrl+V / Cmd+V：只用来取图片（文本走括号粘贴）。
+   *
+   * 只给 `PromptInput` 用，**不**在 App 层再兜一次：图片占位符要插在光标处，
+   * 只有拿到 textarea 实例才做得到。App 层若也处理同一次粘贴，两边都会
+   * 登记一张图（重复的 `[image #N]`）。
+   */
+  const handlePasteImage = (): string | null => {
+    const img = readClipboardImage();
+    if (!img) return null;
+    const idx = imagesRef.current.length + 1;
+    imagesRef.current.push(img);
+    return `[image #${idx}]`;
+  };
+
+  /**
+   * 粘贴事件（括号粘贴）：**只处理文本**。
+   *
+   * 空的粘贴事件留给 `PromptInput` 的 `onPaste`——那里能插到光标处，也能在
+   * 空内容时探剪贴板图片（Windows Terminal 把 Ctrl+V 转成自己的粘贴动作，
+   * 剪贴板是图片时事件是空的，那条路径只能从粘贴事件走）。
+   *
+   * 职责分开是为了避免重复插入：同一次粘贴这个 hook 和组件的 `onPaste`
+   * 都会收到，谁都不该处理两遍。
+   */
   usePaste((event) => {
     if (inputDisabled) return;
-    setInput((v) => v + new TextDecoder().decode(event.bytes));
+    const text = new TextDecoder().decode(event.bytes);
+    if (text) setInput((v) => v + text);
   });
 
   const handleChange = useCallback(
@@ -302,15 +329,6 @@ export function App({
     },
     [ctrl, historyIdx],
   );
-
-  /** Ctrl+V：只用来取图片（文本走括号粘贴） */
-  const handlePasteImage = (): string | null => {
-    const img = readClipboardImage();
-    if (!img) return null;
-    const idx = imagesRef.current.length + 1;
-    imagesRef.current.push(img);
-    return `[image #${idx}]`;
-  };
 
   const handleComplete = (item: SlashItem) => {
     const completed = `/${item.name} `;

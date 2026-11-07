@@ -1,15 +1,16 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 /**
  * 剪贴板图片读取工具
  *
- * 跨平台（macOS / Linux）检测并读取剪贴板中的图片数据，
+ * 跨平台（macOS / Linux / Windows）检测并读取剪贴板中的图片数据，
  * 返回 base64 编码 + media_type 供大模型消息嵌入。
  *
- * Windows 暂不支持（返回 null），可后续扩展。
+ * 三个平台各走各的系统命令（osascript / xclip·wl-paste / powershell），
+ * 没有平台分支命中时返回 null。
  */
 
 /**
@@ -84,6 +85,9 @@ export function readClipboardImage(): ClipboardImage | null {
     }
     if (process.platform === 'linux') {
       return readClipboardLinux();
+    }
+    if (process.platform === 'win32') {
+      return readClipboardWindows();
     }
   } catch {
     // 静默降级：剪贴板读取失败不阻塞用户输入
@@ -185,5 +189,77 @@ function readClipboardLinux(): ClipboardImage | null {
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Windows 剪贴板图片读取（PowerShell + System.Windows.Forms）
+ *
+ * 流程：
+ *   1. `Clipboard::ContainsImage()` 检测剪贴板里是不是图
+ *   2. 是 → `Clipboard::GetImage()` 存成临时 PNG
+ *   3. node 读文件 base64 → 删临时文件
+ *
+ * ## 为什么必须 -STA
+ *
+ * `System.Windows.Forms.Clipboard` 是 STA COM 组件。pwsh 7+ 默认以 **MTA** 启动，
+ * 在 MTA 线程上碰它会抛 `ThreadStateException: Current thread must be set to
+ * single thread apartment (STA)`。Windows PowerShell 5.1（powershell.exe）默认
+ * 是 STA，但为稳妥起见两者都显式加 `-STA`——pwsh 也认这个参数。
+ *
+ * ## 为什么用 -EncodedCommand 而不是 -Command
+ *
+ * 脚本里有 `"`、`$`、`|` 和换行。走 `-Command` 要跟 cmd.exe 的引号规则搏斗
+ * （execFileSync 直接调 exe 时虽不经 shell，但 PowerShell 自己还要解析一遍
+ * 参数串，多级转义极易出错）。`-EncodedCommand` 收 base64(UTF-16LE)，
+ * 完全绕开引号：脚本原样送达，与 shell 无关。
+ *
+ * ## 为什么要先探测再读
+ *
+ * `GetImage()` 在剪贴板无图时返回 null，但**调用它本身就会因剪贴板被别的
+ * 程序占用而抛 ExternalException**。先 `ContainsImage()` 短路掉"本来就没图"
+ * 的常见情况（用户只是 Ctrl+V 粘文本），少一次无谓的 COM 调用。
+ */
+function readClipboardWindows(): ClipboardImage | null {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'bcode-clip-'));
+  const tmpFile = join(tmpDir, 'clipboard.png');
+  // 路径要嵌进 PowerShell 单引号串：反斜杠本身不必转义，但我们要防的是
+  // 路径里出现单引号（PowerShell 里用 '' 表示一个 '）
+  const psPath = tmpFile.replace(/'/g, "''");
+
+  // 注意：这里**不**用 osascript 那种 `execSync(字符串)`——那条路径要经 shell，
+  // 而 Windows 上 node 用的是 cmd.exe，引号规则完全不同。execFileSync 直接调
+  // exe，参数以数组传递，不经过任何 shell。
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    'if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { exit 3 }',
+    '$img = [System.Windows.Forms.Clipboard]::GetImage()',
+    'if ($null -eq $img) { exit 3 }',
+    `$img.Save('${psPath}', [System.Drawing.Imaging.ImageFormat]::Png)`,
+    '$img.Dispose()',
+  ].join('; ');
+
+  // -EncodedCommand 要求 UTF-16LE 的 base64
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+
+  try {
+    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded], {
+      timeout: 10000,
+      // 不让子进程的 stderr 漏进 TUI（备用屏里会直接花屏）
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    if (!existsSync(tmpFile)) return null;
+    const buf = readFileSync(tmpFile);
+    if (buf.length > 0) {
+      return { data: buf.toString('base64'), media_type: 'image/png' };
+    }
+    return null;
+  } catch {
+    // exit 3（无图片）、powershell 不可用、COM 被占用 → 一律当作"没图"
+    return null;
+  } finally {
+    try { unlinkSync(tmpFile); } catch { /* 忽略 */ }
+    try { rmdirSync(tmpDir); } catch { /* 目录非空或不存在，忽略 */ }
   }
 }

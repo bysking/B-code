@@ -71,3 +71,49 @@ test('回归：cli.ts 发消息路径不得自动读取剪贴板', async () => {
     'cli.ts 不应存在 chatWithClipboard 包装（会自动附带剪贴板图片）',
   );
 });
+
+/**
+ * Windows 剪贴板读取（powershell -EncodedCommand）。
+ *
+ * 只能在 macOS/Linux 上跑，所以**不**验证真机读图（那需要 Windows + 真实
+ * 剪贴板），而是锁住脚本文本本身的正确性——这两点出错的表现都是"Windows 上
+ * 按 Ctrl+V 静默无反应"，最难排查：
+ *
+ *   1. 必须带 `-STA`：System.Windows.Forms.Clipboard 是 STA COM 组件，
+ *      pwsh 7 默认 MTA，不带就抛 ThreadStateException。
+ *   2. 必须走 `-EncodedCommand`：脚本里有引号/`|`/`$`，走 -Command 要过
+ *      cmd.exe 与 PowerShell 两层解析，多级转义极易失效。
+ *
+ * 脚本是从源码里抠出来再解码的，所以这里断言的正是运行时真正会执行的内容。
+ */
+test('Windows：powershell 参数与脚本内容正确', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const src = readFileSync(fileURLToPath(new URL('../src/utils/clipboard.ts', import.meta.url)), 'utf-8');
+
+  // 1) 参数配置
+  assert.ok(
+    /execFileSync\(\s*'powershell',\s*\[[^\]]*'-STA'/.test(src),
+    '必须带 -STA（pwsh 7 默认 MTA，Forms 剪贴板会抛 ThreadStateException）',
+  );
+  assert.ok(src.includes("'-EncodedCommand'"), '必须走 -EncodedCommand（避开引号解析）');
+  assert.ok(src.includes("'-NoProfile'"), '必须 -NoProfile（用户 profile 可能污染输出）');
+  assert.ok(
+    src.includes("stdio: ['ignore', 'pipe', 'pipe']"),
+    'stdio 必须收敛，否则子进程输出会打进备用屏',
+  );
+
+  // 2) 脚本内容：取 script 数组的源码块（`const script = [ ... ].join('; ')`）
+  const block = /const script = \[([\s\S]*?)\]\.join\(/.exec(src)?.[1] ?? '';
+  assert.ok(block.length > 0, '应能从源码定位到 script 数组');
+  const script = block;
+
+  assert.ok(script.includes('Add-Type -AssemblyName System.Windows.Forms'), '要先加载 Forms 程序集');
+  assert.ok(script.includes('ContainsImage()'), '要先探测，避免无图时白跑 COM 调用');
+  assert.ok(script.includes('GetImage()'), '要真的取图');
+  assert.ok(script.includes('ImageFormat]::Png'), '要存成 PNG（媒体类型固定 image/png）');
+  assert.ok(script.includes('exit 3'), '无图要用非零退出码短路（catch 里当"没图"处理）');
+
+  // 3) 编码方式：-EncodedCommand 要求 UTF-16LE
+  assert.ok(src.includes("Buffer.from(script, 'utf16le')"), '-EncodedCommand 必须用 UTF-16LE 编码');
+});

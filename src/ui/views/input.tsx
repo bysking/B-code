@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import type { KeyBinding, TextareaRenderable } from '@opentui/core';
+import type { KeyBinding, KeyEvent, PasteEvent, TextareaRenderable } from '@opentui/core';
 import { useTerminalDimensions } from '@opentui/react';
 import wrapAnsi from 'wrap-ansi';
 import { COLORS, attrs } from '../primitives/theme.js';
@@ -81,6 +81,7 @@ export function PromptInput({
   value,
   onChange,
   onSubmit,
+  onImagePaste,
   disabled = false,
 }: {
   value: string;
@@ -92,6 +93,47 @@ export function PromptInput({
   const ref = useRef<TextareaRenderable | null>(null);
   const { width } = useTerminalDimensions();
   const rows = useMemo(() => inputRows(value, width), [value, width]);
+
+  /**
+   * Ctrl/Cmd+V：只取剪贴板里的**图片**，插入 `[image #N]` 占位符。
+   *
+   * 文本粘贴不走这里：终端把 Cmd+V 自己吃掉，转成**括号粘贴**发过来
+   * （`\x1b[200~…\x1b[201~`），由 `App` 的 `usePaste` 和 textarea 原生的
+   * `handlePaste` 接收。所以能走到这里的 Ctrl+V，剪贴板里只可能是二进制
+   * 图片——纯文本读不到（要剪贴板 API）。
+   *
+   * 这段逻辑在 ink 时代挂在手写的 `useInput` 里，换成 OpenTUI 的 `<textarea>`
+   * 后丢过一次（`onImagePaste` 成了没人调用的死 prop），所以放在组件内部：
+   * 需要 `insertText()` 把占位符插在**光标处**，只有拿到 textarea 实例才做得到。
+   */
+  const handleKeyDown = (e: KeyEvent): void => {
+    if (!((e.ctrl || e.meta || e.super) && e.name === 'v')) return;
+    const placeholder = onImagePaste?.();
+    if (!placeholder) return; // 剪贴板没有图片：交给默认处理（什么都不会插入）
+    // 抢在 textarea 的 handleKeyPress 之前吃掉这个键，否则它会当普通按键处理
+    e.preventDefault();
+    ref.current?.insertText(placeholder);
+  };
+
+  /**
+   * 空粘贴 → 尝试当图片处理。
+   *
+   * 上面 `onKeyDown` 只在**终端把 Ctrl+V 键交下来**时生效。Windows Terminal
+   * 默认把 Ctrl+V 绑成自己的粘贴动作，键根本到不了应用；它只在剪贴板有文本时
+   * 合成一个 paste 事件，是图片时事件里是空的。所以空粘贴必须也探一次图片，
+   * 否则 Windows 上按 Ctrl+V 毫无反应。
+   *
+   * 顺序（OpenTUI `Renderable.focus()` 里注册的 pasteHandler）：
+   *   `onPaste` → 若未 `preventDefault()` 才轮到 textarea 原生的 `handlePaste`
+   * 所以处理完必须 `preventDefault()`，否则原生会把空内容再插一遍。
+   */
+  const handlePaste = (e: PasteEvent): void => {
+    if (new TextDecoder().decode(e.bytes)) return; // 有文本：走正常流程
+    const placeholder = onImagePaste?.();
+    if (!placeholder) return;
+    e.preventDefault();
+    ref.current?.insertText(placeholder);
+  };
 
   // 外部值变化 → 同步进 textarea（提交清空、Tab 补全、历史导航）
   useEffect(() => {
@@ -116,6 +158,8 @@ export function PromptInput({
         textColor={COLORS.text}
         focusedTextColor={COLORS.text}
         focusedBackgroundColor={COLORS.surfaceDeep}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         onContentChange={() => onChange(ref.current?.plainText ?? '')}
         onSubmit={() => {
           // SubmitEvent 是空对象，值从组件读（缓冲区就是当前草稿）
