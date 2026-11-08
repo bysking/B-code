@@ -9,11 +9,35 @@
 
 ```bash
 cd site
-bun install      # 或 npm install
-bun run dev      # http://localhost:5173
-bun run build    # 产物在 site/dist/
-bun run preview  # 预览生产构建
+bun install          # 或 npm install
+bun run dev          # 开发服务器 http://localhost:5173
+bun run build        # 多文件产物 site/dist/(部署用)
+bun run build:single # 单文件产物 site/single/index.html
+bun run preview      # 预览生产构建
 ```
+
+## 打包成单个 HTML
+
+```bash
+bun run build:single
+# → site/single/index.html  约 372 KB(gzip 118 KB)
+```
+
+产物是**完全自包含的一个文件**:JS 和 CSS 已内联,没有任何外部 `<script src>` 或 `<link href>`,
+也不需要服务器 —— 双击用浏览器打开即可,`file://` 协议下已验证全部交互正常。
+
+分享方式:直接发这个 HTML、放进邮件附件、传到任何静态托管,或者丢进网盘。
+
+实现要点(`vite.config.ts`):
+
+- 用 `vite-plugin-singlefile` 内联所有资源
+- 单文件模式必须关掉代码分割(`inlineDynamicImports` + `cssCodeSplit: false`),
+  否则会产出多个 chunk 而无法内联
+- `assetsInlineLimit` 调到极大,确保图片等资源也走 base64
+- 用 `BUILD_SINGLE=1` 环境变量切换,和常规构建共用同一份配置,避免两套配置漂移
+
+> 注意:单文件模式下首屏要等整个 bundle 解析完(约 370 KB),比多文件版本慢一点点。
+> 如果要挂到公网,仍建议用 `bun run build` 的多文件产物,可以增量加载和缓存。
 
 ## 内容来源
 
