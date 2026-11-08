@@ -53,20 +53,7 @@ export interface SectionMeta {
   src: string;
 }
 
-export const SECTIONS: SectionMeta[] = [
-  { id: 'intro', num: '0', title: '这类工具有什么用', short: '用处', src: '§0' },
-  { id: 'loop', num: '1', title: '第一性原理:那个循环', short: '核心循环', src: '§1' },
-  { id: 'three-things', num: '2', title: '循环需要的三样东西', short: '三样东西', src: '§2' },
-  { id: 'backend', num: '3', title: '模块一:后端层', short: '后端层', src: '§3' },
-  { id: 'tools', num: '4', title: '模块二:工具系统', short: '工具系统', src: '§4' },
-  { id: 'permissions', num: '5', title: '模块三:权限系统', short: '权限系统', src: '§5' },
-  { id: 'minimal', num: '6', title: '最小闭环已完成', short: '最小闭环', src: '§6' },
-  { id: 'pain-points', num: '7', title: '七个真实痛点', short: '七个痛点', src: '§7-§13' },
-  { id: 'compare', num: '14', title: '和 Claude Code 对比', short: '对比', src: '§14' },
-  { id: 'roadmap', num: '15', title: '建议的实现顺序', short: '实现顺序', src: '§15' },
-  { id: 'lessons', num: '16', title: '值得记住的教训', short: '教训', src: '§16' },
-  { id: 'appendix', num: '17', title: '速览与结语', short: '速览', src: '§17 + 附录' },
-];
+/* SECTIONS 已由 journey.ts 的 STAGES / EPILOGUE 取代 */
 
 // ── §1 核心循环 ────────────────────────────────────────────────
 

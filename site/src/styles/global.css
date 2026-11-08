@@ -210,6 +210,13 @@ li::marker {
   padding: 0 1.5rem;
 }
 
+/* 宽屏时内容整体右移,给左侧旅程轨让出空间 —— 轨道不再压在正文上 */
+@media (min-width: 1401px) {
+  .wrap {
+    padding-left: 10rem;
+  }
+}
+
 @media (max-width: 640px) {
   .wrap {
     padding: 0 1.1rem;
@@ -534,6 +541,13 @@ td code {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* 旅程进度轨:只在足够宽的视口显示,否则会压到正文上 */
+@media (max-width: 1400px) {
+  .journey-rail {
+    display: none !important;
+  }
 }
 
 /* ── 导航响应式 ───────────────────────────────────────────── */

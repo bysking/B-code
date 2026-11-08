@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { SECTIONS } from '../content/knowledge';
+import { STAGES, EPILOGUE } from '../content/journey';
+
+/** 导航条:主线 9 个时刻 + 3 项余论 */
+const NAV_ITEMS = [
+  ...STAGES.map((s) => ({ id: `stage-${s.id}`, num: String(s.n), short: s.short })),
+  ...EPILOGUE.map((e) => ({ id: e.id, num: '', short: e.short })),
+];
 
 /** 顶部导航 + 阅读进度条 */
 export function Nav() {
@@ -21,7 +27,7 @@ export function Nav() {
 
   // 用 IntersectionObserver 标记当前所在章节
   useEffect(() => {
-    const ids = SECTIONS.map((s) => s.id);
+    const ids = NAV_ITEMS.map((s) => s.id);
     const els = ids
       .map((id) => document.getElementById(id))
       .filter((el): el is HTMLElement => el !== null);
@@ -107,7 +113,7 @@ export function Nav() {
             flex: 1,
           }}
         >
-          {SECTIONS.map((s) => (
+          {NAV_ITEMS.map((s) => (
             <a
               key={s.id}
               href={`#${s.id}`}
@@ -151,7 +157,7 @@ export function Nav() {
             padding: '0 1.5rem 0.9rem',
           }}
         >
-          {SECTIONS.map((s) => (
+          {NAV_ITEMS.map((s) => (
             <a
               key={s.id}
               href={`#${s.id}`}
@@ -165,7 +171,7 @@ export function Nav() {
                 background: active === s.id ? 'var(--accent-bg)' : 'transparent',
               }}
             >
-              {s.num} {s.title}
+              {s.num} {s.short}
             </a>
           ))}
         </nav>

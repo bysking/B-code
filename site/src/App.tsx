@@ -6,7 +6,16 @@ import { FormatConverter } from './components/FormatConverter';
 import { CompactionDemo } from './components/CompactionDemo';
 import { Quiz } from './components/Quiz';
 import { RaceComparison } from './components/RaceComparison';
-import { PainPoints } from './components/PainPoints';
+import { StageBlock } from './components/Stage';
+import {
+  SubagentVisual,
+  GoalVisual,
+  EventsVisual,
+  AbortVisual,
+  CheckpointVisual,
+} from './components/PainVisuals';
+import { STAGES } from './content/journey';
+import { JourneyRail } from './components/JourneyRail';
 import { ToolRegistryVisual, CompareVisual, RoadmapVisual, McpSdkVisual } from './components/ConceptVisuals';
 import {
   AssemblyDiagram,
@@ -52,6 +61,7 @@ export default function App() {
         跳到正文
       </a>
       <Nav />
+      <JourneyRail />
 
       <main id="main">
         {/* ── Hero ─────────────────────────────────────────── */}
@@ -117,260 +127,287 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── §0 这类工具有什么用 ───────────────────────────── */}
-        <Section id="intro">
-          <SectionHead
-            num="0"
-            title="这类工具有什么用"
-            src="§0"
-            lede="你可能用过 ChatGPT 网页版:你问它问题,它回答你。但你让它「修一下这个 bug」,它只能给你一段代码 —— 你自己去复制、粘贴、保存、跑测试。"
-          />
+        {/* ══ 旅程:跟着一次任务跑一遍 ══════════════════════════ */}
+        <div id="journey" style={{ paddingTop: '1rem' }}>
+          <div className="wrap">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: '0.8rem',
+                marginBottom: '2.2rem',
+                paddingBottom: '0.8rem',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <span className="section-num">旅程</span>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>跟着一次真实的修复跑一遍</h2>
+              <span className="src-note" style={{ marginLeft: 'auto' }}>
+                每个模块只在它被需要的那一刻登场
+              </span>
+            </div>
 
-          <p style={{ color: 'var(--text-dim)', marginBottom: '1.4rem' }}>
-            Claude Code 这类工具改变的是最后一步 —— 它<strong>自己动手</strong>。
-          </p>
+            {/* ── 1 你开口 ── */}
+            <StageBlock stage={STAGES[0]!} defaultOpen>
+              <RaceComparison />
+              <div className="callout" style={{ marginTop: '1rem', marginBottom: 0 }}>
+                <p style={{ margin: 0 }}>{COMPARISON_CHAT_VS_AGENT.takeaway}</p>
+              </div>
+            </StageBlock>
 
-          <RaceComparison />
-
-          <div className="callout">
-            <p style={{ margin: 0 }}>{COMPARISON_CHAT_VS_AGENT.takeaway}</p>
-          </div>
-        </Section>
-
-        {/* ── §1 第一性原理 ─────────────────────────────────── */}
-        <Section id="loop">
-          <SectionHead
-            num="1"
-            title="第一性原理:那个循环"
-            src="§1"
-            lede="先看这个循环,它是全部的核心。约 1.2 万行业务代码,但这几行就是它的心脏。"
-          />
-
-          <div className="grid-2" style={{ alignItems: 'start' }}>
-            <div>
+            {/* ── 2 循环转起来 ── */}
+            <StageBlock stage={STAGES[1]!}>
               <pre className="code-block" style={{ borderColor: 'var(--accent-line)' }}>
                 {LOOP_PSEUDOCODE}
               </pre>
-              <div className="callout callout-warn">
-                <span className="callout-title">决定循环转不转的,是模型,不是代码</span>
-                <p style={{ margin: 0, fontSize: '0.88rem' }}>
-                  传统程序的分支是程序员写死的(<code>if 文件不存在 then 创建</code>)。Agent 的下一步,
-                  是模型读完上一步结果后<strong>现场决定</strong>的。代码只提供「能做什么」的清单,
-                  不规定「先做什么后做什么」。
+              <LoopSimulator />
+              <div className="grid-2" style={{ marginTop: '1rem' }}>
+                <div className="card-inset">
+                  <div style={{ fontSize: '0.86rem', fontWeight: 650, marginBottom: 4 }}>
+                    决定循环转不转的,是模型,不是代码
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-dim)' }}>
+                    传统程序的分支是程序员写死的。Agent 的下一步,是模型读完上一步结果后
+                    <strong>现场决定</strong>的 —— 代码只提供「能做什么」的清单。
+                  </p>
+                </div>
+                <div className="card-inset">
+                  <div style={{ fontSize: '0.86rem', fontWeight: 650, marginBottom: 4 }}>
+                    所以它不可预测
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.84rem', color: 'var(--text-dim)' }}>
+                    <li>你不知道它会调几次工具(可能 2 次,可能 20 次)</li>
+                    <li>没法断言「一定走了某条路径」</li>
+                    <li>但也正因此,它能处理你没预设过的情况</li>
+                  </ul>
+                </div>
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <AssemblyDiagram />
+              </div>
+            </StageBlock>
+
+            {/* ── 3 换个模型 ── */}
+            <StageBlock stage={STAGES[2]!}>
+                        <BackendBoundaryDiagram />
+
+                        <h3 style={{ marginTop: '1.6rem' }}>字段逐条对应</h3>
+                        <p style={{ color: 'var(--text-dim)', fontSize: '0.92rem' }}>
+                          结论:<strong>差异不在「消息内容」,而在「工具调用放在哪儿」</strong>。普通文本对话两家几乎一样,
+                          一旦涉及工具就开始分叉。点选字段看两边对应项:
+                        </p>
+                        <FormatConverter />
+
+                        <h3 style={{ marginTop: '2rem' }}>两个最容易踩的坑</h3>
+                        <div className="grid-2">
+                          {BACKEND_PITFALLS.map((p) => (
+                            <div
+                              key={p.id}
+                              className="card-inset"
+                              style={{ borderLeft: '3px solid var(--amber)', borderRadius: '0 var(--radius) var(--radius) 0' }}
+                            >
+                              <div
+                                style={{
+                                  fontFamily: 'var(--mono)',
+                                  fontSize: '0.82rem',
+                                  color: 'var(--amber)',
+                                  fontWeight: 650,
+                                  marginBottom: '0.3rem',
+                                }}
+                              >
+                                {p.title.replace(/`/g, '')}
+                              </div>
+                              <p style={{ fontSize: '0.84rem', color: 'var(--text-dim)', margin: 0 }}>{p.detail}</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        <p
+                          style={{
+                            fontSize: '0.84rem',
+                            color: 'var(--text-faint)',
+                            margin: '1rem 0 0',
+                            paddingLeft: '0.7rem',
+                            borderLeft: '2px solid var(--border-strong)',
+                          }}
+                        >
+                          这也是内部固定一种形状的理由:两套格式直接进主循环,上面这些坑就会散布在循环、
+                          上下文压缩、会话存储每一处;固定后,全部差异被压缩到两个可单独测试的纯函数里。
+                        </p>
+            </StageBlock>
+
+            {/* ── 4 它要动手了 ── */}
+            <StageBlock stage={STAGES[3]!}>
+                        <RegistryDiagram />
+
+                        <ToolRegistryVisual />
+
+                        <div className="grid-2" style={{ marginTop: '1.2rem' }}>
+                          <div className="card">
+                            <h4>{EDIT_FILE_RATIONALE.title.replace(/`/g, '')}</h4>
+                            <ul style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>
+                              {EDIT_FILE_RATIONALE.problems.map((p) => (
+                                <li key={p}>{p}</li>
+                              ))}
+                            </ul>
+                            <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)', margin: 0 }}>
+                              {EDIT_FILE_RATIONALE.benefit}
+                            </p>
+                          </div>
+                          <div className="card">
+                            <h4>关键洞察:MCP 工具和内置工具没有区别</h4>
+                            <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>
+                              MCP 可以理解成「AI 工具界的 USB 接口」。B Code 的设计是:MCP 工具接进来后,
+                              和内置工具走完全一样的路径 —— 都是「名字 + schema + 执行函数」,都挂在同一个注册表里。
+                            </p>
+                            <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)', margin: 0 }}>
+                              所以对循环来说,<code>read_file</code> 和 <code>mcp__github__create_issue</code> 没有任何区别。
+                              这是「注册表」这个抽象带来的直接好处。
+                            </p>
+                          </div>
+                        </div>
+            </StageBlock>
+
+            {/* ── 5 差点删库 ── */}
+            <StageBlock stage={STAGES[4]!}>
+                        {/* 一个入口:模式 × 命令 × 白名单,下面的模拟器全部可验证 */}
+                        <PermissionSimulator />
+
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 18rem), 1fr))',
+                            gap: '0.7rem',
+                            marginTop: '1rem',
+                          }}
+                        >
+                          <Note title="不可逆 vs 可商量" tone="red">
+                            危险命令<b>没有商量余地</b>,任何模式都拒;而 <code>git push</code> 这类只是
+                            <b>会改动远端</b>,提交还在本地 —— 所以允许你授权后免问。
+                          </Note>
+                          <Note title="不确定就拦" tone="amber">
+                            没声明类型的工具(未来接进来的 MCP、别人写的插件)默认<b>要求确认</b>,而不是默认放行。
+                            反过来会让新工具白拿权限。
+                          </Note>
+                        </div>
+
+                        <Disclosure summary="白名单凭什么记住某条命令?(4 条准入规则)">
+                          <div style={{ display: 'grid', gap: '0.4rem', margin: '0.2rem 0 0.7rem' }}>
+                            {ALLOWLIST_RULES.map((r) => (
+                              <div
+                                key={r.rule}
+                                style={{ display: 'grid', gridTemplateColumns: '13rem minmax(0,1fr)', gap: '0.7rem', fontSize: '0.85rem' }}
+                              >
+                                <span style={{ color: 'var(--text)' }}>{r.rule}</span>
+                                <span style={{ color: 'var(--text-faint)' }}>{r.why}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <p style={{ margin: 0, fontSize: '0.85rem', borderLeft: '2px solid var(--accent)', paddingLeft: '0.7rem' }}>
+                            {ALLOWLIST_PHILOSOPHY}
+                          </p>
+                        </Disclosure>
+            </StageBlock>
+
+            {/* ── 6 上下文塞不下 ── */}
+            <StageBlock stage={STAGES[5]!}>
+                        <h3 style={{ marginTop: '2rem' }}>陷阱:工具结果把上下文撑爆</h3>
+                        <p style={{ color: 'var(--text-dim)', fontSize: '0.92rem', marginBottom: '1rem' }}>
+                          假设模型让你 <code>cat</code> 一个 10 万行的日志文件 —— 原样塞回历史,单次就吃掉了大半上下文窗口。
+                          所以不是「满了再处理」,而是从轻到重的多道防线:
+                        </p>
+                        <ContextFunnel />
+
+                        <CompactionDemo />
+            </StageBlock>
+
+            {/* ── 7 派个人去查 ── */}
+            <StageBlock stage={STAGES[6]!}>
+              <SubagentVisual />
+              <div style={{ marginTop: '1rem' }}>
+                          <h3 style={{ marginTop: '2rem' }}>MCP:SDK 替你做了哪些脏活</h3>
+                          <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem', marginBottom: '0.9rem' }}>
+                            接一个外部工具,真正麻烦的从来不是「调一次」,而是收发、对号、超时、换连接方式这些杂事。
+                            官方 SDK 把这些都包了 —— 你只管写「这个工具干什么」。
+                          </p>
+                          <McpSdkVisual />
+              </div>
+            </StageBlock>
+
+            {/* ── 8 谁说了算 ── */}
+            <StageBlock stage={STAGES[7]!}>
+              <GoalVisual />
+              <div className="grid-2" style={{ marginTop: '1rem' }}>
+                <div className="card-inset" style={{ borderLeft: '3px solid var(--amber)' }}>
+                  <div style={{ fontSize: '0.86rem', fontWeight: 650, marginBottom: 4 }}>为什么不用同一个模型顺便判断?</div>
+                  <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-dim)' }}>
+                    「干活的」和「检查的」应该是两个独立判断。让执行者自己打分,它倾向于说「我干完了」。
+                  </p>
+                </div>
+                <div className="card-inset" style={{ borderLeft: '3px solid var(--red)' }}>
+                  <div style={{ fontSize: '0.86rem', fontWeight: 650, marginBottom: 4 }}>刹车</div>
+                  <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-dim)' }}>
+                    条件永远达不成时返回 <code>impossible</code>,主循环停止。没有这个刹车,
+                    无人值守模式会一直烧钱。
+                  </p>
+                </div>
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <EventsVisual />
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <AbortVisual />
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <CheckpointVisual />
+              </div>
+            </StageBlock>
+
+            {/* ── 9 跑通了 ── */}
+            <StageBlock stage={STAGES[8]!} defaultOpen>
+              <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '1.4rem' }}>
+                {CLOSING_MAP.map((c, i) => (
+                  <motion.div
+                    key={c.problem}
+                    initial={{ opacity: 0, x: -10 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.3, delay: i * 0.05 }}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '10rem 3rem 1fr',
+                      alignItems: 'center',
+                      gap: '0.6rem',
+                      padding: '0.5rem 0.8rem',
+                      borderRadius: 7,
+                      border: '1px solid var(--border)',
+                      background: i % 2 === 0 ? 'var(--bg-subtle)' : 'transparent',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>{c.problem}</span>
+                    <span style={{ textAlign: 'center', color: 'var(--accent)', fontSize: '0.8rem' }}>──▶</span>
+                    <span style={{ fontSize: '0.86rem', color: 'var(--accent-text)', fontWeight: 600 }}>
+                      {c.module}
+                    </span>
+                  </motion.div>
+                ))}
+              </div>
+
+              <div
+                style={{
+                  padding: '1.1rem 1.3rem',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--accent-line)',
+                  background: 'var(--accent-bg)',
+                }}
+              >
+                <p style={{ margin: 0, fontSize: '1rem', lineHeight: 1.7 }}>
+                  <strong>{CLOSING_PRINCIPLE}</strong>
                 </p>
               </div>
-              <ul style={{ fontSize: '0.88rem', color: 'var(--text-dim)' }}>
-                <li>你没法预测它会调几次工具(可能 2 次,可能 20 次)</li>
-                <li>你没法用测试断言「一定走了某条路径」</li>
-                <li>但正因如此,它能处理你没预设过的情况</li>
-              </ul>
-            </div>
-            <LoopSimulator />
+            </StageBlock>
           </div>
-        </Section>
-
-        {/* ── §2 三样东西 ───────────────────────────────────── */}
-        <Section id="three-things">
-          <SectionHead
-            num="2"
-            title="循环转起来需要的三样东西"
-            src="§2"
-            lede="回到上面那个伪代码,你会发现它引用了三个还不存在的东西。"
-          />
-          <AssemblyDiagram />
-        </Section>
-
-        {/* ── §3 后端层 ─────────────────────────────────────── */}
-        <Section id="backend">
-          <SectionHead
-            num="3"
-            title="模块一:怎么跟模型说话"
-            src="§3"
-            lede="最直觉的写法是把 SDK 调用直接写在循环里。但今天用 Anthropic、明天想用 DeepSeek,两家格式不一样 —— 循环里就会长满 if/else。"
-          />
-
-          <BackendBoundaryDiagram />
-
-          <h3 style={{ marginTop: '1.6rem' }}>字段逐条对应</h3>
-          <p style={{ color: 'var(--text-dim)', fontSize: '0.92rem' }}>
-            结论:<strong>差异不在「消息内容」,而在「工具调用放在哪儿」</strong>。普通文本对话两家几乎一样,
-            一旦涉及工具就开始分叉。点选字段看两边对应项:
-          </p>
-          <FormatConverter />
-
-          <h3 style={{ marginTop: '2rem' }}>两个最容易踩的坑</h3>
-          <div className="grid-2">
-            {BACKEND_PITFALLS.map((p) => (
-              <div
-                key={p.id}
-                className="card-inset"
-                style={{ borderLeft: '3px solid var(--amber)', borderRadius: '0 var(--radius) var(--radius) 0' }}
-              >
-                <div
-                  style={{
-                    fontFamily: 'var(--mono)',
-                    fontSize: '0.82rem',
-                    color: 'var(--amber)',
-                    fontWeight: 650,
-                    marginBottom: '0.3rem',
-                  }}
-                >
-                  {p.title.replace(/`/g, '')}
-                </div>
-                <p style={{ fontSize: '0.84rem', color: 'var(--text-dim)', margin: 0 }}>{p.detail}</p>
-              </div>
-            ))}
-          </div>
-
-          <p
-            style={{
-              fontSize: '0.84rem',
-              color: 'var(--text-faint)',
-              margin: '1rem 0 0',
-              paddingLeft: '0.7rem',
-              borderLeft: '2px solid var(--border-strong)',
-            }}
-          >
-            这也是内部固定一种形状的理由:两套格式直接进主循环,上面这些坑就会散布在循环、
-            上下文压缩、会话存储每一处;固定后,全部差异被压缩到两个可单独测试的纯函数里。
-          </p>
-        </Section>
-
-        {/* ── §4 工具系统 ───────────────────────────────────── */}
-        <Section id="tools">
-          <SectionHead
-            num="4"
-            title="模块二:工具系统"
-            src="§4"
-            lede="模型不是「知道」它能读文件,而是我们在每次请求里告诉它一份清单。每个工具声明:叫什么名字、干什么用、需要什么参数(JSON Schema)。"
-          />
-
-          <RegistryDiagram />
-
-          <ToolRegistryVisual />
-
-          <div className="grid-2" style={{ marginTop: '1.2rem' }}>
-            <div className="card">
-              <h4>{EDIT_FILE_RATIONALE.title.replace(/`/g, '')}</h4>
-              <ul style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>
-                {EDIT_FILE_RATIONALE.problems.map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
-              <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)', margin: 0 }}>
-                {EDIT_FILE_RATIONALE.benefit}
-              </p>
-            </div>
-            <div className="card">
-              <h4>关键洞察:MCP 工具和内置工具没有区别</h4>
-              <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>
-                MCP 可以理解成「AI 工具界的 USB 接口」。B Code 的设计是:MCP 工具接进来后,
-                和内置工具走完全一样的路径 —— 都是「名字 + schema + 执行函数」,都挂在同一个注册表里。
-              </p>
-              <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)', margin: 0 }}>
-                所以对循环来说,<code>read_file</code> 和 <code>mcp__github__create_issue</code> 没有任何区别。
-                这是「注册表」这个抽象带来的直接好处。
-              </p>
-            </div>
-          </div>
-
-          <h3 style={{ marginTop: '2rem' }}>陷阱:工具结果把上下文撑爆</h3>
-          <p style={{ color: 'var(--text-dim)', fontSize: '0.92rem', marginBottom: '1rem' }}>
-            假设模型让你 <code>cat</code> 一个 10 万行的日志文件 —— 原样塞回历史,单次就吃掉了大半上下文窗口。
-            所以不是「满了再处理」,而是从轻到重的多道防线:
-          </p>
-          <ContextFunnel />
-
-          <CompactionDemo />
-
-          <h3 style={{ marginTop: '2rem' }}>MCP:SDK 替你做了哪些脏活</h3>
-          <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem', marginBottom: '0.9rem' }}>
-            接一个外部工具,真正麻烦的从来不是「调一次」,而是收发、对号、超时、换连接方式这些杂事。
-            官方 SDK 把这些都包了 —— 你只管写「这个工具干什么」。
-          </p>
-          <McpSdkVisual />
-        </Section>
-
-        {/* ── §5 权限系统 ───────────────────────────────────── */}
-        <Section id="permissions">
-          <SectionHead
-            num="5"
-            title="模块三:权限系统"
-            src="§5"
-            lede="一个能执行 rm -rf / 的 AI,和一个只能聊天的 AI,风险等级完全不同。这个模块是 B Code 存在的必要条件 —— 没有它,其他所有功能都不能给真人用。"
-          />
-
-          {/* 一个入口:模式 × 命令 × 白名单,下面的模拟器全部可验证 */}
-          <PermissionSimulator />
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 18rem), 1fr))',
-              gap: '0.7rem',
-              marginTop: '1rem',
-            }}
-          >
-            <Note title="不可逆 vs 可商量" tone="red">
-              危险命令<b>没有商量余地</b>,任何模式都拒;而 <code>git push</code> 这类只是
-              <b>会改动远端</b>,提交还在本地 —— 所以允许你授权后免问。
-            </Note>
-            <Note title="不确定就拦" tone="amber">
-              没声明类型的工具(未来接进来的 MCP、别人写的插件)默认<b>要求确认</b>,而不是默认放行。
-              反过来会让新工具白拿权限。
-            </Note>
-          </div>
-
-          <Disclosure summary="白名单凭什么记住某条命令?(4 条准入规则)">
-            <div style={{ display: 'grid', gap: '0.4rem', margin: '0.2rem 0 0.7rem' }}>
-              {ALLOWLIST_RULES.map((r) => (
-                <div
-                  key={r.rule}
-                  style={{ display: 'grid', gridTemplateColumns: '13rem minmax(0,1fr)', gap: '0.7rem', fontSize: '0.85rem' }}
-                >
-                  <span style={{ color: 'var(--text)' }}>{r.rule}</span>
-                  <span style={{ color: 'var(--text-faint)' }}>{r.why}</span>
-                </div>
-              ))}
-            </div>
-            <p style={{ margin: 0, fontSize: '0.85rem', borderLeft: '2px solid var(--accent)', paddingLeft: '0.7rem' }}>
-              {ALLOWLIST_PHILOSOPHY}
-            </p>
-          </Disclosure>
-        </Section>
-
-        {/* ── §6 最小闭环 ───────────────────────────────────── */}
-        <Section id="minimal">
-          <SectionHead
-            num="6"
-            title="现在已经有一个能跑的 Agent 了"
-            src="§6"
-            lede="到这里,最小闭环已经有了。但如果只用这个最小版本,你会在一周内遇到下面这些问题。"
-          />
-          <div className="grid-3">
-            {['循环能转', '能跟模型通信', '能读文件、改文件、跑命令', '不会把你磁盘删了'].map((x) => (
-              <div key={x} className="card-inset" style={{ fontSize: '0.9rem' }}>
-                <span style={{ color: 'var(--green)', marginRight: 6 }}>✓</span>
-                {x}
-              </div>
-            ))}
-          </div>
-          <div className="callout" style={{ marginTop: '1.2rem' }}>
-            <p style={{ margin: 0 }}>下面每一节,都是从一个真实痛点里长出来的。</p>
-          </div>
-        </Section>
-
-        {/* ── §7-§13 七个痛点 ──────────────────────────────── */}
-        <Section id="pain-points">
-          <SectionHead
-            num="7"
-            title="七个真实痛点"
-            src="§7-§13"
-            lede="每加一个模块,都应该能回答「它解决了哪一个具体问题」。下面是七个真实踩出来的坑,以及填法。"
-          />
-
-          <PainPoints />
-        </Section>
+        </div>
 
         {/* ── §14 对比 ──────────────────────────────────────── */}
         <Section id="compare">
@@ -428,76 +465,6 @@ export default function App() {
           />
 
           <RoadmapVisual />
-        </Section>
-
-        {/* ── §17 结语 + 附录 ──────────────────────────────── */}
-        <Section id="appendix">
-          <SectionHead
-            num="17"
-            title="结语与速览"
-            src="§17 + 附录"
-            lede="回到最开始那个四行的循环。那 1.2 万行代码,本质上都是在让这四行能在真实世界里可靠运行。"
-          />
-
-          {/* 问题 → 模块:每个模块都为某个具体现实问题而生 */}
-          <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '1.6rem' }}>
-            {CLOSING_MAP.map((c, i) => (
-              <motion.div
-                key={c.problem}
-                initial={{ opacity: 0, x: -10 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.3, delay: i * 0.05 }}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '10rem 3rem 1fr',
-                  alignItems: 'center',
-                  gap: '0.6rem',
-                  padding: '0.5rem 0.8rem',
-                  borderRadius: 7,
-                  border: '1px solid var(--border)',
-                  background: i % 2 === 0 ? 'var(--bg-subtle)' : 'transparent',
-                }}
-              >
-                <span style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>{c.problem}</span>
-                <span style={{ textAlign: 'center', color: 'var(--accent)', fontSize: '0.8rem' }}>──▶</span>
-                <span style={{ fontSize: '0.86rem', color: 'var(--accent-text)', fontWeight: 600 }}>
-                  {c.module}
-                </span>
-              </motion.div>
-            ))}
-          </div>
-
-          <div
-            style={{
-              padding: '1.1rem 1.3rem',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--accent-line)',
-              background: 'var(--accent-bg)',
-              marginBottom: '1.2rem',
-            }}
-          >
-            <p style={{ margin: 0, fontSize: '1rem', lineHeight: 1.7 }}>
-              <strong>{CLOSING_PRINCIPLE}</strong>
-            </p>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.6rem',
-              fontFamily: 'var(--mono)',
-              fontSize: '0.8rem',
-              color: 'var(--text-faint)',
-            }}
-          >
-            <span>想读代码:从</span>
-            <code>src/agent.ts</code>
-            <span>搜索</span>
-            <code>while</code>
-            <span>开始,顺着「它调用了谁」一路看下去 —— 整个项目的结构会自己展开。</span>
-          </div>
         </Section>
 
         {/* ── 知识自测 ──────────────────────────────────────── */}
