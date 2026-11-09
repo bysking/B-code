@@ -1,4 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
+import { PERM_DECISION_CHAIN } from '../content/knowledge';
 
 /**
  * 结构示意图集合 —— 用图形替代大段说明文字。
@@ -91,7 +92,7 @@ export function AssemblyDiagram() {
           { code: '执行工具(...)', q: '怎么保证安全?', mod: '权限系统', tone: 'red' as const },
         ].map((x) => (
           <div key={x.code}>
-            <VLine h={14} />
+            {/* <VLine h={14} /> */}
             <Node tone={x.tone} small>
               <div>{x.code}</div>
               <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: 2 }}>{x.q}</div>
@@ -121,7 +122,7 @@ export function BackendBoundaryDiagram() {
   return (
     <div style={{ marginBottom: '1.2rem' }}>
       <Node tone="accent" style={{ maxWidth: '26rem', margin: '0 auto' }}>
-        Agent 循环 —— 只认 Anthropic 形状
+        Agent 循环 —— 只认 Anthropic 消息格式
       </Node>
       <VLine h={14} />
 
@@ -142,10 +143,10 @@ export function BackendBoundaryDiagram() {
           color: 'var(--accent-text)',
         }}
       >
-        边界 · 格式翻译只发生在这里
+        大模型消息适配层（边界 · 格式翻译只发生在这里）
       </motion.div>
 
-      <VLine h={14} />
+      {/* <VLine h={14} /> */}
       <div
         style={{
           display: 'grid',
@@ -156,7 +157,9 @@ export function BackendBoundaryDiagram() {
         }}
       >
         <div>
-          <div style={{ textAlign: 'center', color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: 4 }}>
+          <div
+            style={{ textAlign: 'center', color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: 4 }}
+          >
             ↙
           </div>
           <Node tone="green" small>
@@ -165,14 +168,14 @@ export function BackendBoundaryDiagram() {
           </Node>
         </div>
         <div>
-          <div style={{ textAlign: 'center', color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: 4 }}>
+          <div
+            style={{ textAlign: 'center', color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: 4 }}
+          >
             ↘
           </div>
           <Node tone="purple" small>
             <div>OpenAI 兼容后端</div>
-            <div style={{ fontSize: '0.7rem', opacity: 0.85, marginTop: 2 }}>
-              toOpenAIMessages()
-            </div>
+            <div style={{ fontSize: '0.7rem', opacity: 0.85, marginTop: 2 }}>toOpenAIMessages()</div>
           </Node>
         </div>
       </div>
@@ -217,9 +220,7 @@ export function RegistryDiagram() {
         </Node>
         <Node tone="purple" small>
           <div>MCP 工具 · 任意个</div>
-          <div style={{ fontSize: '0.68rem', opacity: 0.85, marginTop: 2 }}>
-            mcp__github__create_issue
-          </div>
+          <div style={{ fontSize: '0.68rem', opacity: 0.85, marginTop: 2 }}>mcp__github__create_issue</div>
         </Node>
       </div>
       <div
@@ -314,9 +315,7 @@ export function ContextFunnel() {
                 {t.tag}
               </div>
               <div style={{ padding: '0.45rem 0.7rem' }}>
-                <div style={{ fontSize: '0.83rem', fontWeight: 600, color: 'var(--text)' }}>
-                  {t.title}
-                </div>
+                <div style={{ fontSize: '0.83rem', fontWeight: 600, color: 'var(--text)' }}>{t.title}</div>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>{t.text}</div>
               </div>
             </div>
@@ -375,6 +374,9 @@ const STEPS = [
 export function PermissionFlowchart({ outcome }: { outcome?: FlowOutcome }) {
   const reduce = useReducedMotion();
   const activeIdx = outcome ? STEPS.findIndex((s) => s.key === outcome.rule) : -1;
+
+  // 当前步的「为什么这么排」—— 复用 PERM_DECISION_CHAIN,一份数据两处用
+  const activeStep = activeIdx > 0 ? PERM_DECISION_CHAIN[activeIdx - 1] : undefined;
 
   return (
     <div>
@@ -438,9 +440,7 @@ export function PermissionFlowchart({ outcome }: { outcome?: FlowOutcome }) {
                 >
                   {isPast ? '✓' : s.mark}
                 </span>
-                <span style={{ color: isActive ? 'var(--text-strong)' : 'var(--text-dim)' }}>
-                  {s.q}
-                </span>
+                <span style={{ color: isActive ? 'var(--text-strong)' : 'var(--text-dim)' }}>{s.q}</span>
                 {isActive && (
                   <span
                     style={{
@@ -542,6 +542,16 @@ export function PermissionFlowchart({ outcome }: { outcome?: FlowOutcome }) {
           </div>
         );
       })}
+
+      {activeStep && (
+        <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', margin: '0.6rem 0 0' }}>
+          <b style={{ color: 'var(--accent-text)' }}>
+            {activeStep.order} {activeStep.question}
+          </b>
+          {' —— '}
+          {activeStep.note}
+        </p>
+      )}
 
       <p style={{ fontSize: '0.76rem', color: 'var(--text-faint)', margin: '0.8rem 0 0' }}>
         顺序本身就是设计 —— 危险命令排在最前,所以任何模式都绕不过它。

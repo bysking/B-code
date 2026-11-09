@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { QUIZ } from '../content/knowledge';
 
-/** 知识自测 —— 每题带原文锚点,答错时给出解释而不是只判对错 */
+/** 知识自测 —— 答错时给出解释而不是只判对错 */
 export function Quiz() {
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const reduce = useReducedMotion();
@@ -92,9 +92,6 @@ export function Quiz() {
                   Q{qi + 1}
                 </span>
                 <span style={{ fontWeight: 600, fontSize: '0.95rem', flex: 1 }}>{q.question}</span>
-                <span className="src-note" title="原文出处">
-                  {q.src}
-                </span>
               </div>
 
               <div style={{ display: 'grid', gap: '0.35rem' }}>

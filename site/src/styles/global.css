@@ -287,6 +287,61 @@ li::marker {
   gap: 1rem;
 }
 
+/* ── 权限模拟器:左「现场」/ 右「判定」两栏 ───────────────── */
+.perm-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 19rem) minmax(0, 1fr);
+  align-items: start;
+}
+
+.perm-console {
+  padding: 1rem 1.1rem;
+  border-right: 1px solid var(--border);
+}
+
+.perm-decision {
+  padding: 1rem 1.1rem;
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+}
+
+/* 控件的小标签(模式 / 工具 / 命令) */
+.perm-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+
+.perm-input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+}
+
+/* 命中危险命令时输入框转红 */
+.perm-input-danger {
+  border-color: var(--red);
+}
+
+@media (max-width: 900px) {
+  .perm-cols {
+    grid-template-columns: 1fr;
+  }
+  .perm-console {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
 /* ── 代码块 ───────────────────────────────────────────────── */
 .code-block {
   font-family: var(--mono);

@@ -7,6 +7,9 @@ import { PermissionFlowchart } from './Diagrams';
  *
  * 这是全站最需要精确的一块:判定顺序本身就是设计,展示错了就失去了说服力。
  * 下面的正则与源码逐条一致;`CMD_START` 边界规则也照搬。
+ *
+ * 版面:左边是「现场」(调模式、写命令),右边是「判定」(判定链 + 结论)。
+ * 读者先看到「它想删库」这一刻,再顺着右边的链子看这条命令走到哪一步。
  */
 
 const CMD_START = /(?:^|[;&|]\s*)/;
@@ -157,18 +160,19 @@ function resolve(
 
 /** 示例命令 —— 覆盖每个分支 */
 const PRESETS: { label: string; tool: string; command: string; hint: string }[] = [
-  { label: 'ls -la', tool: 'run_shell', command: 'ls -la', hint: '普通命令 → 确认' },
   { label: 'rm -rf node_modules', tool: 'run_shell', command: 'rm -rf node_modules', hint: '危险 → 任何模式都拒' },
-  { label: 'npm run kill-port', tool: 'run_shell', command: 'npm run kill-port', hint: '不误杀(非命令边界)' },
-  { label: 'ls; kill 2', tool: 'run_shell', command: 'ls; kill 2', hint: '命令边界 → 危险' },
+  { label: 'ls -la', tool: 'run_shell', command: 'ls -la', hint: '普通命令 → 确认' },
   { label: 'git push origin main', tool: 'run_shell', command: 'git push origin main', hint: '敏感 → auto/bypass 也要问' },
   { label: 'git reset --hard HEAD~1', tool: 'run_shell', command: 'git reset --hard HEAD~1', hint: '危险 → 拒' },
+  { label: 'ls; kill 2', tool: 'run_shell', command: 'ls; kill 2', hint: '命令边界 → 危险' },
+  { label: 'npm run kill-port', tool: 'run_shell', command: 'npm run kill-port', hint: '不误杀(非命令边界)' },
 ];
 
 export function PermissionSimulator() {
+  // 开局就是这一节标题里的那个时刻:它想删 node_modules 重装依赖
   const [mode, setMode] = useState<Mode>('default');
   const [tool, setTool] = useState('run_shell');
-  const [command, setCommand] = useState('bun test');
+  const [command, setCommand] = useState('rm -rf node_modules');
   const [allowlisted, setAllowlisted] = useState(false);
 
   const toolMeta = TOOLS.find((t) => t.name === tool);
@@ -184,8 +188,14 @@ export function PermissionSimulator() {
   const dangerousHit = toolMode === 'shell' ? DANGEROUS.some((re) => re.test(command)) : false;
   const sensitiveHit = toolMode === 'shell' ? SENSITIVE.some((re) => re.test(command)) : false;
 
+  const activeMode = PERM_MODES.find((m) => m.id === mode);
+
   const verdictColor =
     outcome.verdict === 'deny' ? 'var(--red)' : outcome.asksUser ? 'var(--amber)' : 'var(--green)';
+  const verdictBg =
+    outcome.verdict === 'deny' ? 'var(--red-bg)' : outcome.asksUser ? 'var(--amber-bg)' : 'var(--green-bg)';
+  const verdictLine =
+    outcome.verdict === 'deny' ? 'var(--red-line)' : outcome.asksUser ? 'var(--amber-line)' : 'var(--green-line)';
   const verdictText = outcome.asksUser ? 'confirm' : outcome.verdict;
 
   return (
@@ -197,221 +207,174 @@ export function PermissionSimulator() {
         overflow: 'hidden',
       }}
     >
-      <div style={{ padding: '1rem 1.1rem', borderBottom: '1px solid var(--border)' }}>
-        {/* 模式 */}
-        <fieldset style={{ border: 0, padding: 0, margin: '0 0 0.9rem' }}>
-          <legend
-            style={{
-              fontSize: '0.72rem',
-              fontFamily: 'var(--mono)',
-              color: 'var(--text-faint)',
-              letterSpacing: '0.05em',
-              marginBottom: '0.4rem',
-            }}
-          >
-            模式
-          </legend>
-          <div className="btn-row">
-            {PERM_MODES.map((m) => (
-              <button
-                key={m.id}
-                className={`btn btn-sm ${mode === m.id ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setMode(m.id)}
-                aria-pressed={mode === m.id}
-                title={`${m.onWrite} —— ${m.when}`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-          {/* 选中的模式当下解释,替代原来的三列表格 */}
-          <p
-            style={{
-              fontSize: '0.78rem',
-              color: 'var(--text-faint)',
-              margin: '0.45rem 0 0',
-              minHeight: '1.2rem',
-            }}
-          >
-            {PERM_MODES.find((m) => m.id === mode)?.onWrite} · {PERM_MODES.find((m) => m.id === mode)?.when}
-          </p>
-        </fieldset>
-
-        {/* 工具 */}
-        <div style={{ marginBottom: '0.9rem' }}>
-          <label
-            htmlFor="perm-tool"
-            style={{
-              fontSize: '0.72rem',
-              fontFamily: 'var(--mono)',
-              color: 'var(--text-faint)',
-              letterSpacing: '0.05em',
-              display: 'block',
-              marginBottom: '0.4rem',
-            }}
-          >
-            工具
-          </label>
-          <select
-            id="perm-tool"
-            value={tool}
-            onChange={(e) => setTool(e.target.value)}
-            style={{
-              width: '100%',
-              fontFamily: 'var(--mono)',
-              fontSize: '0.82rem',
-              background: 'var(--bg-inset)',
-              color: 'var(--text)',
-              border: '1px solid var(--border-strong)',
-              borderRadius: 6,
-              padding: '0.45rem 0.6rem',
-            }}
-          >
-            {TOOLS.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.name} — {t.mode}
-                {t.note ? ` · ${t.note}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* 命令输入 */}
-        {toolMode === 'shell' && (
-          <div style={{ marginBottom: '0.9rem' }}>
-            <label
-              htmlFor="perm-cmd"
-              style={{
-                fontSize: '0.72rem',
-                fontFamily: 'var(--mono)',
-                color: 'var(--text-faint)',
-                letterSpacing: '0.05em',
-                display: 'block',
-                marginBottom: '0.4rem',
-              }}
-            >
-              命令
-            </label>
-            <input
-              id="perm-cmd"
-              type="text"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              spellCheck={false}
-              style={{
-                width: '100%',
-                fontFamily: 'var(--mono)',
-                fontSize: '0.85rem',
-                background: 'var(--bg-inset)',
-                color: 'var(--text)',
-                border: `1px solid ${dangerousHit ? 'var(--red)' : 'var(--border-strong)'}`,
-                borderRadius: 6,
-                padding: '0.45rem 0.6rem',
-              }}
-            />
-            <div
-              style={{
-                display: 'flex',
-                gap: '0.35rem',
-                flexWrap: 'wrap',
-                marginTop: '0.45rem',
-              }}
-            >
-              {PRESETS.map((p) => (
+      <div className="perm-cols">
+        {/* ══ 左:现场 —— 调模式、写命令 ══ */}
+        <div className="perm-console">
+          {/* 模式 */}
+          <fieldset style={{ border: 0, padding: 0, margin: '0 0 1rem' }}>
+            <legend className="perm-label" style={{ marginBottom: '0.4rem' }}>
+              模式
+            </legend>
+            <div className="btn-row">
+              {PERM_MODES.map((m) => (
                 <button
-                  key={p.label}
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => {
-                    setTool(p.tool);
-                    setCommand(p.command);
-                  }}
-                  title={p.hint}
-                  style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem' }}
+                  key={m.id}
+                  className={`btn btn-sm ${mode === m.id ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setMode(m.id)}
+                  aria-pressed={mode === m.id}
+                  title={`${m.onWrite} —— ${m.when}`}
                 >
-                  {p.label}
+                  {m.label}
                 </button>
               ))}
             </div>
+            {/* 选中的模式当下解释,替代原来的三列表格 */}
+            <p
+              style={{
+                fontSize: '0.78rem',
+                color: 'var(--text-faint)',
+                margin: '0.45rem 0 0',
+                minHeight: '1.2rem',
+              }}
+            >
+              {activeMode?.onWrite} · {activeMode?.when}
+            </p>
+          </fieldset>
+
+          {/* 工具 */}
+          <div style={{ marginBottom: '1rem' }}>
+            <label htmlFor="perm-tool" className="perm-label">
+              工具
+            </label>
+            <select
+              id="perm-tool"
+              className="perm-input"
+              value={tool}
+              onChange={(e) => setTool(e.target.value)}
+            >
+              {TOOLS.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name} — {t.mode}
+                  {t.note ? ` · ${t.note}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
 
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.82rem',
-            color: 'var(--text-dim)',
-            cursor: 'pointer',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={allowlisted}
-            onChange={(e) => setAllowlisted(e.target.checked)}
-            style={{ accentColor: 'var(--accent)', width: 15, height: 15 }}
-          />
-          已在白名单中(用户此前授权过「以后别问」)
-        </label>
-      </div>
+          {/* 命令输入 */}
+          {toolMode === 'shell' && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label htmlFor="perm-cmd" className="perm-label">
+                命令
+              </label>
+              <input
+                id="perm-cmd"
+                type="text"
+                className={`perm-input${dangerousHit ? ' perm-input-danger' : ''}`}
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                spellCheck={false}
+              />
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                {PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => {
+                      setTool(p.tool);
+                      setCommand(p.command);
+                    }}
+                    title={p.hint}
+                    style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem' }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-      {/* 判定流程图(替代原来的文字列表) */}
-      <div style={{ padding: '1rem 1.1rem', borderBottom: '1px solid var(--border)' }}>
-        <div
-          style={{
-            fontSize: '0.72rem',
-            fontFamily: 'var(--mono)',
-            color: 'var(--text-faint)',
-            letterSpacing: '0.05em',
-            marginBottom: '0.7rem',
-          }}
-        >
-          判定流程
-        </div>
-        <PermissionFlowchart
-          outcome={{ rule: outcome.rule, verdict: outcome.verdict, asksUser: outcome.asksUser }}
-        />
-      </div>
-
-      {/* 结果 */}
-      <div
-        style={{
-          padding: '0.9rem 1.1rem',
-          borderTop: '1px solid var(--border)',
-          background: 'var(--bg-subtle)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
-          <span
+          <label
             style={{
-              fontFamily: 'var(--mono)',
-              fontSize: '0.95rem',
-              fontWeight: 700,
-              color: verdictColor,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              fontSize: '0.82rem',
+              color: 'var(--text-dim)',
+              cursor: 'pointer',
             }}
           >
-            {verdictText}
-          </span>
-          <span className="src-note">规则 {outcome.ruleLabel}</span>
-          {sensitiveHit && (
-            <span className="tag tag-write" style={{ fontSize: '0.65rem' }}>
-              敏感命令:auto 跳分类器 · bypass 仍要问
-            </span>
-          )}
-          {outcome.verdict === 'deny' && (
-            <span className="tag tag-shell" style={{ fontSize: '0.65rem' }}>
-              任何模式都绕不过
-            </span>
-          )}
+            <input
+              type="checkbox"
+              checked={allowlisted}
+              onChange={(e) => setAllowlisted(e.target.checked)}
+              style={{ accentColor: 'var(--accent)', width: 15, height: 15 }}
+            />
+            已在白名单中(此前授权过「以后别问」)
+          </label>
         </div>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', margin: 0 }}>{outcome.reason}</p>
-        {outcome.extra && (
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-faint)', margin: '0.35rem 0 0' }}>
-            {outcome.extra}
-          </p>
-        )}
+
+        {/* ══ 右:判定 —— 这条命令走到哪一步、结论是什么 ══ */}
+        <div className="perm-decision">
+          <div>
+            <div className="perm-label" style={{ marginBottom: '0.7rem' }}>
+              判定流程
+            </div>
+            <PermissionFlowchart
+              outcome={{ rule: outcome.rule, verdict: outcome.verdict, asksUser: outcome.asksUser }}
+            />
+          </div>
+
+          {/* 结论 */}
+          <div
+            style={{
+              border: `1px solid ${verdictLine}`,
+              background: verdictBg,
+              borderRadius: 8,
+              padding: '0.7rem 0.85rem',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.7rem',
+                marginBottom: '0.35rem',
+                flexWrap: 'wrap',
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'var(--mono)',
+                  fontSize: '0.95rem',
+                  fontWeight: 700,
+                  color: verdictColor,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                {verdictText}
+              </span>
+              <span className="src-note">命中 {outcome.ruleLabel}</span>
+              {sensitiveHit && (
+                <span className="tag tag-write" style={{ fontSize: '0.65rem' }}>
+                  敏感命令:auto 跳分类器 · bypass 仍要问
+                </span>
+              )}
+              {outcome.verdict === 'deny' && (
+                <span className="tag tag-shell" style={{ fontSize: '0.65rem' }}>
+                  任何模式都绕不过
+                </span>
+              )}
+            </div>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', margin: 0 }}>{outcome.reason}</p>
+            {outcome.extra && (
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-faint)', margin: '0.35rem 0 0' }}>
+                {outcome.extra}
+              </p>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

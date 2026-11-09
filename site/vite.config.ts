@@ -15,6 +15,15 @@ export default defineConfig({
   plugins: [react(), ...(single ? [viteSingleFile()] : [])],
   // 单文件用相对路径没意义,但保留 './' 对两种产物都安全
   base: './',
+  server: {
+    port: 5199,
+    // 端口被占用时直接报错,而不是悄悄换到 5200
+    strictPort: true,
+  },
+  preview: {
+    port: 5199,
+    strictPort: true,
+  },
   build: {
     outDir: single ? 'single' : 'dist',
     sourcemap: false,

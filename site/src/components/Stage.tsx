@@ -75,7 +75,6 @@ export function StageBlock({
                 {stage.module} 登场
               </span>
             )}
-            <span className="src-note">原文 {stage.src}</span>
           </div>
 
           {/* ① 发生了什么 */}

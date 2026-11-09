@@ -48,8 +48,7 @@ const PAIRS: Pair[] = [
     aDetail: '{ "path": "a.txt" }',
     oLabel: 'arguments:JSON 字符串',
     oDetail: '"{\\"path\\":\\"a.txt\\"}" —— 流式下还是分片拼的',
-    pitfall:
-      '转过去要 JSON.stringify(input),转回来要 JSON.parse(arguments);解析失败必须兜底成空对象。',
+    pitfall: '转过去要 JSON.stringify(input),转回来要 JSON.parse(arguments);解析失败必须兜底成空对象。',
   },
   {
     concept: '工具结果',
@@ -133,9 +132,7 @@ export function FormatConverter() {
               animate={{ opacity: 1 }}
               transition={{ duration: reduce ? 0 : 0.25 }}
             >
-              <div style={{ fontWeight: 600, fontSize: '0.92rem', marginBottom: '0.4rem' }}>
-                {card.label}
-              </div>
+              <div style={{ fontWeight: 600, fontSize: '0.92rem', marginBottom: '0.4rem' }}>{card.label}</div>
               <div
                 style={{
                   fontFamily: 'var(--mono)',
@@ -171,13 +168,9 @@ export function FormatConverter() {
             条数变化
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', fontSize: '0.85rem' }}>
-            <span style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>
-              1 条 user
-            </span>
+            <span style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>1 条 user</span>
             <span style={{ color: 'var(--text-faint)' }}>→</span>
-            <span style={{ fontFamily: 'var(--mono)', color: 'var(--purple)' }}>
-              1 条 user + 1 条 tool
-            </span>
+            <span style={{ fontFamily: 'var(--mono)', color: 'var(--purple)' }}>1 条 user + 1 条 tool</span>
             <span style={{ color: 'var(--text-faint)', fontSize: '0.78rem', marginLeft: 'auto' }}>
               示例整体:{counts.a} 条 → {counts.o} 条
             </span>
@@ -203,19 +196,6 @@ export function FormatConverter() {
             {OPENAI_SAMPLE}
           </pre>
         </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.4rem', flexWrap: 'wrap' }}>
-        <span className="tag tag-read" style={{ fontFamily: 'var(--mono)' }}>
-          toOpenAIMessages()
-        </span>
-        <span style={{ color: 'var(--text-faint)', fontSize: '0.8rem' }}>↔</span>
-        <span className="tag tag-external" style={{ fontFamily: 'var(--mono)' }}>
-          fromOpenAIResponse()
-        </span>
-        <span style={{ fontSize: '0.78rem', color: 'var(--text-faint)' }}>
-          全部格式差异被压缩到这两个纯函数里,可单独测试
-        </span>
       </div>
     </div>
   );

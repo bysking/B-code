@@ -161,8 +161,8 @@ export function ToolRegistryVisual() {
           borderLeft: '2px solid var(--red)',
         }}
       >
-        没有 <code>delete_file</code> 是刻意的:删除只能走 <code>run_shell</code>,
-        而 <code>rm -rf</code> 会被危险命令规则直接拒绝。
+        没有 <code>delete_file</code> 是刻意的:删除只能走 <code>run_shell</code>, 而 <code>rm -rf</code>{' '}
+        会被危险命令规则直接拒绝。
         <strong>不可逆操作全部收拢到唯一一条需要过权限的通道上。</strong>
       </p>
     </div>
@@ -316,10 +316,10 @@ export function DangerGateVisual() {
 const SAME = ['核心循环', '工具系统', '子 Agent', '持久化记忆', '技能系统', 'Hooks', '自主循环'];
 const DIFF = [
   { dim: '权限模型', cc: '多档模式', bc: '四档,区分危险/敏感' },
-  { dim: '上下文压缩', cc: '自动压缩', bc: '分级 + 文件指针' },
-  { dim: '模型后端', cc: '仅 Anthropic', bc: 'Anthropic + OpenAI 兼容' },
+  { dim: '上下文压缩', cc: '自动压缩', bc: '分级压缩 + 文件指针' },
+  { dim: '模型后端', cc: '仅 Anthropic', bc: 'Anthropic + OpenAI 双端兼容' },
   { dim: 'UI 技术栈', cc: '闭源', bc: 'OpenTUI(开源)' },
-  { dim: '分发方式', cc: 'npm(需 Node)', bc: '单文件可执行' },
+  { dim: '生态层', cc: '更优，生态完善', bc: '核心高度对齐' },
 ];
 
 export function CompareVisual() {
@@ -338,7 +338,9 @@ export function CompareVisual() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', marginBottom: '0.6rem' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.76rem', fontWeight: 700, color: 'var(--green)' }}>
+          <span
+            style={{ fontFamily: 'var(--mono)', fontSize: '0.76rem', fontWeight: 700, color: 'var(--green)' }}
+          >
             收敛 {SAME.length} 项
           </span>
           <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)' }}>
@@ -366,9 +368,6 @@ export function CompareVisual() {
             </motion.span>
           ))}
         </div>
-        <p style={{ fontSize: '0.76rem', color: 'var(--text-faint)', margin: '0.6rem 0 0' }}>
-          这不是「模仿」—— 就像所有数据库都有 B+ 树,不是互相抄。
-        </p>
       </div>
 
       {/* 分叉区 */}
@@ -382,7 +381,12 @@ export function CompareVisual() {
       >
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', marginBottom: '0.7rem' }}>
           <span
-            style={{ fontFamily: 'var(--mono)', fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent-text)' }}
+            style={{
+              fontFamily: 'var(--mono)',
+              fontSize: '0.76rem',
+              fontWeight: 700,
+              color: 'var(--accent-text)',
+            }}
           >
             分叉 {DIFF.length} 项
           </span>
@@ -510,7 +514,13 @@ export function McpSdkVisual() {
                 >
                   {i + 1}
                 </span>
-                <span style={{ fontSize: '0.88rem', fontWeight: 600, color: on ? 'var(--accent-text)' : 'var(--text)' }}>
+                <span
+                  style={{
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    color: on ? 'var(--accent-text)' : 'var(--text)',
+                  }}
+                >
                   {c.title}
                 </span>
               </div>
@@ -574,7 +584,11 @@ export function McpSdkVisual() {
                 padding: '0.35rem 0.7rem',
                 borderRadius: 8,
                 fontSize: '0.8rem',
-                background: m.done ? 'var(--green-bg)' : m.who === 'claude' ? 'var(--bg-subtle)' : 'var(--purple-bg)',
+                background: m.done
+                  ? 'var(--green-bg)'
+                  : m.who === 'claude'
+                    ? 'var(--bg-subtle)'
+                    : 'var(--purple-bg)',
                 border: `1px solid ${m.done ? 'var(--green-line)' : m.who === 'claude' ? 'var(--border)' : 'var(--purple-line)'}`,
                 color: m.done ? 'var(--green)' : 'var(--text-dim)',
               }}
@@ -594,8 +608,8 @@ export function McpSdkVisual() {
           borderLeft: '2px solid var(--accent)',
         }}
       >
-        为什么要先报家门?这样双方都能<b>少说废话</b> —— 我不会的你别问我,你不会的我也别问。
-        反过来说,<b>不会的就别声称会</b>:吹了做不到,对方会一直等,永远超时。
+        为什么要先报家门?这样双方都能<b>少说废话</b> —— 我不会的你别问我,你不会的我也别问。 反过来说,
+        <b>不会的就别声称会</b>:吹了做不到,对方会一直等,永远超时。
       </p>
     </div>
   );
@@ -663,7 +677,9 @@ export function RoadmapVisual() {
                   {s.n}
                 </div>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text)', lineHeight: 1.35 }}>{s.t}</div>
-                <div style={{ fontSize: '0.64rem', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.3 }}>
+                <div
+                  style={{ fontSize: '0.64rem', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.3 }}
+                >
                   {s.r}
                 </div>
               </div>
@@ -727,9 +743,8 @@ export function RoadmapVisual() {
           background: 'var(--bg-subtle)',
         }}
       >
-        再往上才是同花顺:<span style={{ color: 'var(--text-faint)' }}>
-          子 Agent · 记忆 · 技能 · MCP · 自主循环
-        </span>
+        再往上才是同生态一条龙:
+        <span style={{ color: 'var(--text-faint)' }}>子 Agent · 记忆 · 技能 · MCP · 自主循环</span>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { STAGES, EPILOGUE } from '../content/journey';
+import { ProgressTurtle } from './ProgressTurtle';
 
 /** 导航条:主线 9 个时刻 + 3 项余论 */
 const NAV_ITEMS = [
@@ -57,22 +58,30 @@ export function Nav() {
         borderBottom: '1px solid var(--border)',
       }}
     >
+      {/* 进度条只占正文列宽度 —— 直接复用 .wrap 的盒模型,天然对齐 */}
       <div
         style={{
           height: 2,
-          background: 'transparent',
           position: 'absolute',
           inset: 'auto 0 -1px 0',
+          pointerEvents: 'none',
         }}
       >
-        <div
-          style={{
-            height: '100%',
-            width: `${progress}%`,
-            background: 'var(--accent)',
-            transition: 'width 80ms linear',
-          }}
-        />
+        <div className="wrap progress-track" style={{ height: '100%' }}>
+          <div style={{ position: 'relative', height: '100%' }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${progress}%`,
+                background: 'var(--accent)',
+                transition: 'width 80ms linear',
+                borderRadius: '0 2px 2px 0',
+              }}
+            />
+            {/* 小乌龟:弹簧跟随,永远慢半拍地追进度条 */}
+            <ProgressTurtle progress={progress} />
+          </div>
+        </div>
       </div>
 
       <div
@@ -180,16 +189,14 @@ export function Nav() {
   );
 }
 
-/** 章节标题 + 原文锚点回溯 */
+/** 章节标题 */
 export function SectionHead({
   num,
   title,
-  src,
   lede,
 }: {
   num: string;
   title: string;
-  src: string;
   lede?: string;
 }) {
   return (
@@ -197,9 +204,6 @@ export function SectionHead({
       <div className="section-head">
         <span className="section-num">{num}</span>
         <h2 style={{ margin: 0 }}>{title}</h2>
-        <span className="src-note" title="SHARING.md 中的章节">
-          原文 {src}
-        </span>
       </div>
       {lede && <p className="section-lede">{lede}</p>}
     </>

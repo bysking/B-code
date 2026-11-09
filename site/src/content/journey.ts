@@ -9,15 +9,7 @@
  */
 
 export type StageId =
-  | 'ask'
-  | 'loop'
-  | 'backend'
-  | 'tools'
-  | 'permissions'
-  | 'context'
-  | 'subagent'
-  | 'goal'
-  | 'done';
+  'ask' | 'loop' | 'prompt' | 'backend' | 'tools' | 'permissions' | 'context' | 'subagent' | 'goal' | 'done';
 
 export interface Stage {
   id: StageId;
@@ -54,17 +46,26 @@ export const STAGES: Stage[] = [
     short: '循环转起来',
   },
   {
-    id: 'backend',
+    id: 'prompt',
     n: 3,
-    event: '这一轮请求要走 DeepSeek,不是 Anthropic',
+    event: '每次请求都要把「我是谁、该怎么干」重新讲一遍',
+    module: 'System Prompt',
+    why: '模型没有记忆,每一轮都是新来的。而这段话怎么写、怎么排,直接决定成本和行为稳定性。',
+    src: '§7',
+    short: '先立规矩',
+  },
+  {
+    id: 'backend',
+    n: 4,
+    event: '这一轮大模型请求走DeepSeek（也支持Anthropic）',
     module: '后端层',
-    why: '两家消息格式不一样。不统一形状,循环里就会长满 if/else。',
+    why: '两类消息格式不一样。不统一适配层,循环里就会硬编码长满 if/else。',
     src: '§3',
     short: '换个模型',
   },
   {
     id: 'tools',
-    n: 4,
+    n: 5,
     event: '模型说:我要调 read_file,参数 {"path":"package.json"}',
     module: '工具系统',
     why: '模型不是「知道」能读文件 —— 是每次请求里都给了它一份清单。',
@@ -73,7 +74,7 @@ export const STAGES: Stage[] = [
   },
   {
     id: 'permissions',
-    n: 5,
+    n: 6,
     event: '下一步它想跑 rm -rf node_modules 重装依赖',
     module: '权限系统',
     why: '这是唯一一个「没有就不能给真人用」的模块 —— 所以它必须拦在最前面。',
@@ -82,7 +83,7 @@ export const STAGES: Stage[] = [
   },
   {
     id: 'context',
-    n: 6,
+    n: 7,
     event: '跑到第 41 轮,它 cat 了一个 10 万行日志',
     module: '上下文',
     why: '单次结果就吃掉大半窗口。不设防线,后面全都没空间。',
@@ -91,7 +92,7 @@ export const STAGES: Stage[] = [
   },
   {
     id: 'subagent',
-    n: 7,
+    n: 8,
     event: '它需要查「这个项目用什么测试框架」',
     module: '子 Agent',
     why: '自己读 20 个文件会把主上下文弄脏。派个临时工读完就扔。',
@@ -100,7 +101,7 @@ export const STAGES: Stage[] = [
   },
   {
     id: 'goal',
-    n: 8,
+    n: 9,
     event: '你说:「一直改到测试通过为止」',
     module: '目标评估器',
     why: '让干活的自己打分,它倾向于说「我干完了」。得找个独立的来判断。',
@@ -109,7 +110,7 @@ export const STAGES: Stage[] = [
   },
   {
     id: 'done',
-    n: 9,
+    n: 10,
     event: '578 passed, 0 failed —— 修好了',
     why: '1.2 万行代码,本质上都是为了让最开始那个循环能在真实世界里跑稳。',
     src: '§17',

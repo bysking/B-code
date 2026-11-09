@@ -129,8 +129,8 @@ export const FORMAT_DIFF_TABLE: FormatRow[] = [
   { concept: 'system', anthropic: '顶层 `system` 参数,支持多块', openai: '`messages` 里的 `role: "system"`' },
   {
     concept: '工具清单',
-    anthropic: '`{ name, description, input_schema }`',
-    openai: '`{ type: "function", function: { … parameters } }`',
+    anthropic: '顶层 `tools`:`{ name, description, input_schema }`',
+    openai: '顶层 `tools`:`{ type: "function", function: { name, description, parameters } }`',
   },
   {
     concept: '工具调用',
@@ -160,8 +160,17 @@ export const FORMAT_DIFF_TABLE: FormatRow[] = [
 export const ANTHROPIC_SAMPLE = `{
   "system": [{ "type": "text", "text": "你是..." }],
   "tools": [
-    { "name": "read_file", "description": "...",
-      "input_schema": { "type": "object" } }
+    {
+      "name": "read_file",
+      "description": "读取文件内容。大文件会被截断。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "文件路径" }
+        },
+        "required": ["path"]
+      }
+    }
   ],
   "messages": [
     { "role": "user", "content": "读一下 a.txt" },
@@ -184,6 +193,22 @@ export const ANTHROPIC_SAMPLE = `{
 }`;
 
 export const OPENAI_SAMPLE = `{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "读取文件内容。大文件会被截断。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "文件路径" }
+          },
+          "required": ["path"]
+        }
+      }
+    }
+  ],
   "messages": [
     { "role": "system", "content": "你是..." },
     { "role": "user", "content": "读一下 a.txt" },
@@ -194,8 +219,10 @@ export const OPENAI_SAMPLE = `{
         {
           "id": "call_1",
           "type": "function",
-          "function": { "name": "read_file",
-            "arguments": "{\\"path\\":\\"a.txt\\"}" }
+          "function": {
+            "name": "read_file",
+            "arguments": "{\\"path\\":\\"a.txt\\"}"
+          }
         }
       ]
     },
