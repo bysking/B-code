@@ -32,12 +32,44 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outdir = join(__dirname, 'dist');
+
+/** 主包 package.json（取版本号与元信息） */
+const rootPkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
+
+/**
+ * 产物目录里的 package.json —— 只保留运行时真正用得上的元信息。
+ *
+ * 为什么需要这个文件：`localVersion()` 靠它报版本号（`bcode --version`、
+ * 欢迎语、更新检查）。不放的话这些功能在发布版里全部静默失效。
+ *
+ * 为什么是裁剪版而不是原封不动拷一份：
+ *   - scripts / devDependencies / optionalDependencies 对跑起来的二进制毫无用处
+ *   - optionalDependencies 指向各平台包，用户看到会误以为需要额外安装
+ *   - 保持这个文件小且稳定，才能安全地跟着二进制分发
+ *
+ * 字段清单刻意与 scripts/pack-platform.js 生成平台包时的取法一致。
+ */
+function runtimeManifest() {
+  const keep = ['name', 'version', 'description', 'license', 'repository', 'homepage'];
+  const out = {};
+  for (const k of keep) {
+    if (rootPkg[k] !== undefined) out[k] = rootPkg[k];
+  }
+  return out;
+}
+
+/** 把 package.json 写入产物目录（与二进制同级，localVersion 在此查找） */
+function writeRuntimeManifest() {
+  const dest = join(outdir, 'package.json');
+  writeFileSync(dest, JSON.stringify(runtimeManifest(), null, 2) + '\n');
+  console.log(`\n   已写入 ${'dist/package.json'}（v${rootPkg.version}，供版本号显示与更新检查）`);
+}
 
 /** 当前平台的产物名（Windows 要 .exe） */
 function outputName() {
@@ -117,6 +149,7 @@ function main() {
 
   // 先删旧产物：bun --compile 对已存在的目标可能复用，导致版本混淆
   rmSync(outfile, { force: true });
+  rmSync(join(outdir, 'package.json'), { force: true });
 
   try {
     execFileSync(
@@ -129,6 +162,9 @@ function main() {
         // 构建期注入引擎选择（见 src/ui/ui/index.ts 的 __BCODE_UI_ENGINE__）
         '--define',
         '__BCODE_UI_ENGINE__="opentui"',
+        // 构建期内嵌版本号：二进制被单独搬走（丢了同目录 package.json）时兜底
+        '--define',
+        `__BCODE_VERSION__="${rootPkg.version}"`,
         // 生产环境：压缩 + NODE_ENV=production
         '--production',
         // 保留原生包的解析路径：这些包含平台二进制，由 bun 在编译期内联
@@ -146,8 +182,11 @@ function main() {
     process.exit(1);
   }
 
+  // 编译成功后才写 manifest：构建失败时不留一个"看起来完整"的产物目录
+  writeRuntimeManifest();
+
   console.log('\n✅ 构建完成');
-  console.log(`   产物：dist/${outputName()}`);
+  console.log(`   产物：dist/${outputName()}  +  dist/package.json`);
   console.log('   单文件可执行，用户机器无需安装 Bun 或 Node。');
 }
 

@@ -14,20 +14,73 @@ import { PermissionFlowchart } from './Diagrams';
 
 const CMD_START = /(?:^|[;&|]\s*)/;
 
-/** 与 DANGEROUS_PATTERNS 一一对应 */
+/** 与 DANGEROUS_PATTERNS 一一对应（rm 不在此表，见 checkRm） */
 const DANGEROUS: RegExp[] = [
-  /\brm\s+-rf\b/,
-  /\bgit\s+reset\s+--hard\b/,
-  /\bsudo\b/,
-  /\bmkfs\b/,
-  />\s*\/dev\//,
+  new RegExp(`${CMD_START.source}git\\s+reset\\s+--hard\\b`),
+  new RegExp(`${CMD_START.source}sudo\\b`),
+  new RegExp(`${CMD_START.source}mkfs\\b`),
   new RegExp(`${CMD_START.source}dd\\s`),
   new RegExp(`${CMD_START.source}kill\\b`),
   new RegExp(`${CMD_START.source}reboot\\b`),
   new RegExp(`${CMD_START.source}shutdown\\b`),
 ];
 
+/** 写裸设备：排除 /dev/null 等安全节点；跑在原文上（引号挡不住） */
+const DEVICE_WRITE =
+  />\s*["']?\/dev\/(?!(?:null|zero|stdout|stderr|stdin|tty|random|urandom|fd)(?:[\s;&|]|$|\/|["']))/;
+
+/** 「递归 + 强制」：任意位置、任意选项顺序 */
+const RM_RECURSIVE_FORCE =
+  /\brm\s+(?:-[a-zA-Z]*(?:[rR][a-zA-Z]*f|f[a-zA-Z]*[rR])[a-zA-Z]*\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--(?:recursive|force)\b[\s\S]*--(?:recursive|force)\b)/;
+
+/** 嵌套 shell / 求值器：引号内容会被真正执行，不能当字面量 */
+const NESTED_SHELL = /\b(?:eval|sh|bash|zsh|dash|ksh|fish|node|deno|bun|python[23]?|perl|ruby)\b/;
+
 const SENSITIVE: RegExp[] = [/\bgit\s+push\b/];
+
+/** 镜像 stripQuotedLiteral：挖空死字面量，救回「只是提到危险词」 */
+function stripQuotedLiteral(cmd: string): string {
+  if (NESTED_SHELL.test(cmd)) return cmd.replace(/["']([^"']*)["']/g, '; $1');
+  return cmd.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
+}
+
+/** 镜像 rmTargets：只取命令位的 rm 的操作对象 */
+function rmTargets(cmd: string): string[] {
+  const out: string[] = [];
+  for (const seg of cmd.split(/[;&|]/)) {
+    const toks = seg.trim().split(/\s+/).filter(Boolean);
+    const i = toks[0] === 'sudo' ? 1 : 0;
+    if (toks[i] !== 'rm') continue;
+    let seenSeparator = false;
+    for (const t of toks.slice(i + 1)) {
+      if (!seenSeparator && t.startsWith('-')) {
+        if (t === '--') seenSeparator = true;
+        continue;
+      }
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/** 镜像 isCatastrophicTarget（浏览器侧无 cwd，故省掉 cwd/家目录的绝对路径比对） */
+function isCatastrophicTarget(t: string): boolean {
+  if (!t || t === '""' || t === "''") return true;
+  if (/[$`]/.test(t)) return true;
+  if (t === '*' || t === '/*' || t === './*' || t === '../*') return true;
+  const norm = t.replace(/\/+$/, '') || '/';
+  if (norm === '/' || norm === '.' || norm === '..' || norm === '~') return true;
+  if (norm.startsWith('/') && norm.split('/').filter(Boolean).length <= 1) return true;
+  return false;
+}
+
+/** 镜像 checkRm：none = 不是 rm 强删；deny = 灾难目标；confirm = 其余 */
+function checkRm(presence: string, raw: string): 'deny' | 'confirm' | 'none' {
+  if (!RM_RECURSIVE_FORCE.test(presence)) return 'none';
+  const targets = rmTargets(raw);
+  if (targets.length === 0) return 'deny';
+  return targets.some(isCatastrophicTarget) ? 'deny' : 'confirm';
+}
 
 type Mode = 'default' | 'plan' | 'auto' | 'bypass';
 type ToolMode = 'read' | 'write' | 'shell' | 'external';
@@ -60,9 +113,13 @@ const RULE_LABELS: Record<string, string> = {
 function checkPermission(toolMode: ToolMode, selfGranted: boolean, allowInPlan: boolean, command: string, mode: Mode) {
   // ⓪ 自授权
   if (selfGranted) return { verdict: 'allow' as const, rule: '0' };
-  // ① 危险命令(任何模式)
-  if (toolMode === 'shell' && DANGEROUS.some((re) => re.test(command))) {
-    return { verdict: 'deny' as const, rule: '1' };
+  // ① 危险命令(任何模式) —— 命令位 + 引号剥离；rm 另按目标分级
+  if (toolMode === 'shell') {
+    const bare = stripQuotedLiteral(command);
+    if (DANGEROUS.some((re) => re.test(bare)) || DEVICE_WRITE.test(command)) {
+      return { verdict: 'deny' as const, rule: '1' };
+    }
+    if (checkRm(bare, command) === 'deny') return { verdict: 'deny' as const, rule: '1' };
   }
   // ② plan 只读契约
   if (mode === 'plan' && toolMode !== 'read' && !allowInPlan) {
@@ -97,7 +154,12 @@ function resolve(
         : rule === '2'
           ? 'plan 模式下非只读操作一律拦截(allowInPlan 的 write_plan 除外)。'
           : '被权限系统拒绝。';
-    return { verdict, rule, ruleLabel, finalAllow: false, asksUser: false, reason };
+    // rm 的目标分级要说清楚:否则读者会以为 rm -rf 一律被拒,而实际 dist 是能清的
+    const rmNote =
+      rule === '1' && checkRm(stripQuotedLiteral(command), command) === 'deny'
+        ? '这条 rm 的目标是灾难级(根 / 家目录 / 通配全部 / 工作目录本身)—— 与「日常清理」不是同一档。'
+        : undefined;
+    return { verdict, rule, ruleLabel, finalAllow: false, asksUser: false, reason, extra: rmNote };
   }
 
   if (verdict === 'allow') {
@@ -160,8 +222,11 @@ function resolve(
 
 /** 示例命令 —— 覆盖每个分支 */
 const PRESETS: { label: string; tool: string; command: string; hint: string }[] = [
-  { label: 'rm -rf node_modules', tool: 'run_shell', command: 'rm -rf node_modules', hint: '危险 → 任何模式都拒' },
+  { label: 'rm -rf node_modules', tool: 'run_shell', command: 'rm -rf node_modules', hint: '日常清理 → 确认(可授权免问)' },
+  { label: 'rm -rf /', tool: 'run_shell', command: 'rm -rf /', hint: '灾难目标 → 任何模式都拒' },
   { label: 'ls -la', tool: 'run_shell', command: 'ls -la', hint: '普通命令 → 确认' },
+  { label: 'ls *.ts', tool: 'run_shell', command: 'ls *.ts', hint: '带星号 → 只是普通命令,不拒' },
+  { label: 'ls 2>/dev/null', tool: 'run_shell', command: 'ls 2>/dev/null', hint: '降噪重定向 → 不拒' },
   { label: 'git push origin main', tool: 'run_shell', command: 'git push origin main', hint: '敏感 → auto/bypass 也要问' },
   { label: 'git reset --hard HEAD~1', tool: 'run_shell', command: 'git reset --hard HEAD~1', hint: '危险 → 拒' },
   { label: 'ls; kill 2', tool: 'run_shell', command: 'ls; kill 2', hint: '命令边界 → 危险' },
@@ -169,10 +234,11 @@ const PRESETS: { label: string; tool: string; command: string; hint: string }[] 
 ];
 
 export function PermissionSimulator() {
-  // 开局就是这一节标题里的那个时刻:它想删 node_modules 重装依赖
+  // 开局选「灾难目标」这个最需要解释的档:读者第一眼看到的应该是 rm -rf / 为什么被拒,
+  // 而不是 rm -rf node_modules(那条现在是 confirm,演示不出 deny 优先级)
   const [mode, setMode] = useState<Mode>('default');
   const [tool, setTool] = useState('run_shell');
-  const [command, setCommand] = useState('rm -rf node_modules');
+  const [command, setCommand] = useState('rm -rf /');
   const [allowlisted, setAllowlisted] = useState(false);
 
   const toolMeta = TOOLS.find((t) => t.name === tool);
@@ -185,7 +251,11 @@ export function PermissionSimulator() {
     [toolMode, selfGranted, allowInPlan, command, mode, allowlisted],
   );
 
-  const dangerousHit = toolMode === 'shell' ? DANGEROUS.some((re) => re.test(command)) : false;
+  const dangerousHit =
+    toolMode === 'shell' &&
+    (DANGEROUS.some((re) => re.test(stripQuotedLiteral(command))) ||
+      DEVICE_WRITE.test(command) ||
+      checkRm(stripQuotedLiteral(command), command) === 'deny');
   const sensitiveHit = toolMode === 'shell' ? SENSITIVE.some((re) => re.test(command)) : false;
 
   const activeMode = PERM_MODES.find((m) => m.id === mode);

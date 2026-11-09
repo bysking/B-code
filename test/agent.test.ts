@@ -142,7 +142,9 @@ test('循环：模型状态失忆时的兜底（下一轮直接文本）', async
 
 test('权限 deny：危险命令被拦，不进工具执行', async () => {
   const { fn } = makeToolScriptedBackend([
-    { tools: [{ name: 'run_shell', input: { command: 'rm -rf /tmp/b-code-target' } }] },
+    // 档位说明：`rm -rf /tmp/x` 是 confirm 档（yolo 下应当能清理临时目录），
+    // 这里要验的是 deny 优先级，所以取一条「灾难目标」的 rm。
+    { tools: [{ name: 'run_shell', input: { command: 'rm -rf /' } }] },
     { text: 'ok' },
   ]);
   const agent = new Agent({ callModel: fn, print: () => {}, mode: 'bypass' }); // yolo 也拦

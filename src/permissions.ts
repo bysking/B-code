@@ -11,6 +11,9 @@
  * 这样 MCP/未来工具接入时权限自动正确，注册表是唯一真相源。
  */
 
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+
 import type { MountPoint } from './registry.js';
 import type { PermissionPolicy } from './types.js';
 
@@ -29,20 +32,127 @@ export const rulePermission: PermissionPolicy = {
  * 以它开头，或出现在 `;` `&` `|` 之后（`kill -9 1`、`ls; kill 2`），
  * 否则 `npm run kill-port`、`add`、`dd-utils` 会被误伤。
  * 命令边界见 CMD_START（行首或语句分隔符后的空白）。
+ *
+ * 注意 `rm` 不在这张表里——它的破坏力取决于**目标**（`rm -rf dist` 是日常清理，
+ * `rm -rf /` 是灾难），一刀切 deny 会让模型永远清不掉构建产物（本仓库刻意不提供
+ * delete_file，删除只能走 shell）。分级逻辑见 checkRm / rmTargets /
+ * isCatastrophicTarget，判定出口仍在 checkPermission。
  */
 const CMD_START = String.raw`(?:^|[;&|]\s*)`;
 
 export const DANGEROUS_PATTERNS: RegExp[] = [
-  /\brm\s+-rf\b/, // 递归删除
-  /\bgit\s+reset\s+--hard\b/, // 硬重置
-  /\bsudo\b/, // 提权
-  /\bmkfs\b/, // 格式化磁盘
-  />\s*\/dev\//, // 写入设备
+  // 下列三条同样要求命令位：`echo "git reset --hard"`、`git commit -m "add sudo docs"`
+  // 只是**提到**危险词，不该 deny；真正要执行时它必然落在命令位上。
+  new RegExp(`${CMD_START}git\\s+reset\\s+--hard\\b`), // 硬重置
+  new RegExp(`${CMD_START}sudo\\b`), // 提权
+  new RegExp(`${CMD_START}mkfs\\b`), // 格式化磁盘
   new RegExp(`${CMD_START}dd\\s`), // 磁盘操作：dd 必须是命令名
   new RegExp(`${CMD_START}kill\\b`), // 杀进程：排除 kill-port 之类
   new RegExp(`${CMD_START}reboot\\b`), // 重启
   new RegExp(`${CMD_START}shutdown\\b`), // 关机
 ];
+
+/**
+ * 写设备节点：必须**排除** /dev/null、/dev/stdout 这类安全重定向——
+ * 原先写成 `> /dev/` 会把最常见的降噪习惯（`ls 2>/dev/null`）全部误杀。
+ * 单独成一条而不并入 DANGEROUS_PATTERNS：这一条跑在**原文**上（不走引号剥离），
+ * 否则 `> "/dev/sda"` 去掉引号后就能逃逸。
+ */
+const DEVICE_WRITE_RE =
+  />\s*["']?\/dev\/(?!(?:null|zero|stdout|stderr|stdin|tty|random|urandom|fd)(?:[\s;&|]|$|\/|["']))/;
+
+// ── rm 分级：按「目标」决定 deny 还是 confirm ────────────────────────
+//
+// 三条现实约束促成这套分级：
+//   ① 没有 delete_file，清理产物只能走 shell —— 无条件 deny 等于砍掉一种能力
+//   ② 只匹配字面 `rm -rf` 拦不住变体（-fr / -r -f / -Rf / --recursive --force），
+//      既漏又严，反而引导模型去写绕过写法
+//   ③ 目标才是破坏力的来源：`dist` 与 `/` 不该同一档
+
+/**
+ * 「递归 + 强制」的**存在性**检测：任意位置、任意选项顺序与组合。
+ * 只负责"这里有个 rm 强删"，目标分级交给 rmTargets。
+ * 之所以要扫任意位置：`bash -c "rm -rf /"` 这种嵌套写法里 rm 不在命令位。
+ */
+export const RM_RECURSIVE_FORCE_RE = new RegExp(
+  String.raw`\brm\s+(?:-[a-zA-Z]*(?:[rR][a-zA-Z]*f|f[a-zA-Z]*[rR])[a-zA-Z]*\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--(?:recursive|force)\b[\s\S]*--(?:recursive|force)\b)`,
+);
+
+/**
+ * 提取所有**命令位** rm 的操作对象。
+ * 命令位 = 行首 / `;` `&` `|` 之后，允许 `sudo` 前缀——`echo "rm -rf x"` 不算。
+ * 提取不到目标（嵌套 shell、字符串壳）时返回空数组，由调用方按最坏情况处理。
+ */
+export function rmTargets(cmd: string): string[] {
+  const out: string[] = [];
+  for (const seg of cmd.split(/[;&|]/)) {
+    const toks = seg.trim().split(/\s+/).filter(Boolean);
+    const i = toks[0] === 'sudo' ? 1 : 0;
+    if (toks[i] !== 'rm') continue;
+    let seenSeparator = false; // 遇到 `--` 之后全是操作对象
+    for (const t of toks.slice(i + 1)) {
+      if (!seenSeparator && t.startsWith('-')) {
+        if (t === '--') seenSeparator = true;
+        continue;
+      }
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
+ * 灾难级目标：删掉就回不来的那几类。
+ *   根 / 家目录 / 工作目录本身 / 通配全部 / 顶层目录（/usr、/etc、/Users）
+ *   以及**无法静态判定**的目标（变量、命令替换、空）——判定不了就按最坏算。
+ */
+export function isCatastrophicTarget(t: string): boolean {
+  if (!t || t === '""' || t === "''") return true; // 目标被引号挖空 = 内容不可判定
+  if (/[$`]/.test(t)) return true; // $HOME、$(...) 之类的展开
+  if (t === '*' || t === '/*' || t === './*' || t === '../*') return true; // 通配全部
+  const norm = t.replace(/\/+$/, '') || '/';
+  if (norm === '/') return true;
+  if (norm === '..') return true; // 删上级目录：项目外的不可控范围
+  if (norm === '~' || norm === homedir()) return true;
+  // 解析成绝对路径后再比：`rm -rf .`、`rm -rf ./`、`rm -rf /repo`（= 工作目录本身）
+  // 字面比对会漏掉这些等价写法
+  let abs: string;
+  try {
+    abs = resolve(norm.replace(/^~(?=\/)/, homedir()));
+  } catch {
+    return true; // 解析失败按最坏算
+  }
+  if (abs === '/') return true;
+  if (abs === resolve(homedir())) return true;
+  if (abs === resolve(process.cwd())) return true; // 删掉整个工作目录
+  // 删掉工作目录的祖先（`rm -rf ..`、`rm -rf ../..`）—— 范围超出项目，同样不可控
+  if (resolve(process.cwd()).startsWith(abs + '/')) return true;
+  // 绝对路径且只有一段：/usr、/etc、/Users —— 顶层目录
+  if (abs.startsWith('/') && abs.split('/').filter(Boolean).length <= 1) return true;
+  return false;
+}
+
+/**
+ * 嵌套 shell / 求值器：这些上下文里的引号内容**是要执行的**，不能当字面量剥离。
+ * 命中则跳过 stripQuotedLiteral，保持原有的严格判定（避免 `bash -c "sudo x"` 逃逸）。
+ */
+const NESTED_SHELL = /\b(?:eval|sh|bash|zsh|dash|ksh|fish|node|deno|bun|python[23]?|perl|ruby)\b/;
+
+/**
+ * 引号剥离：把死字面量挖空，避免 `git commit -m "git reset --hard"` 这类
+ * "只是提到危险词"的命令被误杀（`;` `|` 等分隔符在引号内也不该切断词）。
+ * 遇到嵌套 shell 时不剥离——那里的引号内容会被真正执行。
+ * 设备重定向不经过这个函数：`> "/dev/sda"` 去掉引号后仍会被 DANGEROUS 命中。
+ */
+export function stripQuotedLiteral(cmd: string): string {
+  // 嵌套 shell：引号内容会被真正执行，把它**提到命令位**再判——
+  // 否则 `bash -c "sudo rm -x"` 里的 sudo 前面是引号而非分隔符，
+  // 命令边界规则就漏了它（引号剥离则会走向另一个极端：整个挖空，同样漏判）。
+  if (NESTED_SHELL.test(cmd)) {
+    return cmd.replace(/["']([^"']*)["']/g, '; $1');
+  }
+  return cmd.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
+}
 
 /**
  * 敏感命令：默认需确认，但**可经用户授权持久化免问**（与 DANGEROUS 的区别）。
@@ -53,13 +163,36 @@ export const SENSITIVE_PATTERNS: RegExp[] = [
   /\bgit\s+push\b/, // 推送代码（会改动远端）
 ];
 
+/**
+ * rm 分级判定：灾难目标 deny / 其余 confirm；非 rm 强删返回 null（交给后续规则）。
+ *
+ * 两个入参刻意不同：
+ *   presence 用**剥离字面量**后的串 —— 否则 `git log --grep "rm -rf"` 会被当成真删；
+ *   targets 用**原文** —— 目标提取要看到引号（`rm -rf "$DIR"` 的 `$` 是灾难信号）。
+ * 两者不一致时（如 `bash -c "rm -rf /"`：剥离版有 rm、原文提不出目标）按最坏算 deny。
+ */
+export function checkRm(presence: string, raw: string): Permission | null {
+  if (!RM_RECURSIVE_FORCE_RE.test(presence)) return null;
+  const targets = rmTargets(raw);
+  // 提取不到目标（嵌套 shell / 引号壳）按最坏情况处理——宁可 deny 不可放过
+  if (targets.length === 0) return 'deny';
+  return targets.some(isCatastrophicTarget) ? 'deny' : 'confirm';
+}
+
 export function checkPermission(mp: MountPoint, input: Record<string, any>, mode: Mode): Permission {
   // ① 自授权工具放行（如 ask_user：它是"与用户对话"，不该再触发一次权限确认）
   if (mp.selfGranted) return 'allow';
 
-  // ② deny 优先：shell 工具命中危险命令（任何模式绕不过，含 --yolo）
-  if (mp.mode === 'shell' && DANGEROUS_PATTERNS.some((re) => re.test(String(input.command ?? '')))) {
-    return 'deny';
+  if (mp.mode === 'shell') {
+    const raw = String(input.command ?? '');
+    const bare = stripQuotedLiteral(raw); // 死字面量挖空，救回「只是提到危险词」
+    // ② deny 优先：危险命令（任何模式绕不过，含 --yolo）
+    //    git/sudo/mkfs 看 bare；设备重定向看 raw（引号挡不住 DEVICE_WRITE_RE，见其定义）
+    if (DANGEROUS_PATTERNS.some((re) => re.test(bare)) || DEVICE_WRITE_RE.test(raw)) {
+      return 'deny';
+    }
+    // ②' rm 分级：灾难目标 deny（硬拦），其余落到后面的 confirm 流程（可授权免问）
+    if (checkRm(bare, raw) === 'deny') return 'deny';
   }
 
   // ② plan 只读契约：非 read 工具全部拦截（allowInPlan 的工具除外，如 write_plan）

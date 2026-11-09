@@ -90,6 +90,13 @@ function main() {
     chmodSync(join(outDir, binName), 0o755);
   }
 
+  // 注：这里不再额外放一份「运行时 package.json」——下面的 pkgJson 就是与二进制
+  // 同目录的 package.json，而 localVersion() 正是从那个位置读 version。
+  // 平台包版本由 scripts/sync-version.js 保证与主包一致，所以语义上等价。
+  //
+  // 脱离 npm 单独分发（用户拿走 dist/bcode）的场景，由 build-bun.js 写入
+  // dist/package.json 兜底；两者都没有时还有编译期内嵌的 __BCODE_VERSION__。
+
   const pkgJson = {
     name: pkgName,
     version: rootPkg.version,

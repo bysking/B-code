@@ -100,18 +100,8 @@ export const LOOP_STEPS: LoopStep[] = [
 
 /** 对照:同一条指令下,聊天机器人与 Agent 的行为差异 */
 export const COMPARISON_CHAT_VS_AGENT = {
-  chat: [
-    '收到问题',
-    '生成一段代码',
-    '交给用户:自己去复制、粘贴、保存、跑测试',
-  ],
-  agent: [
-    '读 package.json',
-    '跑 bun test',
-    '读报错的那个文件',
-    '改代码',
-    '再跑测试 → 通过',
-  ],
+  chat: ['收到问题', '生成一段代码', '交给用户:自己去复制、粘贴、保存、跑测试'],
+  agent: ['读 package.json', '跑 bun test', '读报错的那个文件', '改代码', '再跑测试 → 通过'],
   takeaway: '区别不在「AI 更聪明了」,而在于它长出了手:能读、能改、能执行,并且知道自己刚刚做了什么。',
 };
 
@@ -375,25 +365,46 @@ export interface DangerousCmd {
   regex: string;
 }
 
-/** 与 src/permissions.ts 的 DANGEROUS_PATTERNS 逐条对应(共 9 条) */
+/** 与 src/permissions.ts 的 DANGEROUS_PATTERNS 逐条对应(共 7 条) */
 export const DANGEROUS_COMMANDS: DangerousCmd[] = [
-  { pattern: 'rm -rf', why: '递归删除,删完就没了', regex: '/\\brm\\s+-rf\\b/' },
-  { pattern: 'git reset --hard', why: '丢弃未提交改动', regex: '/\\bgit\\s+reset\\s+--hard\\b/' },
-  { pattern: 'sudo', why: '提权,后续命令不再受控', regex: '/\\bsudo\\b/' },
-  { pattern: 'mkfs', why: '格式化磁盘', regex: '/\\bmkfs\\b/' },
-  { pattern: '> /dev/...', why: '直接写设备', regex: '/>\\s*\\/dev\\//' },
+  { pattern: 'git reset --hard', why: '丢弃未提交改动', regex: 'CMD_START + git\\s+reset\\s+--hard' },
+  { pattern: 'sudo', why: '提权,后续命令不再受控', regex: 'CMD_START + sudo\\b' },
+  { pattern: 'mkfs', why: '格式化磁盘', regex: 'CMD_START + mkfs\\b' },
   { pattern: 'dd', why: '磁盘级操作', regex: 'CMD_START + dd\\s' },
   { pattern: 'kill', why: '杀进程', regex: 'CMD_START + kill\\b' },
   { pattern: 'reboot', why: '重启', regex: 'CMD_START + reboot\\b' },
   { pattern: 'shutdown', why: '关机', regex: 'CMD_START + shutdown\\b' },
 ];
 
+/** 单独一条:跑在原文上(不走引号剥离),故不并入上表 */
+export const DEVICE_WRITE_RULE = {
+  pattern: '> /dev/裸设备',
+  why: '直接写设备节点。/dev/null、/dev/stdout 等安全重定向已排除 —— 否则最常见的降噪习惯会被误杀',
+  regex: '/>\\s*["\']?\\/dev\\/(?!(?:null|zero|stdout|stderr|stdin|tty|random|urandom|fd)…)/',
+};
+
+/** rm 分级:破坏力取决于目标,不在无条件 deny 表里 */
+export const RM_TIERS = [
+  {
+    tier: 'deny',
+    label: '灾难目标',
+    targets: '/ · ~ · * · . · .. · $HOME · 顶层目录 · 工作目录本身',
+    note: '删掉就回不来。提不出目标时(嵌套 shell)也按这一档算。',
+  },
+  {
+    tier: 'confirm',
+    label: '其他目标',
+    targets: '项目内路径 · /tmp · node_modules / dist / build',
+    note: '日常清理。确认一次后可持久化免问 —— 本仓库刻意没有 delete_file,删产物只能走 shell。',
+  },
+] as const;
+
 export const SENSITIVE_COMMANDS = [
   { pattern: 'git push', why: '推送代码(会改动远端) —— 敏感但可商量,允许用户授权后免问' },
 ];
 
 export const CMD_BOUNDARY_NOTE =
-  '`kill` / `dd` / `reboot` / `shutdown` 这类短词必须匹配到「命令边界」:命令串以它开头,或出现在 `;` `&` `|` 之后。否则 `npm run kill-port`、`dd-utils` 这类正常命令会被误杀。';
+  '`git reset` / `sudo` / `mkfs` / `kill` / `dd` / `reboot` / `shutdown` 这类词必须匹配到「命令边界」:命令串以它开头,或出现在 `;` `&` `|` 之后。否则 `npm run kill-port`、`git commit -m "add sudo docs"` 这类正常命令会被误杀。';
 
 export const PERM_DECISION_CHAIN = [
   {
@@ -401,7 +412,7 @@ export const PERM_DECISION_CHAIN = [
     question: '危险命令?',
     result: 'deny',
     resultLabel: '拒绝',
-    note: '最高优先级,任何模式(含 bypass)',
+    note: '最高优先级,任何模式(含 bypass)。rm 按目标分级:' + '灾难目标 deny,其余落到 ⑤',
   },
   { order: '②', question: 'plan 模式?', result: 'deny', resultLabel: '拒绝', note: '非只读操作一律拒绝' },
   { order: '③', question: '只读操作?', result: 'allow', resultLabel: '放行', note: '读文件不需要打扰用户' },
@@ -570,7 +581,12 @@ export const COMPARE_ROWS: CompareRow[] = [
   },
   { dimension: '子 Agent', claudeCode: '支持', bcode: '支持,工具面独立', note: 'B Code 强制只读 + 禁止嵌套' },
   { dimension: '持久化记忆', claudeCode: '有', bcode: '有(项目隔离)', note: '召回策略不同' },
-  { dimension: '技能系统', claudeCode: '支持', bcode: '兼容其目录格式', note: 'B Code 可直接读 `~/.claude/skills`' },
+  {
+    dimension: '技能系统',
+    claudeCode: '支持',
+    bcode: '兼容其目录格式',
+    note: 'B Code 可直接读 `~/.claude/skills`',
+  },
   { dimension: 'Hooks', claudeCode: '支持', bcode: '兼容其协议', note: '事件名、退出码语义一致' },
   {
     dimension: '模型后端',
@@ -585,10 +601,7 @@ export const COMPARE_ROWS: CompareRow[] = [
 
 export const MEMORY_RECALL = {
   strategy: '纯确定性关键词重叠打分',
-  steps: [
-    '拿当前查询跟记忆的标题、描述、正文做词集重叠',
-    '算个分,取前 3 条注入 system prompt',
-  ],
+  steps: ['拿当前查询跟记忆的标题、描述、正文做词集重叠', '算个分,取前 3 条注入 system prompt'],
   whyNoVector: ['快(不用调 embedding API)', '省(不花钱)', '可预测(同样的输入永远同样的结果,好调试)'],
   cost: '代价是语义近似的召回会弱一些。代码里留了接口抽象,将来换向量库是替换一个实现类的事。',
 };
@@ -606,7 +619,13 @@ export interface RoadmapStep {
 
 export const ROADMAP: RoadmapStep[] = [
   { step: 1, title: 'while 循环 + 一个 read_file 工具', reason: '能跑通就证明了核心原理', essential: true },
-  { step: 2, title: '加 write_file + run_shell', needs: '必须立刻加权限确认', reason: '否则不能给人用', essential: true },
+  {
+    step: 2,
+    title: '加 write_file + run_shell',
+    needs: '必须立刻加权限确认',
+    reason: '否则不能给人用',
+    essential: true,
+  },
   { step: 3, title: '加流式输出 + 事件流', reason: '否则用户体验是「卡死」', essential: true },
   { step: 4, title: '加工具结果截断 + 上下文压缩', reason: '否则长对话必然崩溃', essential: true },
   { step: 5, title: '加 system prompt 约束', reason: '否则模型行为不稳定', essential: true },
@@ -614,7 +633,8 @@ export const ROADMAP: RoadmapStep[] = [
   { step: 7, title: '子 Agent、记忆、技能、MCP、自主循环', reason: '锦上添花', essential: false },
 ];
 
-export const ROADMAP_WARNING = '很多项目倒在第三步之前 —— 因为前两步做完觉得很酷,直接跳过权限去做花哨功能了。';
+export const ROADMAP_WARNING =
+  '很多项目倒在第三步之前 —— 因为前两步做完觉得很酷,直接跳过权限去做花哨功能了。';
 
 // ── §16 教训 ──────────────────────────────────────────────────
 
@@ -653,7 +673,8 @@ export const CLOSING_MAP = [
   { problem: '无人值守', module: '独立评估器' },
 ];
 
-export const CLOSING_PRINCIPLE = '每加一个模块,都应该能回答「它解决了哪一个具体问题」。回答不上来的,大概是过度设计。';
+export const CLOSING_PRINCIPLE =
+  '每加一个模块,都应该能回答「它解决了哪一个具体问题」。回答不上来的,大概是过度设计。';
 
 export const APPENDIX_MODULES = [
   { file: 'agent.ts', duty: '核心循环引擎' },

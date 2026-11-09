@@ -7,6 +7,7 @@ import {
   DANGEROUS_PATTERNS,
   SENSITIVE_PATTERNS,
   decideExecution,
+  isCatastrophicTarget,
   isEphemeralCommand,
   isPersistableKey,
   loadAllowlist,
@@ -18,6 +19,9 @@ import {
   persistAllowlist,
   persistedKey,
   mcpServerKey,
+  RM_RECURSIVE_FORCE_RE,
+  rmTargets,
+  stripQuotedLiteral,
   type ExecutionContext,
   type AllowlistStore,
 } from '../src/permissions.js';
@@ -48,10 +52,10 @@ function execCtx(
 test('危险命令在任何模式下都被 deny（含 --yolo）', () => {
   const shell = mp('run_shell', 'shell');
   const dangerous = [
-    'rm -rf /tmp/x',
     'git reset --hard HEAD',
     'sudo apt install x',
     'dd if=/dev/zero of=/dev/sda',
+    'mkfs.ext4 /dev/sda1',
     'kill -9 1234',
     'reboot now',
     'shutdown -h now',
@@ -87,6 +91,116 @@ test('命令边界：kill/reboot 出现在语句分隔符后仍被 deny', () => 
   assert.equal(checkPermission(shell, { command: 'echo hi; kill -9 1' }, 'default'), 'deny');
   assert.equal(checkPermission(shell, { command: 'true && reboot' }, 'default'), 'deny');
   assert.equal(checkPermission(shell, { command: 'a | shutdown now' }, 'default'), 'deny');
+});
+
+// ── 星号不是危险信号 ────────────────────────────────────────────────
+// 曾经的真实抱怨："带星号的命令全被拒"。带 `*` 的 glob 只是普通命令，
+// 走到 ⑤ fail-closed 的 confirm（问用户），绝不该 deny。
+
+test('带星号的 glob 命令不被 deny（只是普通命令，走 confirm）', () => {
+  const shell = mp('run_shell', 'shell');
+  for (const cmd of [
+    'ls *',
+    'ls *.ts',
+    'rm *.log',
+    'cp src/*.ts dist/',
+    'git diff *',
+    'find . -name "*.ts"',
+  ]) {
+    for (const mode of ['default', 'bypass'] as const) {
+      assert.notEqual(checkPermission(shell, { command: cmd }, mode), 'deny', `不应 deny: ${cmd}`);
+    }
+  }
+});
+
+// ── /dev/null 降噪：最常见的重定向习惯，不能被当成"写设备" ──────────
+
+test('重定向到 /dev/null 等安全节点不被 deny（写裸设备仍 deny）', () => {
+  const shell = mp('run_shell', 'shell');
+  for (const cmd of [
+    'ls 2>/dev/null',
+    'command -v rg >/dev/null 2>&1',
+    'cat x.txt > /dev/null',
+    'npm ls 2> /dev/null',
+  ]) {
+    assert.notEqual(checkPermission(shell, { command: cmd }, 'default'), 'deny', `不应 deny: ${cmd}`);
+  }
+  // 真设备仍拦，引号挡不住
+  for (const cmd of ['echo hi > /dev/sda', 'echo hi > "/dev/sda"', 'dd of=/dev/rdisk2']) {
+    assert.equal(checkPermission(shell, { command: cmd }, 'default'), 'deny', `应 deny: ${cmd}`);
+  }
+});
+
+// ── 字面量 ≠ 命令：只是"提到"危险词不该拦 ──────────────────────────
+
+test('引号内的危险词只是字面量时不被 deny（真执行仍 deny）', () => {
+  const shell = mp('run_shell', 'shell');
+  for (const cmd of ['git commit -m "add sudo docs"', 'git log --grep "rm -rf"', 'echo "git reset --hard"']) {
+    assert.notEqual(checkPermission(shell, { command: cmd }, 'default'), 'deny', `不应 deny: ${cmd}`);
+  }
+  // 嵌套 shell 里的引号内容会被真正执行 → 不剥离，仍 deny
+  assert.equal(checkPermission(shell, { command: 'bash -c "sudo rm -x"' }, 'default'), 'deny');
+});
+
+// ── rm 分级：目标决定命运 ───────────────────────────────────────────
+// 本仓库刻意不提供 delete_file（删除只能走 shell），因此 `rm -rf dist`
+// 这类日常清理必须可用；而 `rm -rf /` 必须硬拦。
+
+test('rm 日常清理：confirm（可授权持久化免问），不 deny', () => {
+  const shell = mp('run_shell', 'shell');
+  for (const cmd of [
+    'rm -rf node_modules',
+    'rm -rf dist .next build',
+    'rm -rf /tmp/bcode-1234',
+    'rm -rf ./coverage && npm test',
+  ]) {
+    assert.equal(checkPermission(shell, { command: cmd }, 'default'), 'confirm', `应 confirm: ${cmd}`);
+  }
+});
+
+test('rm 变体写法同样识别（-fr / -r -f / -Rf / --recursive --force）', () => {
+  const shell = mp('run_shell', 'shell');
+  // 既不漏：变体也进分级；也不误判：目标是项目内 → confirm
+  for (const cmd of [
+    'rm -fr dist',
+    'rm -r -f dist',
+    'rm -Rf dist',
+    'rm --recursive --force dist',
+    'rm -rfv dist',
+    'rm -R dist -f',
+  ]) {
+    assert.equal(checkPermission(shell, { command: cmd }, 'default'), 'confirm', `应 confirm: ${cmd}`);
+  }
+  // 变体 + 灾难目标 → 仍 deny（原实现只认字面 `rm -rf`，这些全漏）
+  for (const cmd of ['rm -fr /', 'rm -r -f ~', 'rm --recursive --force /usr']) {
+    assert.equal(checkPermission(shell, { command: cmd }, 'default'), 'deny', `应 deny: ${cmd}`);
+  }
+});
+
+test('rm 灾难目标：任何模式都 deny（含 bypass）', () => {
+  const shell = mp('run_shell', 'shell');
+  const catastrophic = [
+    'rm -rf /',
+    'rm -rf ~',
+    'rm -rf *',
+    'rm -rf .',
+    'rm -rf ./',
+    'rm -rf $HOME',
+    'rm -rf "$DIR"',
+    'rm -rf /usr',
+    'rm -rf /etc',
+    'bash -c "rm -rf /"', // 嵌套 shell：提不出目标 → 按最坏算
+  ];
+  for (const cmd of catastrophic) {
+    for (const mode of ['default', 'plan', 'bypass'] as const) {
+      assert.equal(checkPermission(shell, { command: cmd }, mode), 'deny', `${mode} 下应 deny: ${cmd}`);
+    }
+  }
+});
+
+test('rm 日常清理在 plan 模式下仍 deny（② plan 只读契约不被 rm 分级绕过）', () => {
+  const shell = mp('run_shell', 'shell');
+  assert.equal(checkPermission(shell, { command: 'rm -rf dist' }, 'plan'), 'deny');
 });
 
 test('敏感命令 git push：default/auto 需确认，plan deny，bypass 也需确认（不再一刀切）', () => {
@@ -138,14 +252,44 @@ test('allowlistKey：shell 用命令内容，其他按工具名', () => {
 });
 
 test('危险模式表非空且含核心条目（守卫误删）', () => {
-  assert.ok(DANGEROUS_PATTERNS.length >= 8);
-  const first = DANGEROUS_PATTERNS[0];
-  assert.ok(first);
-  assert.equal(first.source, '\\brm\\s+-rf\\b');
+  assert.ok(DANGEROUS_PATTERNS.length >= 7);
   assert.ok(DANGEROUS_PATTERNS.some((re) => re.source.includes('sudo')));
   // git push 已移出"无条件 deny"表，进入可授权的敏感表
   assert.ok(!DANGEROUS_PATTERNS.some((re) => re.source.includes('git\\s+push')));
   assert.ok(SENSITIVE_PATTERNS.some((re) => re.source.includes('git\\s+push')));
+  // rm 刻意不在无条件 deny 表：破坏力取决于目标，改走 checkRm 分级
+  assert.ok(!DANGEROUS_PATTERNS.some((re) => re.source.includes('rm')), 'rm 应已移交 checkRm 分级');
+  assert.ok(RM_RECURSIVE_FORCE_RE.source.includes('rm'));
+});
+
+// ── 分级逻辑的单元边界 ──────────────────────────────────────────────
+
+test('rmTargets：只认命令位的 rm，字符串里的 rm 不算', () => {
+  assert.deepEqual(rmTargets('rm -rf dist'), ['dist']);
+  assert.deepEqual(rmTargets('rm -rf dist node_modules'), ['dist', 'node_modules']);
+  assert.deepEqual(rmTargets('sudo rm -rf /tmp/x'), ['/tmp/x']);
+  assert.deepEqual(rmTargets('cd a && rm -rf b; echo rm -rf c'.replace('echo rm -rf c', 'ls')), ['b']);
+  assert.deepEqual(rmTargets('rm -rf -- -weird-name'), ['-weird-name'], '`--` 之后全是操作对象');
+  assert.deepEqual(rmTargets('git rm -rf dist'), [], 'git rm 不是 rm 命令位');
+  assert.deepEqual(rmTargets('echo "rm -rf x"'), [], '引号内不是命令位');
+});
+
+test('isCatastrophicTarget：等价写法归一后判定（. / ./ / cwd 同档）', () => {
+  for (const t of ['/', '~', '*', '.', './', '..', '$HOME', '$(pwd)', '""', '', '/usr', '/Users']) {
+    assert.equal(isCatastrophicTarget(t), true, `应判为灾难级: ${JSON.stringify(t)}`);
+  }
+  for (const t of ['dist', './dist', 'node_modules', '/tmp/x', '/Users/me/proj/dist', 'src/*.ts']) {
+    assert.equal(isCatastrophicTarget(t), false, `不应判为灾难级: ${t}`);
+  }
+  // 删掉整个工作目录 == 灾难
+  assert.equal(isCatastrophicTarget(process.cwd()), true);
+});
+
+test('stripQuotedLiteral：挖空死字面量；嵌套 shell 里把内容提到命令位', () => {
+  // 普通命令：引号内是死字面量，挖空
+  assert.equal(stripQuotedLiteral('git commit -m "add sudo docs"'), 'git commit -m ""');
+  // 嵌套 shell：引号内会被真正执行 → 提成 `; <内容>`，让命令边界规则命中
+  assert.equal(stripQuotedLiteral('bash -c "sudo rm -x"'), 'bash -c ; sudo rm -x');
 });
 
 // ── 持久化白名单（settings.json permissions.allow 的键与读写契约）────────

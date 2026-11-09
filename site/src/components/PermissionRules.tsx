@@ -1,12 +1,19 @@
-import { DANGEROUS_COMMANDS, SENSITIVE_COMMANDS, CMD_BOUNDARY_NOTE } from '../content/knowledge';
+import {
+  DANGEROUS_COMMANDS,
+  DEVICE_WRITE_RULE,
+  RM_TIERS,
+  SENSITIVE_COMMANDS,
+  CMD_BOUNDARY_NOTE,
+} from '../content/knowledge';
 
 /**
- * 危险命令清单 —— 那 9 条「任何模式都拒」的正则,逐条摆出来。
+ * 危险命令清单 —— 「任何模式都拒」的正则,逐条摆出来。
  *
- * 分两栏是刻意的:
- *   上  半 —— 危险(deny),谁都绕不过
- *   下半 —— 敏感(confirm),问你一次就能记住
- * 读者看完模拟器里的 rm -rf,正好在这里看到它具体命中了哪一条正则。
+ * 分三段是刻意的:
+ *   危险(deny)     —— 谁都绕不过
+ *   rm 分级        —— 破坏力取决于目标,不能一刀切
+ *   敏感(confirm)  —— 问你一次就能记住
+ * 读者看完模拟器里的 rm -rf /,正好在这里看到它具体命中了哪一条正则。
  */
 
 /** 把 `xxx` 包起来的部分渲染成 inline code —— 源文案里就是用反引号标的 */
@@ -33,7 +40,10 @@ function Row({
   regex?: string;
   tone: 'red' | 'amber';
 }) {
-  const c = tone === 'red' ? { fg: 'var(--red)', line: 'var(--red-line)' } : { fg: 'var(--amber)', line: 'var(--amber-line)' };
+  const c =
+    tone === 'red'
+      ? { fg: 'var(--red)', line: 'var(--red-line)' }
+      : { fg: 'var(--amber)', line: 'var(--amber-line)' };
 
   return (
     <div
@@ -70,11 +80,43 @@ function Row({
 export function DangerousCommandList() {
   return (
     <div>
-      <div style={{ fontSize: '0.78rem', fontFamily: 'var(--mono)', color: 'var(--red)', marginBottom: '0.3rem' }}>
+      <div
+        style={{
+          fontSize: '0.78rem',
+          fontFamily: 'var(--mono)',
+          color: 'var(--red)',
+          marginBottom: '0.3rem',
+        }}
+      >
         危险 · 任何模式都拒
       </div>
       {DANGEROUS_COMMANDS.map((c) => (
         <Row key={c.pattern} pattern={c.pattern} why={c.why} regex={c.regex} tone="red" />
+      ))}
+      <Row
+        pattern={DEVICE_WRITE_RULE.pattern}
+        why={DEVICE_WRITE_RULE.why}
+        regex={DEVICE_WRITE_RULE.regex}
+        tone="red"
+      />
+
+      <div
+        style={{
+          fontSize: '0.78rem',
+          fontFamily: 'var(--mono)',
+          color: 'var(--red)',
+          margin: '0.9rem 0 0.3rem',
+        }}
+      >
+        rm · 按目标分级
+      </div>
+      {RM_TIERS.map((t) => (
+        <Row
+          key={t.tier}
+          pattern={t.label}
+          why={`${t.targets} —— ${t.note}`}
+          tone={t.tier === 'deny' ? 'red' : 'amber'}
+        />
       ))}
 
       <div
