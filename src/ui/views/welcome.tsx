@@ -70,9 +70,7 @@ export function Welcome({ cols, version }: { cols: number; version?: string }) {
       </text>
       {/* 副标题：大字模式下补品牌名与版本（大字只有 "BC" 缩写）；窄终端标题已含，只留描述 */}
       <text fg={tone('muted')}>
-        {wide
-          ? `B Code${version ? ` v${version}` : ''} · 终端里的 AI 编程助手_@bysking`
-          : '终端里的 AI 编程助手_@bysking'}
+        {wide ? `B Code${version ? ` v${version}` : ''} · 终端里的 AI 编程助手` : '终端里的 AI 编程助手'}
       </text>
 
       <box flexDirection="column" marginTop={1}>

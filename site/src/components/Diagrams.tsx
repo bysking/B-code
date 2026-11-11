@@ -122,7 +122,7 @@ export function BackendBoundaryDiagram() {
   return (
     <div style={{ marginBottom: '1.2rem' }}>
       <Node tone="accent" style={{ maxWidth: '26rem', margin: '0 auto' }}>
-        Agent 循环 —— 只认 Anthropic 消息格式
+        B-code 的Agent循环 —— 只认“统一的”消息格式
       </Node>
       <VLine h={14} />
 

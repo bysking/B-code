@@ -16,6 +16,7 @@ import {
   AbortVisual,
   CheckpointVisual,
 } from './components/PainVisuals';
+import { MemoryLifecycle } from './components/MemoryVisuals';
 import { STAGES } from './content/journey';
 import { JourneyRail } from './components/JourneyRail';
 import { ToolRegistryVisual, CompareVisual, RoadmapVisual, McpSdkVisual } from './components/ConceptVisuals';
@@ -27,7 +28,6 @@ import {
 } from './components/Diagrams';
 import {
   SOURCE_META,
-  LOOP_PSEUDOCODE,
   COMPARISON_CHAT_VS_AGENT,
   BACKEND_PITFALLS,
   EDIT_FILE_RATIONALE,
@@ -118,9 +118,6 @@ export default function App() {
 
             {/* ── 2 循环转起来 ── */}
             <StageBlock stage={stage('loop')}>
-              <pre className="code-block" style={{ borderColor: 'var(--accent-line)' }}>
-                {LOOP_PSEUDOCODE}
-              </pre>
               <LoopSimulator />
               <div className="grid-2" style={{ marginTop: '1rem' }}>
                 <div className="card-inset">
@@ -391,6 +388,23 @@ export default function App() {
                 </p>
               </div>
             </StageBlock>
+
+            {/* ── 11 记住下次 —— 主线最后一站:唯一为「下一次会话」服务的模块 ── */}
+            <StageBlock stage={stage('memory')}>
+              <MemoryLifecycle />
+
+              <p
+                style={{
+                  color: 'var(--text-dim)',
+                  fontSize: '0.9rem',
+                  margin: '1rem 0 0',
+                }}
+              >
+                写入半自动:模型调 <code>save_memory</code> 要过确认(它和写文件同一档权限);
+                读取则发生在每轮对话入口,以你的输入为 query、按关键词重叠打分取前 3 条, 拼进 system prompt
+                末尾 —— 同一轮只召回一次,不在循环里重复查。
+              </p>
+            </StageBlock>
           </div>
         </div>
 
@@ -415,6 +429,7 @@ export default function App() {
               </p>
             </div>
             <div className="card">
+              {/* 这一节在主线第 11 时刻已经完整讲过,这里只留结论 —— 别再维护第二份文案 */}
               <h4>2. 记忆的召回策略</h4>
               <p style={{ fontSize: '0.86rem', color: 'var(--text-dim)' }}>
                 B Code 的选择是<strong>{MEMORY_RECALL.strategy}</strong>:
@@ -431,14 +446,9 @@ export default function App() {
                   <li key={s}>{s}</li>
                 ))}
               </ol>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', margin: '0 0 0.4rem' }}>
-                <strong>为什么不用向量检索?</strong> 三个理由:
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', margin: 0 }}>
+                <strong>为什么不用向量检索?</strong> {MEMORY_RECALL.whyNoVector.join(' / ')}。
               </p>
-              <ul style={{ fontSize: '0.85rem', color: 'var(--text-dim)', margin: 0, paddingLeft: '1.2rem' }}>
-                {MEMORY_RECALL.whyNoVector.map((s) => (
-                  <li key={s}>{s}</li>
-                ))}
-              </ul>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-faint)', margin: '0.5rem 0 0' }}>
                 {MEMORY_RECALL.cost}
               </p>
@@ -462,7 +472,7 @@ export default function App() {
           <SectionHead
             num="✦"
             title="知识自测"
-            lede="十道题覆盖核心机制。答错不是失败 —— 那正好指出哪一节需要回头再看。"
+            lede="十道题,一题一站,顺序和主线一致。答错不是失败 —— 每题都挂了回那一节的链接,也告诉你选错的那个为什么不对。"
           />
           <Quiz />
         </Section>

@@ -3,7 +3,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { STAGES, EPILOGUE } from '../content/journey';
 
 /**
- * 旅程进度轨 —— 左侧常驻,把「一次任务的 9 个时刻」画成一条竖线。
+ * 旅程进度轨 —— 左侧常驻,把「一次任务的 11 个时刻」画成一条竖线。
  *
  * 它不是目录,是**进度**:当前位置的圆点会亮,走过的地方连线变实,
  * 还没到的地方保持虚线。这样即使读者滚到任意位置,
@@ -64,9 +64,13 @@ export function JourneyRail() {
         flexDirection: 'column',
         gap: 0,
         width: '10.5rem',
+        // 11 个时刻 + 3 项余论比原来高:视口矮时让它内部滚动,而不是溢到屏幕外
+        maxHeight: 'calc(100vh - 2rem)',
+        overflowY: 'auto',
       }}
       className="journey-rail"
     >
+      {/* 时刻数从数组算,别再写死 —— 加一节就错一次 */}
       <div
         style={{
           fontFamily: 'var(--mono)',
@@ -76,7 +80,7 @@ export function JourneyRail() {
           marginBottom: '0.6rem',
         }}
       >
-        一次任务的 9 个时刻
+        一次任务的 {STAGES.length} 个时刻
       </div>
 
       <div style={{ position: 'relative', paddingLeft: '1.1rem' }}>
@@ -126,11 +130,7 @@ export function JourneyRail() {
               <motion.span
                 animate={{
                   scale: on ? 1.35 : 1,
-                  backgroundColor: on
-                    ? 'var(--accent)'
-                    : done
-                      ? 'var(--accent-line)'
-                      : 'var(--bg)',
+                  backgroundColor: on ? 'var(--accent)' : done ? 'var(--accent-line)' : 'var(--bg)',
                   borderColor: on || done ? 'var(--accent)' : 'var(--border-strong)',
                 }}
                 transition={{ duration: reduce ? 0 : 0.2 }}

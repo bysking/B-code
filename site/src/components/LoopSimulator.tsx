@@ -172,6 +172,7 @@ export function LoopSimulator() {
   const [playing, setPlaying] = useState(false);
   const reduce = useReducedMotion();
   const timer = useRef<number | null>(null);
+  const logRef = useRef<HTMLDivElement | null>(null);
 
   const done = step >= MAX_STEP;
   const cur = step === 0 ? null : STEPS[step - 1]!;
@@ -197,6 +198,12 @@ export function LoopSimulator() {
     }
     return { visitedNodes: [...vn], visitedEdges: [...ve] };
   }, [step]);
+
+  // 新消息进来时自动滚到底 —— 左图右消息并排时,不滚就见不到最新那条
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [history.length]);
 
   useEffect(() => {
     if (!playing) return;
@@ -316,157 +323,131 @@ export function LoopSimulator() {
         </button>
       </div>
 
-      {/* 流程图 —— 窄屏下横向滚动,保证节点文字不被缩到看不清 */}
-      <div
-        style={{
-          padding: '0.9rem 0.95rem 0.4rem',
-          borderBottom: '1px solid var(--border)',
-          overflowX: 'auto',
-        }}
-      >
-        <div style={{ minWidth: '26rem' }}>
-          <LoopFlowchart
-            activeNode={cur?.node ?? null}
-            activeEdge={cur?.edge ?? null}
-            visitedNodes={visitedNodes}
-            visitedEdges={visitedEdges}
-            ended={cur?.ended}
-          />
-        </div>
-      </div>
-
-      {/* 当前状态说明 */}
-      <div
-        style={{
-          padding: '0.7rem 0.95rem',
-          borderBottom: '1px solid var(--border)',
-          fontSize: '0.84rem',
-          minHeight: '2.9rem',
-          display: 'flex',
-          alignItems: 'center',
-        }}
-      >
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={step}
-            initial={reduce ? false : { opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduce ? undefined : { opacity: 0, y: -4 }}
-            transition={{ duration: reduce ? 0 : 0.16 }}
-            style={{ width: '100%' }}
-          >
-            {step === 0 ? (
-              <span style={{ color: 'var(--text-faint)' }}>
-                按「下一步」开始 —— 每一步都会高亮当前节点和送它过来的那条边。
-              </span>
-            ) : (
-              <span style={{ color: noteColor[cur!.noteTone] }}>
-                <span style={{ fontWeight: 700, fontFamily: 'var(--mono)', fontSize: '0.76rem' }}>
-                  节点 {cur!.node.slice(1)}
-                </span>
-                <span style={{ color: 'var(--text-faint)', margin: '0 0.5rem' }}>·</span>
-                <span
-                  style={{ color: 'var(--text-dim)' }}
-                  dangerouslySetInnerHTML={{ __html: cur!.note }}
-                />
-              </span>
-            )}
-          </motion.div>
-        </AnimatePresence>
-      </div>
-
-      {/* 伪代码 + 历史 */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 17rem), 1fr))',
-          gap: 0,
-        }}
-      >
-        {/* 伪代码 */}
-        <div style={{ padding: '0.85rem 0.95rem', borderRight: '1px solid var(--border)' }}>
-          <div
-            style={{
-              fontFamily: 'var(--mono)',
-              fontSize: '0.7rem',
-              color: 'var(--text-faint)',
-              marginBottom: '0.4rem',
-              letterSpacing: '0.04em',
-            }}
-          >
-            伪代码
+      {/* 左:流程图(节点 + 边高亮 / 伪代码)  右:消息(状态说明 + 历史消息[])
+          并排的目的:每按一次「下一步」,高亮的那条边和它新增的那条消息
+          在同一屏里同时看得到,不需要上下滚动去对齐。 */}
+      <div className="loop-cols">
+        {/* ══ 左:流程图 ══ */}
+        <div className="loop-left">
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ minWidth: '24rem' }}>
+              <LoopFlowchart
+                activeNode={cur?.node ?? null}
+                activeEdge={cur?.edge ?? null}
+                visitedNodes={visitedNodes}
+                visitedEdges={visitedEdges}
+                ended={cur?.ended}
+              />
+            </div>
           </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: '0.76rem', lineHeight: 1.95 }}>
-            {[
-              { l: 'while (true) {', on: pseudo?.while },
-              { l: '  回复 = 模型调用(...)', on: pseudo?.call },
-              { l: '  if (没有工具调用) break', on: pseudo?.check },
-              { l: '  结果 = 执行工具(...)', on: pseudo?.exec },
-              { l: '  历史消息.push(结果)', on: pseudo?.push },
-              { l: '}', on: false },
-            ].map((row, i) => (
-              <motion.div
-                key={i}
-                animate={{
-                  backgroundColor: row.on ? 'rgba(37,99,235,0.09)' : 'rgba(255,255,255,0)',
-                  color: row.on ? 'var(--accent-text)' : 'var(--text-faint)',
-                }}
-                transition={{ duration: reduce ? 0 : 0.2 }}
-                style={{
-                  borderRadius: 3,
-                  padding: '0 0.4rem',
-                  whiteSpace: 'pre',
-                  borderLeft: row.on ? '2px solid var(--accent)' : '2px solid transparent',
-                }}
-              >
-                {row.l}
-              </motion.div>
-            ))}
-          </div>
-        </div>
 
-        {/* 历史消息 */}
-        <div style={{ padding: '0.85rem 0.95rem', maxHeight: '17rem', overflowY: 'auto' }}>
-          <div
-            style={{
-              fontFamily: 'var(--mono)',
-              fontSize: '0.7rem',
-              color: 'var(--text-faint)',
-              marginBottom: '0.4rem',
-              letterSpacing: '0.04em',
-            }}
-          >
-            历史消息[] <span style={{ color: 'var(--accent-text)' }}>({history.length})</span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            {history.map((h, i) => (
-              <motion.div
-                key={i}
-                initial={reduce ? false : { opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: reduce ? 0 : 0.2 }}
-                style={{
-                  borderLeft: `2px solid ${kindStyle[h.kind].border}`,
-                  paddingLeft: '0.6rem',
-                  fontSize: '0.76rem',
-                }}
-              >
-                <span
+          {/* 伪代码 */}
+          <div>
+            <div className="loop-label" style={{ marginBottom: '0.4rem' }}>
+              伪代码
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '0.74rem', lineHeight: 1.9 }}>
+              {[
+                { l: 'while (true) {', on: pseudo?.while },
+                { l: '  回复 = 模型调用(...)', on: pseudo?.call },
+                { l: '  if (没有工具调用) break', on: pseudo?.check },
+                { l: '  结果 = 执行工具(...)', on: pseudo?.exec },
+                { l: '  历史消息.push(结果)', on: pseudo?.push },
+                { l: '}', on: false },
+              ].map((row, i) => (
+                <motion.div
+                  key={i}
+                  animate={{
+                    backgroundColor: row.on ? 'rgba(37,99,235,0.09)' : 'rgba(255,255,255,0)',
+                    color: row.on ? 'var(--accent-text)' : 'var(--text-faint)',
+                  }}
+                  transition={{ duration: reduce ? 0 : 0.2 }}
                   style={{
-                    fontFamily: 'var(--mono)',
-                    color: kindStyle[h.kind].color,
-                    fontSize: '0.66rem',
-                    display: 'block',
+                    borderRadius: 3,
+                    padding: '0 0.4rem',
+                    whiteSpace: 'pre',
+                    borderLeft: row.on ? '2px solid var(--accent)' : '2px solid transparent',
                   }}
                 >
-                  {h.label}
-                </span>
-                <span style={{ color: 'var(--text-dim)', wordBreak: 'break-word' }}>{h.body}</span>
+                  {row.l}
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ══ 右:消息 ══ */}
+        <div className="loop-right">
+          {/* 当前状态说明 —— 紧贴消息列表上方,和它讲的是同一步 */}
+          <div style={{ fontSize: '0.82rem', minHeight: '2.6rem' }}>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={step}
+                initial={reduce ? false : { opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, y: -4 }}
+                transition={{ duration: reduce ? 0 : 0.16 }}
+              >
+                {step === 0 ? (
+                  <span style={{ color: 'var(--text-faint)' }}>
+                    按「下一步」开始 —— 左边高亮当前节点和送它过来的那条边,右边同步长出新的消息。
+                  </span>
+                ) : (
+                  <span style={{ color: noteColor[cur!.noteTone] }}>
+                    <span
+                      style={{ fontWeight: 700, fontFamily: 'var(--mono)', fontSize: '0.74rem' }}
+                    >
+                      节点 {cur!.node.slice(1)}
+                    </span>
+                    <span style={{ color: 'var(--text-faint)', margin: '0 0.5rem' }}>·</span>
+                    <span
+                      style={{ color: 'var(--text-dim)' }}
+                      dangerouslySetInnerHTML={{ __html: cur!.note }}
+                    />
+                  </span>
+                )}
               </motion.div>
-            ))}
-            {history.length === 0 && (
-              <div style={{ fontSize: '0.76rem', color: 'var(--text-faint)' }}>按「下一步」开始</div>
-            )}
+            </AnimatePresence>
+          </div>
+
+          {/* 历史消息 */}
+          <div>
+            <div className="loop-label" style={{ marginBottom: '0.4rem' }}>
+              历史消息[] <span style={{ color: 'var(--accent-text)' }}>({history.length})</span>
+            </div>
+            <div className="loop-log" ref={logRef}>
+              {history.map((h, i) => (
+                <motion.div
+                  key={i}
+                  initial={reduce ? false : { opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: reduce ? 0 : 0.2 }}
+                  style={{
+                    borderLeft: `2px solid ${kindStyle[h.kind].border}`,
+                    paddingLeft: '0.6rem',
+                    fontSize: '0.76rem',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: 'var(--mono)',
+                      color: kindStyle[h.kind].color,
+                      fontSize: '0.66rem',
+                      display: 'block',
+                    }}
+                  >
+                    {h.label}
+                  </span>
+                  <span style={{ color: 'var(--text-dim)', wordBreak: 'break-word' }}>{h.body}</span>
+                </motion.div>
+              ))}
+              {history.length === 0 && (
+                <div style={{ fontSize: '0.76rem', color: 'var(--text-faint)' }}>
+                  按「下一步」开始
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

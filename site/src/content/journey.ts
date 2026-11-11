@@ -9,7 +9,17 @@
  */
 
 export type StageId =
-  'ask' | 'loop' | 'prompt' | 'backend' | 'tools' | 'permissions' | 'context' | 'subagent' | 'goal' | 'done';
+  | 'ask'
+  | 'loop'
+  | 'prompt'
+  | 'backend'
+  | 'tools'
+  | 'permissions'
+  | 'context'
+  | 'subagent'
+  | 'goal'
+  | 'done'
+  | 'memory';
 
 export interface Stage {
   id: StageId;
@@ -115,6 +125,15 @@ export const STAGES: Stage[] = [
     why: '1.2 万行代码,本质上都是为了让最开始那个循环能在真实世界里跑稳。',
     src: '§17',
     short: '跑通了',
+  },
+  {
+    id: 'memory',
+    n: 11,
+    event: '关掉终端,第二天在新目录里重新打开:你还得再说一遍「用 pnpm,别用 npm」',
+    module: '持久化记忆',
+    why: '前面每一节都在解决「这一次会话」的问题,只有它是为「下一次会话」准备的 —— 写完就扔的上下文,需要一条能跨过进程边界的通道。',
+    src: '§14',
+    short: '记住下次',
   },
 ];
 

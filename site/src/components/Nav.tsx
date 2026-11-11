@@ -3,7 +3,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { STAGES, EPILOGUE } from '../content/journey';
 import { ProgressTurtle } from './ProgressTurtle';
 
-/** 导航条:主线 9 个时刻 + 3 项余论 */
+/** 导航条:主线时刻 + 余论(都从数组来,不写死数量) */
 const NAV_ITEMS = [
   ...STAGES.map((s) => ({ id: `stage-${s.id}`, num: String(s.n), short: s.short })),
   ...EPILOGUE.map((e) => ({ id: e.id, num: '', short: e.short })),
