@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import type { ScrollBoxRenderable } from '@opentui/core';
 import type { SubAgentView, ToolCallDisplay } from '../controller.js';
 import { COLORS, TOOL_SYMBOL, TOOL_TONE, attrs, tone } from '../primitives/theme.js';
 
@@ -129,6 +130,41 @@ export function OutputPanel({
     return <ToolRows tools={tools} />;
   }, [tab, tools, logs, current]);
 
+  /**
+   * 打开面板（以及切页/切子 Agent）时**默认贴底**。
+   *
+   * `<scrollbox stickyScroll>` 的粘性只在"已经在底部"时跟随新内容；初次挂载
+   * 时它停在顶部，于是打开面板看到的是最早那条日志——而用户按 Ctrl+O 想看的
+   * 永远是**最新**发生了什么（尤其模型还在跑的时候）。
+   *
+   * 调用方给面板挂了 `key`（随 tab / subAgentIdx 变化），所以切页会整块重挂，
+   * 这个 effect 自然也会再跑一次，三个页面各自贴底。
+   *
+   * `scrollTo(Infinity)` 而不是 `scrollHeight`：内容还在布局时前者由原生
+   * "回投到有效范围"的语义兜住，后者会拿到 0。
+   */
+  const scrollerRef = useRef<ScrollBoxRenderable | null>(null);
+  useEffect(() => {
+    const sb = scrollerRef.current;
+    if (!sb) return;
+    const toBottom = () => {
+      try {
+        sb.scrollTo(Infinity);
+      } catch {
+        // 面板已卸载/原生拒绝，忽略
+      }
+    };
+    // 先立即试一次（内容已在时立刻生效），再交给 afterLayout 保证
+    // 「本帧布局算完之后」再落一次——首帧 scrollHeight 还是 0，
+    // 只靠 setTimeout 在测试渲染器（无真实帧循环）里永远等不到。
+    toBottom();
+    try {
+      sb.afterLayout(toBottom);
+    } catch {
+      // 老版本/已销毁：忽略
+    }
+  }, [tab, subAgentIdx, current?.lines.length, tools.length, logs.length]);
+
   /** 标题：子 Agent 页额外标出"第几个/共几个"，否则用户不知道还有没有别的 */
   const title =
     tab === 'subagents'
@@ -149,7 +185,7 @@ export function OutputPanel({
       <text fg={COLORS.accent} attributes={attrs('bold')}>
         {title}
       </text>
-      <scrollbox style={{ flexGrow: 1 }} scrollY focusable={false}>
+      <scrollbox ref={scrollerRef} style={{ flexGrow: 1 }} scrollY focusable={false}>
         {body}
       </scrollbox>
       <text fg={COLORS.muted} attributes={attrs('dim')}>

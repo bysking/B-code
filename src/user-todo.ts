@@ -136,6 +136,16 @@ export function clearDoneUserTodos(todos: UserTodo[]): UserTodo[] {
   return next.length === todos.length ? todos : next;
 }
 
+/**
+ * 清空**全部**用户待办（/todo_clear）。
+ *
+ * 与 clearDoneUserTodos 的区别：那个只摘已完成项（保留未完成的活），
+ * 这个是把清单整体归零。已空时返回原数组引用（调用方可据此跳过落盘/重渲染）。
+ */
+export function clearAllUserTodos(todos: UserTodo[]): UserTodo[] {
+  return todos.length === 0 ? todos : [];
+}
+
 // ── 展示 ────────────────────────────────────────────────────────────
 
 export function doneCount(todos: UserTodo[]): number {

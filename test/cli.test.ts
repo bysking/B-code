@@ -7,6 +7,7 @@ const base = {
   plan: false,
   yolo: false,
   auto: false,
+  defaultMode: false,
   goal: '',
   loop: 0,
   session: '',

@@ -12,6 +12,7 @@ import {
   renderTodos,
   registerTodoTool,
   saveTodos,
+  clearTodos,
   todoFile,
 } from '../src/todo.js';
 
@@ -90,10 +91,28 @@ test('saveTodos：全部完成 → 清空文件（收尾即清）', async () => 
   assert.deepEqual(loadTodos(cwdDone), [], '回读为空');
 });
 
-test('saveTodos：空数组落盘为空清单（非"完成"，不清空）', () => {
+test('saveTodos：空数组同样清掉文件（"没有待办"不需要一份空 JSON）', () => {
   const cwdEmpty = join(home, 'empty');
+  saveTodos([{ content: '先写一份', status: 'pending' }], cwdEmpty);
+  assert.ok(existsSync(todoFile(cwdEmpty)), '前置：文件存在');
   saveTodos([], cwdEmpty);
-  assert.deepEqual(loadTodos(cwdEmpty), [], '空清单回读为空');
+  assert.equal(existsSync(todoFile(cwdEmpty)), false, '空清单 → 文件被删除');
+  assert.deepEqual(loadTodos(cwdEmpty), [], '回读仍为空清单');
+});
+
+test('clearTodos：删文件但不动其他项目', () => {
+  const cwdA = join(home, 'clear-a');
+  const cwdB = join(home, 'clear-b');
+  saveTodos([{ content: 'A', status: 'pending' }], cwdA);
+  saveTodos([{ content: 'B', status: 'pending' }], cwdB);
+  clearTodos(cwdA);
+  assert.equal(existsSync(todoFile(cwdA)), false, 'A 被清');
+  assert.ok(existsSync(todoFile(cwdB)), 'B 不受影响（按项目隔离）');
+});
+
+test('clearTodos：文件不存在时不抛错（幂等）', () => {
+  clearTodos(join(home, 'never-had-todos'));
+  clearTodos(join(home, 'never-had-todos'));
 });
 
 test('loadTodos：无文件 / 损坏文件 → []', () => {

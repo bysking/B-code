@@ -43,13 +43,16 @@ export function loadTodos(cwd: string = process.cwd()): TodoItem[] {
 
 /**
  * 写入项目待办（重建目录；失败静默——清单不是关键路径）。
- * 全部完成（非空且无 pending/in_progress）→ 视为本轮任务收尾，清空文件，
- * 避免旧清单残留、下次启动又冒出来（"已完成即清空"）。
+ *
+ * **空清单与"全部完成"都删文件**，而不是写一份空数组：
+ *   - 全部完成 → 本轮任务收尾，留着只会让下次启动又冒出旧清单
+ *   - 空清单   → 等价于"没有待办"，写 `[]` 再留着文件纯属噪音
+ * 两种都收敛成"文件不存在 = 没有待办"，`loadTodos` 的缺失分支就是唯一真源。
  */
 export function saveTodos(todos: TodoItem[], cwd: string = process.cwd()): void {
   const file = todoFile(cwd);
   try {
-    const allDone = todos.length > 0 && todos.every((t) => t.status === 'completed');
+    const allDone = todos.length === 0 || todos.every((t) => t.status === 'completed');
     if (allDone) {
       rmSync(file, { force: true });
       return;
@@ -58,6 +61,22 @@ export function saveTodos(todos: TodoItem[], cwd: string = process.cwd()): void 
     writeFileSync(file, JSON.stringify(todos, null, 2), 'utf-8');
   } catch {
     // 写失败不影响本轮
+  }
+}
+
+/**
+ * 主动清理本项目的待办文件（不清内存快照）。
+ *
+ * 为什么需要它：`saveTodos` 只在**模型主动调 `todo_write`** 时才被触发。
+ * 而实际最常见的情况是模型跑完就停手、根本不再调 `todo_write`——上一轮的
+ * `in_progress` 状态于是永久留在 `todo.json` 里，下次启动又原样冒出来。
+ * 所以任务收尾时要主动清一次（见 `Agent.clearStaleTodos`）。
+ */
+export function clearTodos(cwd: string = process.cwd()): void {
+  try {
+    rmSync(todoFile(cwd), { force: true });
+  } catch {
+    // 删不掉不影响本轮
   }
 }
 

@@ -90,10 +90,13 @@ TTY 下使用 [OpenTUI](https://github.com/anomalyco/opentui) 渲染：思考过
 | `/compact`         | 立即压缩上下文（摘要旧消息）                 |
 | `/rewind`          | 回退本次会话已改动的文件（检查点还原）       |
 | `/todos`           | 查看模型自管的任务清单                       |
+| `/todo`            | 我的待办清单（交互编辑；`add`/`done`/`rm`/`clear`/`list`） |
+| `/todo_clear`      | 清空我的待办清单（整份归零，不影响 `/todos`） |
+| `/btw <问题>`      | 旁支只读提问：不打断当前任务，另开线程处理临时问题 |
 | `/plan`            | 切换 Plan（只读）模式                        |
 | `/yolo`            | 切换 Bypass 模式                             |
-| `/auto`            | 切换 Auto 模式（分类器管控写/shell）         |
-| `/default`         | 切换回默认模式                               |
+| `/auto`            | 切换 Auto 模式（分类器管控写/shell，**默认模式**） |
+| `/default`         | 切换回 default 模式（每次写/shell 都确认）   |
 | `/skills`          | 技能面板：空格启用/禁用（禁用的不发给模型）  |
 | `/mcp`             | MCP 面板：空格启用/禁用，`R` 重连            |
 | `/export [路径]`   | 导出当前会话为 markdown（默认 `./bcode-<id>.md`） |
@@ -103,9 +106,10 @@ TTY 下使用 [OpenTUI](https://github.com/anomalyco/opentui) 渲染：思考过
 **快捷键：**
 
 - `Esc`：硬中断当前对话——立即取消在飞的模型请求、终止 `run_shell` 子进程，回到输入等待新指令（可继续输入）
-- `Ctrl+O`：切换工具输出面板（回看本轮全部工具/子 agent 的真实输出）
-- `Shift+Tab`：循环切换模式（default → plan → auto → bypass）
-- `↑` / `↓`：输入历史导航（输入框为空时）
+- `Ctrl+O`：切换工具输出面板（**打开即贴底**，直接看最新；Tab 切工具/日志/子 Agent 三页）
+- `Ctrl+Enter`：**强插**——打断正在跑的这一轮，立刻把输入框内容发给模型
+- `Shift+Tab`：循环切换模式（auto → default → plan → bypass）
+- `↑` / `↓`：输入历史导航（输入框为空时；翻进历史后可连续 ↑↓，草稿仍在时留给光标移动）
 - `Ctrl+V` / `Cmd+V`：粘贴图片（存为 `[image #N]`）；纯文本粘贴由括号粘贴模式自动处理
 - **拖选 + `Ctrl+Shift+C`**：复制选中的文本（跨 SSH 也有效，走 OSC52）
 - `Ctrl+C`：第一次提示、2 秒内再按一次退出
@@ -242,7 +246,10 @@ optionalDependencies 的解析失败是静默的，用户会装成功却跑不�
 
 ## 权限与模式
 
-四种模式：`default` / `plan` / `bypass` / `auto`。
+四种模式：`auto`（**默认**）/ `default` / `plan` / `bypass`。
+
+> 启动即 auto：写文件/执行命令交给分类器裁决，既不像 `default` 那样凡事弹窗，
+> 也不像 `bypass` 那样完全无人把关。想要旧行为加 `--default`。
 
 权限判定三态：**allow（放行）/ deny（拦截）/ confirm（询问）**，遵循三个原则：
 
@@ -267,7 +274,7 @@ shell 按命令整串、文件类按 `工具:路径`（不按内容），避免"
 
 ### 各模式的实际边界
 
-| | plan | default | auto | bypass |
+| | plan | default | auto（默认） | bypass |
 |---|---|---|---|---|
 | `read` 工具 | ✅ 放行 | ✅ 放行 | ✅ 放行 | ✅ 放行 |
 | `write` / `shell` | ⛔ 拦截 | ❓ 确认 | 🤖 分类器裁决 | ✅ 放行 |
@@ -383,6 +390,19 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 2. `{cwd}/.claude/mcp.json` —— 项目级
 3. `{B_CODE_HOME}/mcp.json` —— 用户级
 
+### 启动不阻塞
+
+MCP server 在 **UI 挂载之后**异步拉起，不再挡在启动路径上。每个 server 要走一遍
+子进程 spawn + JSON-RPC 握手 + `tools/list`，配 `npx` 冷启动能吃掉好几秒——
+串行等待就是"启动很慢"的直接来源。
+
+代价是存在一个「UI 已就绪、MCP 工具还没挂上」的窗口期：
+
+- 窗口期内完成连接会在消息流打一行 `(MCP 已就绪：...)`；
+- 模型若在窗口期调用尚未挂载的 MCP 工具，会拿到 `Unknown tool`（**fail-closed
+  不变，不会误执行**），重试即可；
+- 想确认某个 server 的真实状态，随时 `/mcp` 看面板（`未连接` / `N 工具`）。
+
 ### 两种传输
 
 **本地子进程（stdio）** —— `command` / `args` / `env`：
@@ -479,6 +499,21 @@ server 会据此自行降级，而不是发一个永远没人处理的请求然�
 
 - 存储：`{B_CODE_HOME}/projects/{sha256(cwd)前16}/todo.json`（按项目隔离）
 - 查看：`/todos`；该工具只写自身数据目录，**免权限确认**
+
+### 任务完成后自动清理
+
+清单是**本轮任务**的进度视图，任务收口后会自动清掉，不会跨轮次残留：
+
+| 时机 | 行为 |
+|---|---|
+| 一轮 `chat` 自然结束 | **没有** `in_progress` 项 → 删 `todo.json` 并清底部面板 |
+| 一轮 `chat` 被中断（Esc/报错） | 还有 `in_progress` → **保留**，下次能接着做 |
+| `/clear` | **无条件**清掉（用户主动说"这轮不要了"） |
+| 模型调 `todo_write` 全标完成 | 立即删文件（`saveTodos` 内已有的规则） |
+
+清理规则只看待办**自身状态**、不看是否被中断：模型完全可能正常返回却留着
+`in_progress`（它以为还会继续），而中断也可能发生在任务已收口之后。
+空清单同样删文件而不是写一份 `[]` —— 「没有待办」与「文件不存在」收敛成同一个状态。
 
 > 与工具调用面板（"正在跑什么"）不同，这份清单描述**"要做什么、做到哪了"**。
 

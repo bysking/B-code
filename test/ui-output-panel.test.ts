@@ -99,9 +99,24 @@ test('面板：高度受 termRows 约束，不会撑满整屏', async () => {
   await f.cleanup();
 });
 
-test('面板：大量内容不崩，首条可见', async () => {
+test('面板：大量内容不崩，且**默认贴底**显示最新（不是最早）', async () => {
+  // 语义变更：Ctrl+O 打开面板时用户要看的永远是"刚刚发生了什么"，
+  // 所以面板挂载后主动滚到底，而不是停在顶部展示最早那条。
+  //
+  // 断言看的是**最后一条输出的末行**而不是第一条工具名：贴底时首条工具名
+  // 一定已滚出视口，这正是要验证的效果。
   const tools = Array.from({ length: 10 }, (_, i) => tool(`t${i}`, 30));
   const f = await renderPanel({ tools, termRows: 30 });
-  assert.ok(f.frame().includes('tool_t0'), '首条工具可见');
+  const out = f.frame();
+  assert.ok(out.includes('line 29'), '最后一个工具的末尾内容可见（说明已贴底）');
+  assert.ok(!out.includes('tool_t0'), '最早那条已滚出视口（不再停顶部）');
+  await f.cleanup();
+});
+
+test('面板：内容少到一屏放得下时，首条与末条同时可见', async () => {
+  const tools = [tool('a', 2), tool('b', 2)];
+  const f = await renderPanel({ tools, termRows: 40 });
+  const out = f.frame();
+  assert.ok(out.includes('tool_a') && out.includes('tool_b'), '全部内容可见');
   await f.cleanup();
 });

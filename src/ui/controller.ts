@@ -249,8 +249,16 @@ export class AppController {
   persistUserTodos: ((todos: UserTodo[]) => void) | null = null;
   /** 文本输入提问（askText）：null = 无 */
   askTextState: { question: string } | null = null;
+  /**
+   * 用户在模型忙碌期间提交、尚未发送的提示词（先进先出）。
+   *
+   * 这里只是**展示用的镜像**：真正的队列在 cli.handle 里（它是唯一知道
+   * "本轮 chat 何时结束"的一方）。controller 不自作主张地消费它——否则
+   * 队列项会既被 UI 出队又被 cli 出队，变成"发一次、丢一条"。
+   */
+  queuedPrompts: string[] = [];
   /** 当前模式（plan / auto / bypass / default），UI 底部展示 */
-  mode: Mode = 'default';
+  mode: Mode = 'auto';
   /** 版本升级提示（启动异步检查填充；null = 无更新/检查中/已最新） */
   updateInfo: { current: string; latest: string } | null = null;
   /**
@@ -729,8 +737,26 @@ export class AppController {
     this.bump();
   }
 
+  // ── 提示词队列（忙碌期间仍在输入的提示词）──────────────────
+  //
+  // 语义：模型在跑（busy）时用户的输入不会被丢掉，而是排进队列，当前轮结束
+  // 后按序自动发送；Ctrl+Enter 则跳过排队，直接硬中断当前轮并立刻发送。
+  // 队列的**真源在 cli.handle**（只有它知道本轮何时结束），这里只做镜像展示。
+
+  /** 用外部（cli）的队列快照覆盖镜像；只做展示，不消费 */
+  setQueuedPrompts(prompts: string[]) {
+    if (
+      this.queuedPrompts.length === prompts.length &&
+      this.queuedPrompts.every((p, i) => p === prompts[i])
+    ) {
+      return; // 同内容不重渲染（排空阶段会反复推送同一份）
+    }
+    this.queuedPrompts = [...prompts];
+    this.bump();
+  }
+
   /** 所有模式（按循环顺序排列） */
-  static readonly MODE_CYCLE: Mode[] = ['default', 'plan', 'auto', 'bypass'];
+  static readonly MODE_CYCLE: Mode[] = ['auto', 'default', 'plan', 'bypass'];
 
   /** 切换模式：循环到下一个（Shift+Tab 向后循环） */
   cycleMode(forward = true) {

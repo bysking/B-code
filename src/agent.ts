@@ -6,7 +6,7 @@ import { formatDelay, withRetry, type Sleeper } from './retry.js';
 import type { ClipboardImage } from './utils/clipboard.js';
 import { registerBuiltinTools } from './tools.js';
 import { registerPlanTools } from './plan.js';
-import { registerTodoTool, loadTodos, type TodoItem } from './todo.js';
+import { registerTodoTool, loadTodos, clearTodos, type TodoItem } from './todo.js';
 import { CheckpointStore, withCheckpoints } from './checkpoint.js';
 import { runSubAgent, SUBAGENT_INTERRUPTED } from './subagent.js';
 import { oneLine } from './utils/format.js';
@@ -83,7 +83,9 @@ export type AgentEvent =
    */
   | { type: 'subagent_start'; id: string; role: string; task: string }
   | { type: 'subagent_log'; id: string; line: string }
-  | { type: 'subagent_end'; id: string; status: 'done' | 'interrupted'; summary?: string };
+  | { type: 'subagent_end'; id: string; status: 'done' | 'interrupted'; summary?: string }
+  /** 任务收尾：残留的项目待办被清理（UI 据此收起底部清单） */
+  | { type: 'todo_cleared' };
 
 /**
  * 该工具是否幂等（重复执行无副作用）——决定失败后能否自动重试。
@@ -359,6 +361,26 @@ export class Agent {
   }
 
   /**
+   * `/btw`：开一条**只读旁支**处理临时想到的问题，不影响主线。
+   *
+   * 为什么复用 `runTrackedSubAgent` 而不是 `chat`：
+   *   - 子 Agent 的工具面按 `mode === 'read'` 过滤，天然不会动工程文件
+   *   - 它有独立的 `FileStore`，读过的文件不会污染主线的"新鲜度"判断
+   *     （否则主线模型的 file_content status_only 会误答 "unchanged"）
+   *   - 用独立 `messages` 数组，主线历史一个字节都不加
+   *
+   * `task` 里带上"这是旁支问题、只回答、别输出操作计划"的指令，避免模型
+   * 把它当成待执行的任务而返回一堆"我准备这么做"的空话。
+   */
+  async runBtwThread(question: string): Promise<string> {
+    const task =
+      `A side question came up while the main task is running. Investigate and answer it ` +
+      `concisely and read-only — do NOT propose or perform any file changes.\n\n` +
+      `Question: ${question}`;
+    return this.runTrackedSubAgent('btw', task);
+  }
+
+  /**
    * 宿主侧能力（反向调用：server → client）。
    *
    * 只声明我们真能做的两件事：
@@ -576,6 +598,44 @@ export class Agent {
 
   clearHistory(): void {
     this.messages = [];
+    // /clear 是"这一轮不要了"：**无条件**清掉待办（不能走 clearStaleTodos 的
+    // in_progress 保护——用户主动清空时，正在做的那条也不该留下）。
+    const had = this.todos.length > 0;
+    this.todos = [];
+    clearTodos();
+    if (had) this.events?.({ type: 'todo_cleared' });
+  }
+
+  /**
+   * 任务收尾时清理**残留的项目待办**（todo.json）。
+   *
+   * ## 为什么需要主动清理
+   *
+   * `saveTodos` 已经实现了"全部完成即删文件"，但那条路径只在**模型主动调
+   * `todo_write`** 时才走到。真实情况里模型常常跑完就停手、不再调一次
+   * `todo_write`，于是上一轮停在 `in_progress` 的项会永久留在文件里，下次
+   * 启动又原样冒出来——清单看起来"卡在上次那件事上"。
+   *
+   * ## 清理规则
+   *
+   *   - **没有** `in_progress` 项 → 视为本轮工作已收口，删文件并清内存快照。
+   *     （`pending` 项也一并丢弃：模型既然结束了本轮却没在推进它，
+   *     留着只会让下次启动看到一张"过期计划表"。）
+   *   - **有** `in_progress` 项 → 说明任务中途中断（Esc / 报错 / 还有下文），
+   *     **保留**，让用户下次还能接着做。
+   *
+   * 刻意不看 `lastInterrupted`：模型完全可能正常返回却留下 in_progress
+   * （它以为自己还会继续），而中断也完全可能发生在任务已收口之后。
+   * 用待办自身的状态判断更准。
+   */
+  clearStaleTodos(): boolean {
+    const hasRunning = this.todos.some((t) => t.status === 'in_progress');
+    if (hasRunning) return false;
+    const had = this.todos.length > 0;
+    this.todos = [];
+    clearTodos(); // 删文件（内存与磁盘同时归零）
+    this.events?.({ type: 'todo_cleared' });
+    return had;
   }
 
   /** 处理一次用户输入，可能包含多轮工具调用 */
@@ -675,6 +735,9 @@ export class Agent {
         if (this.isAbortError(err)) {
           this.interrupted = false;
           this.lastInterrupted = true;
+          // 中断也要过一遍收尾：若任务其实已收口（没有 in_progress 残留），
+          // 残留清单同样该清；有 in_progress 时 clearStaleTodos 会保留它。
+          this.clearStaleTodos();
           this.cleanupAbort();
           return;
         }
@@ -705,6 +768,9 @@ export class Agent {
           this.lastInterrupted = true;
           this.events?.({ type: 'stream_end' });
         }
+        // 任务自然收尾：清掉残留的项目待办（模型常常跑完就不再调 todo_write，
+        // 不主动清的话上一轮的 in_progress 会永久留在 todo.json 里）
+        this.clearStaleTodos();
         this.cleanupAbort();
         break;
       }

@@ -91,6 +91,8 @@ export interface TtyMount {
 export interface TtyHooks {
   onSubmit: (text: string | { text: string; images?: ClipboardImage[] }) => void;
   onInterrupt: () => void;
+  /** Ctrl+Enter 强插：打断在飞的一轮，立刻把这条提示词送出去 */
+  onInterruptAndSend?: (text: string) => void;
   onExit: () => void;
   onSetMode?: (mode: Mode) => void;
   /** 能力面板（/skills、/mcp）：空格启停 */
@@ -139,6 +141,7 @@ export async function mountTtyApp(
       ctrl,
       onSubmit: hooks.onSubmit,
       onInterrupt: hooks.onInterrupt,
+      onInterruptAndSend: hooks.onInterruptAndSend,
       onExit: hooks.onExit,
       onSetMode: hooks.onSetMode ?? (() => {}),
       onToggleCapability: hooks.onToggleCapability,
