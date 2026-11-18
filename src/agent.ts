@@ -638,6 +638,23 @@ export class Agent {
     return had;
   }
 
+  /**
+   * 用户主动清空**模型自管**待办（`/todo_clear`）。
+   *
+   * 与 `clearStaleTodos` 的区别就在 in_progress 保护：那个是任务收尾的自动
+   * 清理，正在做的那条要留着让用户下次接着干；这里是用户明说"清掉"，所以
+   * **无条件**归零——和 `clearHistory` 里对 `/clear` 的处理同一条道理。
+   *
+   * 返回被清掉的条数（0 表示本来就没有，调用方可据此只说一句"本来就空"）。
+   */
+  clearTodoList(): number {
+    const had = this.todos.length;
+    this.todos = [];
+    clearTodos(); // 磁盘文件
+    if (had > 0) this.events?.({ type: 'todo_cleared' });
+    return had;
+  }
+
   /** 处理一次用户输入，可能包含多轮工具调用 */
   async chat(userText: string | { text: string; images?: ClipboardImage[] }): Promise<void> {
     this.lastInterrupted = false;

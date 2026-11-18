@@ -147,3 +147,37 @@ test('清理是按项目隔离的：不影响别的项目目录', async () => {
   assert.equal(existsSync(todoFile(cwd)), false, '本项目被清');
   assert.ok(existsSync(todoFile(other)), '别的项目不受影响');
 });
+
+/**
+ * `/todo_clear` 的 Agent 侧：用户主动清空 → **无条件**归零（含 in_progress）。
+ *
+ * 与 `clearStaleTodos` 的差别只有 in_progress 保护：那个是任务收尾的自动清理，
+ * 正在做的那条要留着；用户明说"清掉"时就不该再护着它。
+ */
+test('clearTodoList（/todo_clear）：in_progress 也一并清掉，返回被清条数', async () => {
+  seed([
+    { content: '正在做', status: 'in_progress' },
+    { content: '还没动', status: 'pending' },
+  ]);
+  const cleared: string[] = [];
+  const agent = makeAgent((ev) => {
+    if (ev.type === 'todo_cleared') cleared.push(ev.type);
+  });
+  assert.equal(agent.todoList().length, 2, '前置：载入到了');
+
+  assert.equal(agent.clearTodoList(), 2, '返回被清掉的条数');
+
+  assert.equal(existsSync(todoFile(cwd)), false, '磁盘文件被删');
+  assert.deepEqual(agent.todoList(), [], '内存快照归零');
+  assert.equal(cleared.length, 1, '发出 todo_cleared 事件供 UI 收起清单');
+});
+
+test('clearTodoList：本来就没有待办 → 返回 0 且不发事件（UI 不该闪一下）', () => {
+  const cleared: string[] = [];
+  const agent = makeAgent((ev) => {
+    if (ev.type === 'todo_cleared') cleared.push(ev.type);
+  });
+
+  assert.equal(agent.clearTodoList(), 0);
+  assert.equal(cleared.length, 0, '空清单不产生事件');
+});

@@ -137,10 +137,13 @@ export function clearDoneUserTodos(todos: UserTodo[]): UserTodo[] {
 }
 
 /**
- * 清空**全部**用户待办（/todo_clear）。
+ * 清空**全部**用户待办（`/todo_clear` 里针对「我的待办」那一半）。
  *
  * 与 clearDoneUserTodos 的区别：那个只摘已完成项（保留未完成的活），
  * 这个是把清单整体归零。已空时返回原数组引用（调用方可据此跳过落盘/重渲染）。
+ *
+ * 注意 `/todo_clear` 是**两份一起清**：除了这里，还要调 `Agent.clearTodoList()`
+ * 清模型自管的 todo.json（两者分文件存储，见文件头注释）。
  */
 export function clearAllUserTodos(todos: UserTodo[]): UserTodo[] {
   return todos.length === 0 ? todos : [];

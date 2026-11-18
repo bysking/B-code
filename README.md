@@ -91,7 +91,7 @@ TTY 下使用 [OpenTUI](https://github.com/anomalyco/opentui) 渲染：思考过
 | `/rewind`          | 回退本次会话已改动的文件（检查点还原）       |
 | `/todos`           | 查看模型自管的任务清单                       |
 | `/todo`            | 我的待办清单（交互编辑；`add`/`done`/`rm`/`clear`/`list`） |
-| `/todo_clear`      | 清空我的待办清单（整份归零，不影响 `/todos`） |
+| `/todo_clear`      | 清空全部待办（任务清单 + 我的待办，两份同时归零） |
 | `/btw <问题>`      | 旁支只读提问：不打断当前任务，另开线程处理临时问题 |
 | `/plan`            | 切换 Plan（只读）模式                        |
 | `/yolo`            | 切换 Bypass 模式                             |
@@ -509,6 +509,7 @@ server 会据此自行降级，而不是发一个永远没人处理的请求然�
 | 一轮 `chat` 自然结束 | **没有** `in_progress` 项 → 删 `todo.json` 并清底部面板 |
 | 一轮 `chat` 被中断（Esc/报错） | 还有 `in_progress` → **保留**，下次能接着做 |
 | `/clear` | **无条件**清掉（用户主动说"这轮不要了"） |
+| `/todo_clear` | **无条件**清掉，并**同时清空「我的待办」**（`user-todo.json`） |
 | 模型调 `todo_write` 全标完成 | 立即删文件（`saveTodos` 内已有的规则） |
 
 清理规则只看待办**自身状态**、不看是否被中断：模型完全可能正常返回却留着

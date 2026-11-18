@@ -25,7 +25,9 @@ export type InputClass = 'local' | 'chat';
  * 收录标准：**执行它不会与正在跑的这一轮抢 Agent 状态**。
  *   - `/skills` `/mcp`：只读快照 + 开关 settings，不碰 messages
  *   - `/help` `/cost` `/todos`：纯查询
- *   - `/todo`：改的是**用户自管**待办，与模型上下文无关
+ *   - `/todo` `/todo_clear`：改的是待办清单（`user-todo.json` + `todo.json`），
+ *     与模型上下文无关；`/todo_clear` 会清掉模型自管清单的**文件与快照**，
+ *     但不动 `messages`，也不会与在飞的一轮抢状态（下次 `todo_write` 重建即可）
  *   - `/export`：只读当前历史写文件
  *   - `/model`：仅查询态安全；带参数切换模型会改动在飞调用的 model，
  *     因此**带参数时归 chat**（见 classifyInput）

@@ -13,7 +13,7 @@ export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
   { name: 'compact', description: '立即压缩上下文（摘要旧消息）' },
   { name: 'rewind', description: '回退本次会话已改动的文件（检查点还原）' },
   { name: 'todos', description: '查看当前任务清单' },
-  { name: 'todo_clear', description: '清空我的待办清单（/todo 那份）' },
+  { name: 'todo_clear', description: '清空全部待办（任务清单 + 我的待办）' },
   { name: 'btw', description: '旁支只读提问，不打断当前任务（/btw <问题>）' },
   { name: 'export', description: '导出会话为 markdown（/export [路径]）' },
   { name: 'plan', description: '切换 plan（只读）模式' },

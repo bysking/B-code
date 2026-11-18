@@ -159,7 +159,7 @@ const HELP_TEXT = [
   '  /rewind          回退本次会话的文件改动',
   '  /todos           查看任务清单',
   '  /todo            我的待办清单（交互编辑；/todo add|done|rm|clear|list）',
-  '  /todo_clear      清空我的待办清单',
+  '  /todo_clear      清空全部待办（任务清单 + 我的待办）',
   '  /btw <问题>      旁支只读提问，不打断当前任务',
   '  /export [路径]   导出会话为 markdown',
   '  /plan /auto /yolo /default   切换权限模式',
@@ -695,14 +695,20 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       return true;
     }
     if (trimmed === '/todo_clear') {
-      // 只清**用户自管**待办；模型自管的 /todos 不动（两者刻意分离，见 user-todo.ts）
-      const before = ctrl.userTodos.length;
-      if (before === 0) {
+      // 两份待办一起清（用户诉求就是"清理系统管理的 todo"，但用户自管的
+      // 「我的待办」既然也叫 todo_clear，一起归零才不别扭）。分开统计，
+      // 让用户看得见各自清了几条。
+      const sysBefore = agent.clearTodoList();
+      const userBefore = ctrl.userTodos.length;
+      if (userBefore > 0) ctrl.setUserTodos(clearAllUserTodos(ctrl.userTodos));
+      if (sysBefore === 0 && userBefore === 0) {
         ctrl.pushOutput('(待办为空，无需清理)');
         return true;
       }
-      ctrl.setUserTodos(clearAllUserTodos(ctrl.userTodos));
-      ctrl.pushOutput(`(已清空 ${before} 条待办)`);
+      const parts: string[] = [];
+      if (sysBefore > 0) parts.push(`任务清单 ${sysBefore} 条`);
+      if (userBefore > 0) parts.push(`我的待办 ${userBefore} 条`);
+      ctrl.pushOutput(`(已清空 ${parts.join(' + ')})`);
       return true;
     }
     if (trimmed === '/todo' || trimmed.startsWith('/todo ')) {
@@ -1122,13 +1128,18 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         return;
       }
       // 用户自管待办：非 TTY 没有交互编辑器，无参 /todo 退化为列表；
-      // /todo_clear 与 TTY 同一语义（整份归零）
+      // /todo_clear 与 TTY 同一语义（两份待办一起归零）
       if (input === '/todo' || input.startsWith('/todo ') || input === '/todo_clear') {
         let next = loadUserTodos();
         if (input === '/todo_clear') {
+          const sysBefore = agent.clearTodoList();
+          const userBefore = next.length;
           next = clearAllUserTodos(next);
           saveUserTodos(next);
-          process.stdout.write(`(已清空待办)\n`);
+          const parts: string[] = [];
+          if (sysBefore > 0) parts.push(`任务清单 ${sysBefore} 条`);
+          if (userBefore > 0) parts.push(`我的待办 ${userBefore} 条`);
+          process.stdout.write(parts.length ? `(已清空 ${parts.join(' + ')})\n` : '(待办为空，无需清理)\n');
         } else {
           const r = applyUserTodoCommand(next, input.slice('/todo'.length));
           if (r.open) {

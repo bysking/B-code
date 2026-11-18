@@ -20,7 +20,7 @@
 | 3 | 输入历史逐条上翻 | `app.tsx` 去掉 `input === ''` 硬条件 + `navigatingRef` 防重置 |
 | 4 | 默认 auto 模式 | `initialMode()` 兜底 `auto`，新增 `--default`；controller 同步 |
 | 5 | Ctrl+O 打开即贴底 | `output-panel.tsx` 的 `scrollTo(Infinity)` + `afterLayout` |
-| 6 | `/todo_clear` | `user-todo.ts:clearAllUserTodos` + cli 分发 + 斜杠菜单 |
+| 6 | `/todo_clear` | `user-todo.ts:clearAllUserTodos` + `agent.ts:clearTodoList`（两份一起清）+ cli 分发 + 斜杠菜单 |
 | 7 | MCP 异步启动 | `runTtyCli` 改为挂载后 `void agent.initMcp()` |
 | 8 | `/btw`（旁支只读提问） | `agent.runBtwThread` + `cli.runBtwCommand`（`/fork` 已按需求移除） |
 
