@@ -176,8 +176,15 @@ export function PromptInput({
     const el = ref.current;
     if (!el || el.plainText === value) return;
     el.setText(value);
-    // setText 会把缓冲状态整个重置，光标得自己放回末尾
-    el.cursorOffset = value.length;
+    /*
+     * setText 会把缓冲状态整个重置，光标得自己放回末尾。
+     *
+     * 坑：`cursorOffset` 的单位是**显示单元格**（CJK 一个字占两格、换行算一格），
+     * 不是 UTF-16 字符串下标。原来写 `value.length` 时，只要历史/撤回的草稿里
+     * 有中文，光标就落在句子中间——用户接着打字，字符插进正文里而不是末尾。
+     * `measureText` 按缓冲区自己的宽度算法量出结尾的单元格偏移，才是"最末"。
+     */
+    el.editBuffer.setCursorByOffset(el.editBuffer.measureText(value));
   }, [value]);
 
   return (

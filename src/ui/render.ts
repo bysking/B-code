@@ -55,6 +55,11 @@ export interface TtyHooks {
   onInterrupt: () => void;
   /** Ctrl+Enter 强插：打断在飞的一轮，立刻把这条提示词送出去 */
   onInterruptAndSend?: (text: string) => void;
+  /**
+   * `↑` 撤回排队输入：从队列取回一条待发文案（没有则返回 null）。
+   * 队列真源在 cli，UI 不能自己改镜像。
+   */
+  onRecallQueued?: () => string | null;
   onExit: () => void;
   onSetMode?: (mode: Mode) => void;
   /** 能力面板（/skills、/mcp）：空格启停 */
@@ -104,6 +109,7 @@ export async function mountTtyApp(
       onSubmit: hooks.onSubmit,
       onInterrupt: hooks.onInterrupt,
       onInterruptAndSend: hooks.onInterruptAndSend,
+      onRecallQueued: hooks.onRecallQueued,
       onExit: hooks.onExit,
       onSetMode: hooks.onSetMode ?? (() => {}),
       onToggleCapability: hooks.onToggleCapability,

@@ -112,6 +112,16 @@ export class PromptQueue {
     return this.items.shift() ?? null;
   }
 
+  /**
+   * 从**队尾**撤回一条（最近输入的那条）；空队列返回 null。
+   *
+   * 供输入框 `↑` 把排队文案拉回去重编辑。取队尾符合直觉：用户按 ↑ 想拿回的
+   * 是"我刚才敲的那条"，而不是最早排上的那条；连按 ↑ 就逐条往前退。
+   */
+  shiftLast(): string | null {
+    return this.items.pop() ?? null;
+  }
+
   /** 只读快照（供 UI 展示队列条数/内容） */
   snapshot(): string[] {
     return [...this.items];

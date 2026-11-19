@@ -58,6 +58,7 @@ export function App({
   onSubmit,
   onInterrupt,
   onInterruptAndSend,
+  onRecallQueued,
   onExit,
   onSetMode,
   onToggleCapability,
@@ -73,6 +74,11 @@ export function App({
    * 缺省回落到 `onInterrupt` + `onSubmit` 的组合语义（测试/嵌入方可只给前两个）。
    */
   onInterruptAndSend?: (text: string) => void;
+  /**
+   * `↑` 撤回一条排队中的文案（忙碌期输入进队列后，可按 ↑ 拉回输入框重编辑）。
+   * 回调负责**从真队列里取走**并返回内容；队列空时返回 null，UI 退回历史导航。
+   */
+  onRecallQueued?: () => string | null;
   onExit: () => void;
   onSetMode: (mode: Mode) => void;
   onToggleCapability?: (name: string) => void;
@@ -107,6 +113,14 @@ export function App({
    *   3. `↓` 的下界判断依赖它，陈旧值会让 `↓` 直接判成"不在历史中"而彻底失灵。
    */
   const historyIdxRef = useRef(-1);
+  /**
+   * 是否正处于「撤回排队输入」的操作序列中。
+   *
+   * 撤回第一条后输入框就非空了，而上翻的入口条件包含"空框"——不记这个标记的话
+   * 用户连按 ↑ 只能撤回一条（第二条会被当成"草稿里按 ↑"交给 textarea 移光标）。
+   * 用户真正开始编辑或提交后复位（见 `handleChange` / `handleSubmit`）。
+   */
+  const queueRecallRef = useRef(false);
   /**
    * 最近一次由图标的"程序化写值"（↑↓ 导航、提交清空）产生的草稿。
    *
@@ -227,6 +241,7 @@ export function App({
         e.preventDefault();
         if (ctrl.busy !== null && onInterruptAndSend) {
           historyIdxRef.current = -1;
+          queueRecallRef.current = false;
           setInputProgrammatically('');
           imagesRef.current = [];
           ctrl.closeSlash();
@@ -286,15 +301,38 @@ export function App({
       ctrl.slashOpen || ctrl.askState || ctrl.askWizardState || ctrl.askTextState,
     );
     const atHistory = historyIdxRef.current >= 0;
-    if (
-      (e.name === 'up' || e.name === 'down') &&
-      !e.ctrl &&
-      !e.meta &&
-      !interactiveOpen &&
-      (input === '' || atHistory)
-    ) {
-      navigateHistory(e.name === 'up' ? -1 : 1);
-      return;
+    if ((e.name === 'up' || e.name === 'down') && !e.ctrl && !e.meta && !interactiveOpen) {
+      /**
+       * `↑` 撤回排队中的输入。
+       *
+       * 场景：模型还在跑的时候用户又敲了一条 → 进队列排着。此时按 `↑` 应该
+       * 把刚排队的那条**撤回到输入框**（同时从真队列里删掉，才不会又发一遍），
+       * 连按就继续往前撤。
+       *
+       * 优先级：已经在浏览历史（游标 >= 0）时 ↑ 仍归历史——用户的心思在翻旧账，
+       * 不该被队列半路截走。其余情况只在**空框**或**正在撤队列**时接管；
+       * 草稿里按 ↑ 依然是 textarea 移光标（`test/ui-input.test.tsx` 锁着这条）。
+       *
+       * 队列撤空后 `onRecallQueued` 返回 null，直接落回下面的历史导航逻辑
+       * ——这正是"没有排队项时 ↑ 还是原来的历史行为"。
+       */
+      if (e.name === 'up' && !atHistory && (input === '' || queueRecallRef.current)) {
+        const recalled = onRecallQueued?.() ?? null;
+        if (recalled !== null) {
+          queueRecallRef.current = true;
+          historyIdxRef.current = -1;
+          // 越晚排队的越先被撤回，落到草稿**上方**：重新提交时先后顺序不变，
+          // 连按多次也不会把先撤回的那条挤掉（草稿只增不减）。
+          setInputProgrammatically(input === '' ? recalled : `${recalled}\n${input}`);
+          return;
+        }
+        queueRecallRef.current = false; // 队列已空
+      }
+      if (input === '' || atHistory) {
+        queueRecallRef.current = false;
+        navigateHistory(e.name === 'up' ? -1 : 1);
+        return;
+      }
     }
 
     // Esc：**先关面板，没有面板才中断**。
@@ -427,7 +465,9 @@ export function App({
       if (programmaticRef.current === value) {
         programmaticRef.current = null;
       } else {
+        // 用户真的动手编辑了：退出历史浏览与"撤队列"序列，↑ 交还给 textarea
         historyIdxRef.current = -1;
+        queueRecallRef.current = false;
       }
       if (value.startsWith('/')) ctrl.openSlash(value.slice(1));
       else if (ctrl.slashOpen) ctrl.closeSlash();
@@ -461,6 +501,7 @@ export function App({
     // 去重后的历史也要限长：长会话里几千条会把 ↑↓ 翻成体力活
     if (hist.length > HISTORY_MAX) hist.splice(0, hist.length - HISTORY_MAX);
     historyIdxRef.current = -1;
+    queueRecallRef.current = false;
     setInputProgrammatically('');
     imagesRef.current = [];
     ctrl.closeSlash();

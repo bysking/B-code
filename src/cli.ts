@@ -520,6 +520,27 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
     ctrl.setCapabilityItems(buildCapabilityItems(panel.kind, agent));
   };
 
+  /**
+   * 忙碌期间排队等待发送的提示词（FIFO）。
+   *
+   * 曾经这里只有开头那句 `if (running) return;`——模型一开跑，用户后续敲的
+   * **任何东西**（包括 `/skills` 这种纯本地命令）全被静默丢弃。现在按
+   * `classifyInput` 分两路：
+   *   - `local`（面板/查询/待办等不碰模型状态的命令）→ 立即执行
+   *   - `chat`（普通对话、/clear、技能…）→ 入队，本轮结束后按序自动发出
+   *
+   * 声明放在 `mountTtyApp` **之前**：下面传入的 hooks 闭包会引用它，
+   * 而挂载是异步的——用户若在挂载期间按键，闭包执行时这些变量必须已经初始化
+   * （否则会踩 TDZ 的 ReferenceError）。
+   */
+  const queue = new PromptQueue();
+
+  /** 队列变化同步给 UI（底部显示"已排队 N 条"） */
+  const syncQueue = () => ctrl.setQueuedPrompts(queue.snapshot());
+
+  /** 当前是否有 chat 在跑（含队列排空过程） */
+  let running = false;
+
   const { unmount: unmountApp } = await mountTtyApp(
     ctrl,
     {
@@ -545,6 +566,22 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         queue.pushFront(text);
         syncQueue();
         ctrl.pushOutput(`(⚡ 已打断当前任务并插队：${oneLine(text, 60)})`);
+      },
+      /**
+       * `↑` 撤回排队输入：把队尾（最近输入）那条从队列里取走，交给输入框。
+       *
+       * 必须由 cli 执行而不是 UI 自己改镜像：队列**真源**在这里（见
+       * `setQueuedPrompts` 的注释），UI 若只改 `ctrl.queuedPrompts`，被"撤回"
+       * 的那条仍然会被 `runChat` 排空时发出去——变成撤回失败又多发一条。
+       *
+       * 取空返回 null：UI 据此退回普通的输入历史逻辑。
+       */
+      onRecallQueued: () => {
+        const text = queue.shiftLast();
+        if (text === null) return null;
+        syncQueue();
+        ctrl.pushOutput(`(↩ 已撤回排队输入：${oneLine(text, 60)})`);
+        return text;
       },
       onSubmit: (text) => void handle(text),
       onSetMode: (mode) => {
@@ -583,23 +620,6 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
 
   // 版本升级检查：异步执行不阻塞启动，检查到远程 npm 有新版时在底部提示升级命令
   void checkForUpdate().then((info) => ctrl.setUpdateInfo(info));
-
-  /**
-   * 忙碌期间排队等待发送的提示词（FIFO）。
-   *
-   * 曾经这里只有开头那句 `if (running) return;`——模型一开跑，用户后续敲的
-   * **任何东西**（包括 `/skills` 这种纯本地命令）全被静默丢弃。现在按
-   * `classifyInput` 分两路：
-   *   - `local`（面板/查询/待办等不碰模型状态的命令）→ 立即执行
-   *   - `chat`（普通对话、/clear、技能…）→ 入队，本轮结束后按序自动发出
-   */
-  const queue = new PromptQueue();
-
-  /** 队列变化同步给 UI（底部显示"已排队 N 条"） */
-  const syncQueue = () => ctrl.setQueuedPrompts(queue.snapshot());
-
-  /** 当前是否有 chat 在跑（含队列排空过程） */
-  let running = false;
 
   /**
    * 入口分发：忙碌期先分类，再决定「立即执行」还是「排队」。

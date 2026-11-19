@@ -73,6 +73,18 @@ test('PromptQueue：FIFO 顺序，空串忽略', () => {
   assert.equal(q.shift(), null);
 });
 
+test('PromptQueue：shiftLast 从队尾撤回（↑ 拉回输入框）', () => {
+  const q = new PromptQueue();
+  q.push('最早的');
+  q.push('中间的');
+  q.push('刚敲的');
+  assert.equal(q.shiftLast(), '刚敲的', '撤回的是最近输入的那条');
+  assert.equal(q.shiftLast(), '中间的');
+  assert.equal(q.shiftLast(), '最早的');
+  assert.equal(q.shiftLast(), null, '撤空后返回 null，UI 据此退回历史逻辑');
+  assert.equal(q.size, 0);
+});
+
 test('PromptQueue：pushFront 插队（Ctrl+Enter 强插语义）', () => {
   const q = new PromptQueue();
   q.push('排队的');
