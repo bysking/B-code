@@ -26,11 +26,11 @@ import { splitMath, type MathSegment } from './math-split.js';
  * ## 为什么不用 opentui-math（能做二维排版的那个）
  *
  * `opentui-math@0.1.0` 能画出真正的分数线与根号，但它发布于 2026-07，只兼容
- * OpenTUI ≤0.4.x——它调用 `this.yogaNode.setMeasureFunc()`，而 0.8.x 已经
+ * OpenTUI ≤0.4.x——它调用 `this.yogaNode.setMeasureFunc()`，而 0.8 起已经
  * 移除了 `yogaNode`（改成 `yogaSetFloat` 等封装）。实测直接抛
- * `TypeError: undefined is not an object`。
+ * `TypeError: undefined is not an object`；0.9.x 上同样不兼容。
  *
- * 等它支持 0.8.x 后，只需把 `renderMath()` 换成 `<latex>` 渲染，
+ * 等它跟上当前 OpenTUI 后，只需把 `renderMath()` 换成 `<latex>` 渲染，
  * 切分与布局逻辑都不用动。
  *
  * ## syntaxStyle 的归属（踩过的坑）

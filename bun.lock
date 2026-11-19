@@ -8,8 +8,8 @@
         "@anthropic-ai/sdk": "^0.117.1",
         "@devhub-io/latex-to-unicode": "^2.0.1",
         "@modelcontextprotocol/sdk": "^1.32.2",
-        "@opentui/core": "0.8.2",
-        "@opentui/react": "0.8.2",
+        "@opentui/core": "0.9.3",
+        "@opentui/react": "0.9.3",
         "@types/bun": "^1.4.4",
         "@types/node": "^26.2.0",
         "@types/react": "^19.2.18",
@@ -44,25 +44,25 @@
 
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.32.2", "https://registry.npmmirror.com/@modelcontextprotocol/sdk/-/sdk-1.32.2.tgz", { "dependencies": { "@hono/node-server": "2.1.6", "ajv": "8.20.0", "ajv-formats": "3.0.1", "content-type": "1.0.5", "cors": "2.8.6", "cross-spawn": "7.0.6", "eventsource": "3.0.7", "eventsource-parser": "3.1.1", "express": "5.3.0", "express-rate-limit": "8.7.3", "hono": "4.13.16", "jose": "6.2.15", "json-schema-typed": "8.0.2", "pkce-challenge": "5.0.1", "raw-body": "3.0.2", "zod-to-json-schema": "3.25.2" }, "peerDependencies": { "zod": "4.6.7" } }, "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="],
 
-    "@opentui/core": ["@opentui/core@0.8.2", "https://registry.npmmirror.com/@opentui/core/-/core-0.8.2.tgz", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.8.2", "@opentui/core-darwin-x64": "0.8.2", "@opentui/core-linux-arm64": "0.8.2", "@opentui/core-linux-arm64-musl": "0.8.2", "@opentui/core-linux-x64": "0.8.2", "@opentui/core-linux-x64-musl": "0.8.2", "@opentui/core-win32-arm64": "0.8.2", "@opentui/core-win32-x64": "0.8.2" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-Ko6BfyIiCWjm/15nfgBW7aWS+jkZ+Lh16PaEecawWRnhKo7H0BsJGhnpOe/BVcrnBI7bzLgMIP5cWyDffWEP7w=="],
+    "@opentui/core": ["@opentui/core@0.9.3", "", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "string-width": "7.2.0" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.9.3", "@opentui/core-darwin-x64": "0.9.3", "@opentui/core-linux-arm64": "0.9.3", "@opentui/core-linux-arm64-musl": "0.9.3", "@opentui/core-linux-x64": "0.9.3", "@opentui/core-linux-x64-musl": "0.9.3", "@opentui/core-win32-arm64": "0.9.3", "@opentui/core-win32-x64": "0.9.3" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-DIVj5F59i0a6pDC9ZH5M4DkR/GlbnoExPrev++mz2FlGWbO1I6GhyCflwmLefIdoewUN5Dw0zRNgNfDqoKEg4w=="],
 
-    "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.8.2", "https://registry.npmmirror.com/@opentui/core-darwin-arm64/-/core-darwin-arm64-0.8.2.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-/8pFK289hi+jtoUgJYZJEABTreLoQ3tNVQuMFLF0xDBkREJaR9xvh2RHKzhVLut9bhKf9oY2bgD37pMgYNqwqA=="],
+    "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.9.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-zEyxo8tPBOXBmPx7uNZk8DuqyvxFpXO4uUxiNiX4P0zk0uQNtyrMtawryUA20iadTcUK3fr/P6DI5qQPVjvS+g=="],
 
-    "@opentui/core-darwin-x64": ["@opentui/core-darwin-x64@0.8.2", "https://registry.npmmirror.com/@opentui/core-darwin-x64/-/core-darwin-x64-0.8.2.tgz", { "os": "darwin", "cpu": "x64" }, "sha512-AN3QB5yIGQyKs4XKgGuA1vSLA++jonTB6NR2fNLbw4+wizgETlQ77ur30175yEVysaN2tQNO2dJasvHMx05WQg=="],
+    "@opentui/core-darwin-x64": ["@opentui/core-darwin-x64@0.9.3", "", { "os": "darwin", "cpu": "x64" }, "sha512-oWquIfk4MQVed9E6eC5SYb0O+MX2MvdhVNOZCTMgagTU0fGuYaB3YRuqGVRtgammkjXmXaVFdXVYQnnTvKCEYQ=="],
 
-    "@opentui/core-linux-arm64": ["@opentui/core-linux-arm64@0.8.2", "https://registry.npmmirror.com/@opentui/core-linux-arm64/-/core-linux-arm64-0.8.2.tgz", { "os": "linux", "cpu": "arm64" }, "sha512-Inkhg/P5UBNPySqeh0+4K8NbqUIolJ3WNgvX9I25x2nT/DFA8kUN1Y7fbQAaX2CrHa7rWu54xOmJYbYfOPsX8A=="],
+    "@opentui/core-linux-arm64": ["@opentui/core-linux-arm64@0.9.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-JFOJUwm5gg0JniigcXLeFmgTAVEgbFaLhQxRoUokROcaVgNMs3aMuBqFXpOdhH7jU3HT3cHPHP3fhrbI002fEQ=="],
 
-    "@opentui/core-linux-arm64-musl": ["@opentui/core-linux-arm64-musl@0.8.2", "https://registry.npmmirror.com/@opentui/core-linux-arm64-musl/-/core-linux-arm64-musl-0.8.2.tgz", { "os": "linux", "cpu": "arm64" }, "sha512-nB/RtlowKo9mlybfL1iHr0Wr4ZF/n4bQ8i7UaphUPNopXSq6YoWT7D4lyjubLBqjJ4KPkaXXHAiReSZ0e1V7ZA=="],
+    "@opentui/core-linux-arm64-musl": ["@opentui/core-linux-arm64-musl@0.9.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-RMn9XWodLs7JCMRuPqc3ybatJWwqDHJA+FyI3tI2c7g/G4Dn8sGodbroARclPLU5E/uIC78K4//LUylxB5wfMA=="],
 
-    "@opentui/core-linux-x64": ["@opentui/core-linux-x64@0.8.2", "https://registry.npmmirror.com/@opentui/core-linux-x64/-/core-linux-x64-0.8.2.tgz", { "os": "linux", "cpu": "x64" }, "sha512-R6SUsvcQdeVuVSdGIOYcAFrCdGGeAxzT2pJ7KT9LK6Tg0pELszpnC+FmRDiofMUz88VSjXP95NygBZx+SAvnuA=="],
+    "@opentui/core-linux-x64": ["@opentui/core-linux-x64@0.9.3", "", { "os": "linux", "cpu": "x64" }, "sha512-y5jVc28p2UULazGELqblXRp8TczyBUwaP/1wFcB+LwBOJuiEXgyrcgr9Iw/E+TslRYJ3RVHABz8jWGbdPiQjGg=="],
 
-    "@opentui/core-linux-x64-musl": ["@opentui/core-linux-x64-musl@0.8.2", "https://registry.npmmirror.com/@opentui/core-linux-x64-musl/-/core-linux-x64-musl-0.8.2.tgz", { "os": "linux", "cpu": "x64" }, "sha512-vicHTwx+jUFNcI39e6pK+hkjAhv33ebqmm0YpHHek9t3tY1PoWY6YfgI4jZVqVzcckJ7i3r3Nnl3x2YB94UUhw=="],
+    "@opentui/core-linux-x64-musl": ["@opentui/core-linux-x64-musl@0.9.3", "", { "os": "linux", "cpu": "x64" }, "sha512-dEzNJMCBi7rEnX8mWTnxQaprcnqTRyU73gE2g5zQyQnXOGi2rVbcIzbxCQesnyDq3YRUHd30MUGeppF82qw6tw=="],
 
-    "@opentui/core-win32-arm64": ["@opentui/core-win32-arm64@0.8.2", "https://registry.npmmirror.com/@opentui/core-win32-arm64/-/core-win32-arm64-0.8.2.tgz", { "os": "win32", "cpu": "arm64" }, "sha512-pGXmxoPcoNMRVm5DGX0+U7kwtm21Ubh+qJ5tz+kVk5LnuBiBhpkWDp2L+OjYmu9D57NrQbKhj0Tvrtu/SzdXaA=="],
+    "@opentui/core-win32-arm64": ["@opentui/core-win32-arm64@0.9.3", "", { "os": "win32", "cpu": "arm64" }, "sha512-JDuSQAEWFjRS3hstOk62QJ9NAuoaJgpQf+A4p/c+LZQUMKDAJXP7/Y6EKXQcWhGbv1FsZseoSmsTFbSTYaisZg=="],
 
-    "@opentui/core-win32-x64": ["@opentui/core-win32-x64@0.8.2", "https://registry.npmmirror.com/@opentui/core-win32-x64/-/core-win32-x64-0.8.2.tgz", { "os": "win32", "cpu": "x64" }, "sha512-Tc7eNcNSlkHPB1p/9NBqQkexq/vznOPzB6V7G/kGq08y5LtOXPL0zLMJoIMNV/l52gNvv/YEi6mcBLLnpkD9Rg=="],
+    "@opentui/core-win32-x64": ["@opentui/core-win32-x64@0.9.3", "", { "os": "win32", "cpu": "x64" }, "sha512-SMyMpFZzNUhVp2coirNZhTZWoM6942g+V79fwvgq+ymo5nBCPhfxQPQnNBxDxMLb5rt9nowtcs+4NAPPvArJbA=="],
 
-    "@opentui/react": ["@opentui/react@0.8.2", "https://registry.npmmirror.com/@opentui/react/-/react-0.8.2.tgz", { "dependencies": { "@opentui/core": "0.8.2", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-lweMBSVFReIshKa+8+HqjeToQ6U6q5cm4zdbLd6iYi7P5qd5p0MJIMHhpueHhxKsuKGNN1805Eoe/E3m2ufZ4g=="],
+    "@opentui/react": ["@opentui/react@0.9.3", "", { "dependencies": { "@opentui/core": "0.9.3", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-GFelBK+If3LYIRNT7XykDNy5FgyWKOFt3NZWWaljj96qq+W8BAJ2XxfF2fxJUOAkPOm2qRfiDFI9KYeBSW7Uog=="],
 
     "@sindresorhus/is": ["@sindresorhus/is@4.6.0", "https://registry.npmmirror.com/@sindresorhus/is/-/is-4.6.0.tgz", {}, "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="],
 
@@ -383,8 +383,6 @@
     "zod": ["zod@4.6.7", "https://registry.npmmirror.com/zod/-/zod-4.6.7.tgz", {}, "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "https://registry.npmmirror.com/zod-to-json-schema/-/zod-to-json-schema-3.25.2.tgz", { "peerDependencies": { "zod": "4.6.7" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
-
-    "@opentui/core/marked": ["marked@17.0.1", "https://registry.npmmirror.com/marked/-/marked-17.0.1.tgz", { "bin": { "marked": "bin/marked.js" } }, "sha512-boeBdiS0ghpWcSwoNm/jJBwdpFaMnZWRzjA6SkUMYb40SVaN1x7mmfGKp0jvexGcx+7y2La5zRZsYFZI6Qpypg=="],
 
     "body-parser/content-type": ["content-type@2.1.0", "https://registry.npmmirror.com/content-type/-/content-type-2.1.0.tgz", {}, "sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag=="],
 
