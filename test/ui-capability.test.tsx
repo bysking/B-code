@@ -39,7 +39,10 @@ async function renderApp(
   );
 }
 
-const press = async (frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> }, keys: string) => {
+const press = async (
+  frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> },
+  keys: string,
+) => {
   await frame.press(keys);
   await wait(20);
   await frame.flush();

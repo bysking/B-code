@@ -37,11 +37,7 @@ function askQuestion(query: string, defaultValue = ''): Promise<string> {
 }
 
 /** 二选一选择器 */
-async function askChoice(
-  question: string,
-  choices: string[],
-  defaultIndex = 0,
-): Promise<string> {
+async function askChoice(question: string, choices: string[], defaultIndex = 0): Promise<string> {
   process.stdout.write(`\n${question}\n`);
   choices.forEach((c, i) => {
     const marker = i === defaultIndex ? ' [default]' : '';

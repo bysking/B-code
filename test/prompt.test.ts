@@ -4,15 +4,24 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSystemPrompt, flattenSystemBlocks, loadClaudeMd, STATIC_CORE } from '../src/prompt.js';
+import { BASE_PATH_ENV } from '../src/utils/paths.js';
 
+const savedHome = process.env[BASE_PATH_ENV];
 let dir: string;
+let home: string;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'b-code-prompt-'));
+  home = await mkdtemp(join(tmpdir(), 'b-code-prompt-home-'));
+  // 全局层读 {B_CODE_HOME}/CLAUDE.md|AGENTS.md —— 指向临时目录，避免读真实的 ~/.b-code
+  process.env[BASE_PATH_ENV] = home;
 });
 
 afterAll(async () => {
+  if (savedHome === undefined) delete process.env[BASE_PATH_ENV];
+  else process.env[BASE_PATH_ENV] = savedHome;
   await rm(dir, { recursive: true, force: true });
+  await rm(home, { recursive: true, force: true });
 });
 
 test('两段式：第一块是静态核心且带 cache_control，动态块含 Environment', () => {
@@ -99,4 +108,71 @@ test('loadClaudeMd：同一目录同时读取 CLAUDE.md 与 AGENTS.md，CLAUDE.m
   assert.ok(out.includes('agents extra'));
   // 分目录层级合并：CLAUDE.md（本层）出现在 AGENTS.md（同层）之前
   assert.ok(out.indexOf('claude rules') < out.indexOf('agents rules'));
+});
+
+// ── 全局层：{B_CODE_HOME}/AGENTS.md 与 CLAUDE.md ──────────────────
+
+test('全局层：B_CODE_HOME 下的 AGENTS.md 不依赖 cwd 也会注入', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'b-code-global-proj-'));
+  try {
+    await writeFile(join(home, 'AGENTS.md'), 'global agents rules\n');
+    const out = loadClaudeMd(project);
+    assert.ok(out.includes('global agents rules'), `全局 AGENTS.md 应注入: ${out}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test('全局层：B_CODE_HOME 下的 CLAUDE.md 也读，且在同层排在 AGENTS.md 之前', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'b-code-global-proj2-'));
+  try {
+    await writeFile(join(home, 'CLAUDE.md'), 'global claude rules\n');
+    await writeFile(join(home, 'AGENTS.md'), 'global agents rules\n');
+    const out = loadClaudeMd(project);
+    assert.ok(out.includes('global claude rules'));
+    assert.ok(out.includes('global agents rules'));
+    assert.ok(out.indexOf('global claude rules') < out.indexOf('global agents rules'));
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test('全局层排在项目层之前（项目约定读作"在全局之上收紧"）', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'b-code-global-proj3-'));
+  try {
+    await writeFile(join(home, 'AGENTS.md'), 'global-first-marker\n');
+    await writeFile(join(project, 'AGENTS.md'), 'project-second-marker\n');
+    const out = loadClaudeMd(project);
+    assert.ok(out.indexOf('global-first-marker') < out.indexOf('project-second-marker'));
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test('全局层：cwd 就是 B_CODE_HOME 时同一文件不重复注入', async () => {
+  await writeFile(join(home, 'AGENTS.md'), 'dedupe-marker\n');
+  const out = loadClaudeMd(home);
+  assert.equal(out.match(/dedupe-marker/g)?.length, 1, '同一物理文件只注入一次');
+});
+
+test('全局层：@include 相对 B_CODE_HOME 解析', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'b-code-global-proj4-'));
+  try {
+    await writeFile(join(home, 'global-inc.md'), 'global included rules\n');
+    await writeFile(join(home, 'AGENTS.md'), 'global head\n@global-inc.md\n');
+    const out = loadClaudeMd(project);
+    assert.ok(out.includes('global included rules'), '全局文件里的 @include 相对全局目录解析');
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test('全局层：buildSystemPrompt 把全局 AGENTS.md 放进 Project Instructions 段', async () => {
+  await writeFile(join(home, 'AGENTS.md'), 'global agents rules\n'); // 复位（上一条用例改写过它）
+  const blocks = buildSystemPrompt({ cwd: dir });
+  const dynamic = flattenSystemBlocks(blocks.slice(1));
+  assert.ok(dynamic.includes('# Project Instructions'));
+  assert.ok(dynamic.includes('global agents rules'), '全局约定进了动态块');
+  // 静态核心不受全局文件影响（缓存前缀保持稳定）
+  assert.equal(blocks[0]?.text, STATIC_CORE);
 });

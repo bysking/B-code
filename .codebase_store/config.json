@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "excludeDirs": [
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    "coverage",
+    "tmp",
+    "uploads",
+    "backup",
+    "backups",
+    "artifacts",
+    ".output",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    "htmlcov",
+    ".git",
+    ".codebase_store"
+  ],
+  "chunkTokens": 7000,
+  "scopeRules": [
+    {
+      "action": "exclude",
+      "pattern": "**/*.lock",
+      "reason": "锁文件是生成产物，无系统语义"
+    },
+    {
+      "action": "exclude",
+      "pattern": "**/*.png",
+      "reason": "图片是二进制资产，索引无法承载语义"
+    },
+    {
+      "action": "exclude",
+      "pattern": "**/*.jpg",
+      "reason": "图片是二进制资产，索引无法承载语义"
+    },
+    {
+      "action": "index",
+      "pattern": "package.json",
+      "reason": "版本/平台包/发布链路的总闸门，是必须写的契约对象"
+    },
+    {
+      "action": "index",
+      "pattern": "tsconfig.json",
+      "reason": "类型检查的覆盖范围与 jsxImportSource 决定编译期边界"
+    },
+    {
+      "action": "index",
+      "pattern": "bunfig.toml",
+      "reason": "测试并发与超时是本仓的硬约束"
+    },
+    {
+      "action": "observe",
+      "pattern": "**/*.json",
+      "reason": "配置与数据文件只观察变化，不逐个写 Entry"
+    },
+    {
+      "action": "observe",
+      "pattern": "**/*.md",
+      "reason": "文档正文由人工维护，只观察字节变化"
+    },
+    {
+      "action": "exclude",
+      "pattern": "**/.gitignore",
+      "reason": "git 忽略清单本身是标准约定，不含系统语义"
+    },
+    {
+      "action": "exclude",
+      "pattern": ".gitignore.add",
+      "reason": "0 字节残留文件"
+    },
+    {
+      "action": "exclude",
+      "pattern": "LICENSE",
+      "reason": "法律样板文本"
+    },
+    {
+      "action": "exclude",
+      "pattern": "**/.gitkeep",
+      "reason": "空占位文件"
+    }
+  ]
+}

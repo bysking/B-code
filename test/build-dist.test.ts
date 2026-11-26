@@ -66,8 +66,8 @@ test('分发：platform 清单与 optionalDependencies 的键一致（派生输�
   //
   // 但必须守住"派生输入正确"——若 package.json 里缺了某个平台的键，
   // sync 也无从补起，用户在那个平台就装不到二进制。
-  const optional = Object.keys((pkg.optionalDependencies ?? {}) as Record<string, string>).filter(
-    (n) => n.startsWith(`${pkg.name}-`),
+  const optional = Object.keys((pkg.optionalDependencies ?? {}) as Record<string, string>).filter((n) =>
+    n.startsWith(`${pkg.name}-`),
   );
   for (const platform of platformList()) {
     assert.ok(

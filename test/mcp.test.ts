@@ -179,7 +179,8 @@ test('loadMcpServers：server 不支持 resources → 优雅降级（不注册�
 test('connectMcp：server 立即退出 → 请求 reject 而非挂死', async () => {
   // SDK 会归一化成标准 JSON-RPC 错误（Connection closed），比手写版的裸 Error 更规范
   await assert.rejects(
-    () => connectMcp({ command: process.execPath, args: ['-e', 'process.exit(0)'] }, { requestTimeoutMs: 200 }),
+    () =>
+      connectMcp({ command: process.execPath, args: ['-e', 'process.exit(0)'] }, { requestTimeoutMs: 200 }),
     /Connection closed|exited with code/i,
   );
 });
@@ -274,11 +275,7 @@ test('重连失败：registry 里不留指向死进程的工具', async () => {
 
   const r = await reconnectMcpServer(registry, 'dead');
   assert.equal(r.ok, false);
-  assert.equal(
-    registry.resolve('mcp__dead__x'),
-    undefined,
-    '失败后旧工具被摘除（不留下半残 handler）',
-  );
+  assert.equal(registry.resolve('mcp__dead__x'), undefined, '失败后旧工具被摘除（不留下半残 handler）');
 });
 
 // ── stderr 不得污染终端 ───────────────────────────────────────
@@ -574,7 +571,11 @@ test('动态工具：server 发 list_changed 后回调收到新工具列表', as
   let changed: string[] | null = null;
   const conn = await connectMcp(
     { command: process.execPath, args: ['-e', DYNAMIC_SERVER] },
-    { onToolsChanged: (tools) => { changed = tools.map((t) => t.name); } },
+    {
+      onToolsChanged: (tools) => {
+        changed = tools.map((t) => t.name);
+      },
+    },
   );
   try {
     assert.equal(conn.tools.length, 1, '初始 1 个工具');

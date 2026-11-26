@@ -95,9 +95,7 @@ export function MarkdownText({
     const key = renderer as unknown as object;
     let cached = styleCache.get(key);
     if (!cached) {
-      cached = SyntaxStyle.create(
-        (renderer as unknown as { nativeScene: never }).nativeScene,
-      );
+      cached = SyntaxStyle.create((renderer as unknown as { nativeScene: never }).nativeScene);
       styleCache.set(key, cached);
     }
     return cached;
@@ -110,15 +108,15 @@ export function MarkdownText({
   // 没有公式：直接走原生 markdown，省掉额外的 box 层级
   if (segments.every((s) => s.kind === 'text')) {
     // 注：`selectable` 在 Markdown 组件的类型声明里没暴露，但运行时支持
-  // （它是 NonStyledProps 的成员，所有 renderable 都有）。这里用展开绕过类型收窄。
-  return (
-    <markdown
-      content={content}
-      syntaxStyle={style}
-      fg={COLORS.text}
-      {...({ selectable } as Record<string, unknown>)}
-    />
-  );
+    // （它是 NonStyledProps 的成员，所有 renderable 都有）。这里用展开绕过类型收窄。
+    return (
+      <markdown
+        content={content}
+        syntaxStyle={style}
+        fg={COLORS.text}
+        {...({ selectable } as Record<string, unknown>)}
+      />
+    );
   }
 
   // 有公式：按段渲染。

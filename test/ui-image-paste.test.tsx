@@ -145,10 +145,7 @@ test('占位符插在光标处而不是草稿末尾', async () => {
   pressCtrlV(frame);
   await frame.flush();
 
-  assert.ok(
-    frame.frame().includes('AB[image #1]CD'),
-    `应插在光标处：\n${frame.frame().slice(-300)}`,
-  );
+  assert.ok(frame.frame().includes('AB[image #1]CD'), `应插在光标处：\n${frame.frame().slice(-300)}`);
   await frame.cleanup();
 });
 
@@ -221,10 +218,7 @@ test('整块删除：光标在占位符后按一次退格，整块消失（不�
   await frame.press(KeyCodes.BACKSPACE);
   await frame.flush();
 
-  assert.ok(
-    !inputLine(frame).includes('image'),
-    `按一次退格应删掉整块，不该残留半截：${inputLine(frame)}`,
-  );
+  assert.ok(!inputLine(frame).includes('image'), `按一次退格应删掉整块，不该残留半截：${inputLine(frame)}`);
   await frame.cleanup();
 });
 

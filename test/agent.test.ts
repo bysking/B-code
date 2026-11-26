@@ -1,6 +1,6 @@
 import { test, beforeAll, afterAll } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, compactToolEcho } from '../src/agent.js';
@@ -350,6 +350,87 @@ test('空输出兜底：纯空白字符串同样标记', async () => {
     content: string;
   };
   assert.equal(result.content, '(empty output)');
+});
+
+test('参数缺失守卫：写工具收到空参数 → 不弹确认框、不执行、回明确错误', async () => {
+  // 复现真实故障：流式中断让 tool_use 的 input 退化成 {}，此时若照常走
+  // 「权限确认 → handler」，用户会对着一个看不见参数的确认框做选择，
+  // 选 y 是空跑（写文件直接报缺参）。守卫必须在确认之前就拦下。
+  const target = join(dir, 'no-args-write.txt');
+  await rm(target, { force: true });
+  let asks = 0;
+  const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'write_file', input: {} }] }, { text: 'done' }]);
+  const agent = new Agent({
+    callModel: fn,
+    print: () => {},
+    askUser: async () => {
+      asks++;
+      return true; // 即便用户会同意，也不该走到这一步
+    },
+  });
+  await agent.chat('write something');
+
+  assert.equal(asks, 0, '空参数不应触发权限确认（否则是「看不见参数的确认框」）');
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as { content: string };
+  assert.ok(result.content.includes('write_file'), `错误里点名工具：${result.content}`);
+  assert.ok(result.content.includes('file_path'), `错误里点名缺哪个参数：${result.content}`);
+  assert.ok(result.content.includes('content'), 'content 也算缺');
+  assert.ok(result.content.includes('call the tool again'), '给模型明确的重试指引');
+  await assert.rejects(() => access(target), /ENOENT/, '文件未创建');
+});
+
+test('参数缺失守卫：ask_user 收到空参数 → 不渲染交互层（不卡住）', async () => {
+  let askedWizard = 0;
+  let askedText = 0;
+  const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'ask_user', input: {} }] }, { text: '继续' }]);
+  const agent = new Agent({
+    callModel: fn,
+    print: () => {},
+    askChoice: async () => {
+      askedWizard++;
+      return 'x';
+    },
+    askTextInput: async () => {
+      askedText++;
+      return 'y';
+    },
+  });
+  await agent.chat('问点什么');
+
+  assert.equal(askedWizard + askedText, 0, '空参数不该进入任何交互层');
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as { content: string };
+  assert.ok(result.content.includes('question'), 'ask_user 缺的是 question');
+});
+
+test('参数缺失守卫：工具卡片仍补上 tool_start/tool_end（任务面板不会卡在 queued）', async () => {
+  const events: string[] = [];
+  const { fn } = makeToolScriptedBackend([{ tools: [{ name: 'read_file', input: {} }] }, { text: 'ok' }]);
+  const agent = new Agent({ callModel: fn, print: () => {}, events: (e) => events.push(e.type) });
+  await agent.chat('read it');
+
+  assert.deepEqual(
+    events.filter((t) => t === 'tools_planned' || t === 'tool_start' || t === 'tool_end'),
+    ['tools_planned', 'tool_start', 'tool_end'],
+    '缺参数的工具也要走完 start→end，否则 UI 那一项永远停在待执行',
+  );
+});
+
+test('参数缺失守卫：不误伤合法的空字符串（edit_file 的 new_string: ""）', async () => {
+  const target = join(dir, 'empty-new-string.txt');
+  await writeFile(target, 'abc');
+  const { fn } = makeToolScriptedBackend([
+    { tools: [{ name: 'edit_file', input: { file_path: target, old_string: 'abc', new_string: '' } }] },
+    { text: 'ok' },
+  ]);
+  const agent = new Agent({ callModel: fn, print: () => {}, mode: 'bypass' });
+  await agent.chat('clear it');
+
+  const fedBack = agent.history()[2]!;
+  const result = (fedBack.content as ContentBlockParam[])[0] as unknown as { content: string };
+  assert.ok(result.content.includes('Successfully edited'), `空字符串是合法参数：${result.content}`);
+  assert.equal(await readFile(target, 'utf-8'), '', '真的被清空');
 });
 
 test('权限 plan 模式：写文件被 deny（只读约束由代码强制）', async () => {
@@ -851,10 +932,7 @@ test('禁用技能：不进 system prompt；启用后恢复', async () => {
 
     assert.equal(agent.toggleSkill('__toggle_test_skill'), false, '切换后变为禁用');
     await agent.chat('hello again');
-    assert.ok(
-      !skillsSection(calls[1]!).includes('__toggle_test_skill'),
-      '禁用后不再注入 system prompt',
-    );
+    assert.ok(!skillsSection(calls[1]!).includes('__toggle_test_skill'), '禁用后不再注入 system prompt');
 
     assert.equal(agent.toggleSkill('__toggle_test_skill'), true, '再切回来变启用');
     await agent.chat('third');

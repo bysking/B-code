@@ -67,7 +67,10 @@ async function waitForFrame(
  * 例如 ↓ 后紧接 Enter 会变成"↓ 没生效，Enter 提交了默认项"。
  * 取 50ms：足够覆盖一次提交，又不至于让整个套件变慢。
  */
-const press = async (frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> }, keys: string) => {
+const press = async (
+  frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> },
+  keys: string,
+) => {
   await frame.press(keys);
   await wait(50);
   await frame.flush();
@@ -97,11 +100,11 @@ test('渲染：工具调用块出现且标记完成', async () => {
   ctrl.toolStart('t1', 'read_file', { file_path: 'x.ts' }); // 首个工具开始 → 整批落地展示
   await wait(30);
   await frame.flush();
-  assert.ok((frame.frame()).includes('read_file'));
+  assert.ok(frame.frame().includes('read_file'));
   ctrl.toolEnd('t1');
   await wait(30);
   await frame.flush();
-  assert.ok((frame.frame()).includes('read_file'));
+  assert.ok(frame.frame().includes('read_file'));
   await frame.cleanup();
 });
 
@@ -142,7 +145,7 @@ test('渲染：busy 行展示 thinking 文案', async () => {
   ctrl.setBusy('thinking…');
   await wait(30);
   await frame.flush();
-  assert.ok((frame.frame()).includes('thinking…'));
+  assert.ok(frame.frame().includes('thinking…'));
   ctrl.setBusy(null);
   await frame.cleanup();
 });
@@ -342,7 +345,7 @@ test('渲染：Ctrl+O 面板打开展示工具真实输出，关闭后消失', a
   await wait(30);
   await frame.flush();
   // 未打开面板时不显示输出
-  assert.ok(!(frame.frame()).includes('line2'));
+  assert.ok(!frame.frame().includes('line2'));
 
   ctrl.toggleOutputPanel(true);
   await wait(30);
@@ -355,7 +358,7 @@ test('渲染：Ctrl+O 面板打开展示工具真实输出，关闭后消失', a
   ctrl.toggleOutputPanel(false);
   await wait(30);
   await frame.flush();
-  assert.ok(!(frame.frame()).includes('line2'), '关闭后回主视图');
+  assert.ok(!frame.frame().includes('line2'), '关闭后回主视图');
   await frame.cleanup();
 });
 
@@ -605,13 +608,11 @@ test('回归：输入框不接收控制字符（\\r / \\t / ESC 不落进草稿�
 //   2. 改成函数式 setState 仍有丢失（React 批处理 + ref 同步问题，实测丢一半）。
 // 最终方案：把一帧内的滚轮位移**累积**起来，16ms 后一次性提交。
 
-
 // ── 滚动性能 ────────────────────────────────────────────────────
 //
 // 早期实现把全部历史渲染进树里，每次滚动都让 Yoga 重排整棵子树：
 // 实测 60 轮 47ms、120 轮 63ms——滚轮密集到达时就是"滚一下卡一下"。
 // 优化后（虚拟滚动 + 0ms 聚合 + 去掉多余 effect）中位约 10ms，低于一帧。
-
 
 // ── 滚动位置收敛 ────────────────────────────────────────────────
 //

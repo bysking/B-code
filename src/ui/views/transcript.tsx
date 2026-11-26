@@ -58,8 +58,8 @@ function TurnView({ turn }: { turn: Turn }) {
           User
         </text>
         <text fg={COLORS.text} selectable>
-        {turn.text}
-      </text>
+          {turn.text}
+        </text>
       </box>
     );
   }

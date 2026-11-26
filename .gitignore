@@ -12,3 +12,7 @@ dist-pkg/
 
 # prepack 注入状态的临时文件（用完即删）
 .version-inject-state.json
+# cos
+.codebase_store/*.tmp-*
+.mcp.json
+.claude/settings.local.json

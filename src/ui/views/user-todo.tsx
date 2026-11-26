@@ -45,9 +45,7 @@ export function UserTodoEditor({
 
   const commit = () => {
     if (!editing) return;
-    onChange(
-      editing.kind === 'add' ? addUserTodo(todos, draft) : editUserTodo(todos, editing.id, draft),
-    );
+    onChange(editing.kind === 'add' ? addUserTodo(todos, draft) : editUserTodo(todos, editing.id, draft));
     setEditing(null);
     setDraft('');
   };

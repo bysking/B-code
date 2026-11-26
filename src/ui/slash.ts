@@ -22,7 +22,7 @@ export const BUILTIN_SLASH_ITEMS: SlashItem[] = [
   { name: 'default', description: '切换回 default 模式（每次写/shell 都确认）' },
   { name: 'skills', description: '列出可用技能' },
   { name: 'mcp', description: '列出已配置的 MCP server' },
-  { name: 'remember', description: '保存一条长期记忆' },
+  { name: 'remember', description: '保存一条长期记忆（--global 存全局）' },
   { name: 'exit', description: '退出 b-code' },
 ];
 

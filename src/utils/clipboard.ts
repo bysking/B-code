@@ -134,8 +134,16 @@ function readClipboardMacOS(): ClipboardImage | null {
     return null;
   } finally {
     // 清理临时文件
-    try { unlinkSync(tmpFile); } catch { /* 忽略 */ }
-    try { rmdirSync(tmpDir); } catch { /* 目录非空或不存在，忽略 */ }
+    try {
+      unlinkSync(tmpFile);
+    } catch {
+      /* 忽略 */
+    }
+    try {
+      rmdirSync(tmpDir);
+    } catch {
+      /* 目录非空或不存在，忽略 */
+    }
   }
 }
 
@@ -259,7 +267,15 @@ function readClipboardWindows(): ClipboardImage | null {
     // exit 3（无图片）、powershell 不可用、COM 被占用 → 一律当作"没图"
     return null;
   } finally {
-    try { unlinkSync(tmpFile); } catch { /* 忽略 */ }
-    try { rmdirSync(tmpDir); } catch { /* 目录非空或不存在，忽略 */ }
+    try {
+      unlinkSync(tmpFile);
+    } catch {
+      /* 忽略 */
+    }
+    try {
+      rmdirSync(tmpDir);
+    } catch {
+      /* 目录非空或不存在，忽略 */
+    }
   }
 }

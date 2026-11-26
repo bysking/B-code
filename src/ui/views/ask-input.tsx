@@ -16,13 +16,7 @@ import { COLORS, attrs } from '../primitives/theme.js';
  *   - 换行被自动剥掉（`newlines are stripped`）
  *   - 继承全部编辑能力（光标、选区、undo）
  */
-export function AskInput({
-  question,
-  onSubmit,
-}: {
-  question: string;
-  onSubmit: (value: string) => void;
-}) {
+export function AskInput({ question, onSubmit }: { question: string; onSubmit: (value: string) => void }) {
   const ref = useRef<InputRenderable | null>(null);
 
   return (

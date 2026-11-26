@@ -17,11 +17,7 @@ import type { ToolCallDisplay } from '../src/ui/controller.js';
  * 现在验证面板的**语义**：两页不串、空态有提示、长内容不丢、高度受约束。
  */
 
-function tool(
-  id: string,
-  lines: number,
-  extra: (i: number) => string = (i) => `line ${i}`,
-): ToolCallDisplay {
+function tool(id: string, lines: number, extra: (i: number) => string = (i) => `line ${i}`): ToolCallDisplay {
   return {
     id,
     name: `tool_${id}`,
@@ -33,10 +29,7 @@ function tool(
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function renderPanel(
-  props: Parameters<typeof OutputPanel>[0],
-  size = { width: 100, height: 30 },
-) {
+async function renderPanel(props: Parameters<typeof OutputPanel>[0], size = { width: 100, height: 30 }) {
   const frame = await renderOtui(React.createElement(OutputPanel, props), size);
   await wait(50);
   await frame.flush();
@@ -94,7 +87,10 @@ test('面板：高度受 termRows 约束，不会撑满整屏', async () => {
   const tools = Array.from({ length: 20 }, (_, i) => tool(`t${i}`, 40));
   const termRows = 30;
   const f = await renderPanel({ tools, termRows }, { width: 100, height: 60 });
-  const lines = f.frame().split('\n').filter((l) => l.trim().length > 0);
+  const lines = f
+    .frame()
+    .split('\n')
+    .filter((l) => l.trim().length > 0);
   assert.ok(lines.length <= termRows, `面板帧高 ${lines.length} 应 ≤ termRows ${termRows}`);
   await f.cleanup();
 });
@@ -118,5 +114,43 @@ test('面板：内容少到一屏放得下时，首条与末条同时可见', as
   const f = await renderPanel({ tools, termRows: 40 });
   const out = f.frame();
   assert.ok(out.includes('tool_a') && out.includes('tool_b'), '全部内容可见');
+  await f.cleanup();
+});
+
+test('面板：日志上千行时标题与提示仍在屏（不被内容挤走）', async () => {
+  // 回归：滚动区原来用 `flexGrow: 1`（无高度约束），内容一多就把面板撑爆，
+  // 标题被推出屏幕顶部 —— 用户按 Ctrl+O 看到的第一行直接是日志正文，
+  // 完全不知道自己在哪一页。现在滚动区有显式高度，标题/提示恒在。
+  const logs = Array.from({ length: 2000 }, (_, i) => `[INFO] line ${i}`);
+  const f = await renderPanel({ tools: [], logs, tab: 'logs', termRows: 30 });
+  const out = f.frame();
+  assert.ok(out.includes('系统日志'), '标题可见（含页名）');
+  assert.ok(out.includes('Esc 关闭'), '底部提示可见');
+  assert.ok(out.includes('line 1999'), '仍然贴底（最新一条可见）');
+  await f.cleanup();
+});
+
+test('面板：工具页塞满超长输出时标题仍在屏', async () => {
+  const tools = Array.from({ length: 30 }, (_, i) => tool(`t${i}`, 50));
+  const f = await renderPanel({ tools, termRows: 30 });
+  const out = f.frame();
+  assert.ok(out.includes('工具输出'), '标题可见');
+  assert.ok(out.includes('Esc 关闭'), '提示可见');
+  await f.cleanup();
+});
+
+test('面板：子 Agent 单个上千步日志时标题仍在屏', async () => {
+  const sa = {
+    id: 'sa1',
+    role: 'explore',
+    task: '找实现',
+    status: 'running' as const,
+    lines: Array.from({ length: 1200 }, (_, i) => `tool read_file #${i}`),
+  };
+  const f = await renderPanel({ tools: [], subAgents: [sa], tab: 'subagents', termRows: 30 });
+  const out = f.frame();
+  assert.ok(out.includes('子 Agent'), '标题可见');
+  assert.ok(out.includes('explore'), '人设标签可见');
+  assert.ok(out.includes('Esc 关闭'), '提示可见');
   await f.cleanup();
 });

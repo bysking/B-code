@@ -172,8 +172,7 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
           } else {
             setTyping(true);
             const prev = answers[step];
-            const isCustomPrev =
-              typeof prev === 'string' && !opts.some((o) => o.label === prev);
+            const isCustomPrev = typeof prev === 'string' && !opts.some((o) => o.label === prev);
             setDraft(isCustomPrev ? prev : '');
           }
         }
@@ -223,12 +222,8 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
               {answerText(answers[i]) ? '●' : '○'} {s.title}: {answerText(answers[i]) || '（未选）'}
             </text>
           ))}
-          <text fg={idx === 0 ? COLORS.accent : COLORS.text}>
-            {idx === 0 ? '❯ ' : '  '}1. Submit answers
-          </text>
-          <text fg={idx === 1 ? COLORS.accent : COLORS.text}>
-            {idx === 1 ? '❯ ' : '  '}2. Cancel
-          </text>
+          <text fg={idx === 0 ? COLORS.accent : COLORS.text}>{idx === 0 ? '❯ ' : '  '}1. Submit answers</text>
+          <text fg={idx === 1 ? COLORS.accent : COLORS.text}>{idx === 1 ? '❯ ' : '  '}2. Cancel</text>
         </>
       ) : (
         <>
@@ -277,9 +272,7 @@ export function Wizard({ ask, onResolve }: { ask: AskWizardState; onResolve: (va
       )}
 
       <text fg={COLORS.muted} attributes={attrs('dim')}>
-        {typing
-          ? 'Enter 提交自定义答案 · Esc 返回选项'
-          : 'Enter 选择 · ↑↓ 选项 · ←/→ 步骤 · Esc 取消'}
+        {typing ? 'Enter 提交自定义答案 · Esc 返回选项' : 'Enter 选择 · ↑↓ 选项 · ←/→ 步骤 · Esc 取消'}
       </text>
     </box>
   );

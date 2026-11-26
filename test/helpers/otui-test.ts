@@ -40,9 +40,7 @@ export interface OtuiTestFrame {
 
 /** 剥离 ANSI 色码（断言只看纯文本） */
 export function stripAnsi(s: string): string {
-  return s
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '');
+  return s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '');
 }
 
 /**

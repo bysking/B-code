@@ -100,7 +100,7 @@ TTY 下使用 [OpenTUI](https://github.com/anomalyco/opentui) 渲染：思考过
 | `/skills`          | 技能面板：空格启用/禁用（禁用的不发给模型）  |
 | `/mcp`             | MCP 面板：空格启用/禁用，`R` 重连            |
 | `/export [路径]`   | 导出当前会话为 markdown（默认 `./bcode-<id>.md`） |
-| `/remember <事实>` | 保存一条长期记忆                             |
+| `/remember <事实>` | 保存一条长期记忆（`--global` 存进跨项目共享的全局记忆） |
 | `exit` / `quit`    | 退出                                         |
 
 **快捷键：**
@@ -376,9 +376,28 @@ frontmatter 的 `description` 支持块标量多行写法（`>-` 折叠成一行
 
 跨会话长期记忆。模型通过 `save_memory` 工具主动沉淀（经用户确认后落盘），也可以在 REPL 里用 `/remember` 手动保存。
 
-- **存储**：`{B_CODE_HOME}/projects/{sha256(cwd)前16位}/memory/*.md`
+**两层存储**（召回时两层一起打分，全局层同分优先）：
+
+| 层 | 路径 | 生效范围 | 写入方式 |
+| --- | --- | --- | --- |
+| 全局 | `{B_CODE_HOME}/memory/*.md`（`$B_CODE_MEMORY_DIR` 可覆盖） | 所有项目 | `/remember --global …`、`save_memory` 的 `scope: "global"` |
+| 项目 | `{B_CODE_HOME}/projects/{sha256(cwd)前16位}/memory/*.md` | 仅当前目录 | `/remember …`、`save_memory`（缺省） |
+
 - **召回**：关键词重叠打分，纯确定性、不调模型；top3 注入 system prompt 末尾
-- **隔离**：同一目录的工作区各自独立记忆
+- **隔离**：项目层仍然按 cwd 隔离；跨项目要共享的事实（偏好、账号、工具约定）往全局层存
+- **自定义目录**：`B_CODE_MEMORY_DIR=/path/to/memory` 换掉全局层的落点（相对路径按 `{B_CODE_HOME}` 解析）
+
+## 项目指令（Project Instructions）
+
+system prompt 的动态块会注入项目约定文件，两层结构（全局层在前，项目层读起来是"在全局之上再收紧"）：
+
+1. **全局层**：`{B_CODE_HOME}/CLAUDE.md` + `{B_CODE_HOME}/AGENTS.md` —— 所有项目都注入
+2. **项目层**：从 cwd 逐级向上到文件系统根，每层读 `CLAUDE.md` + `AGENTS.md`
+
+同一物理文件只注入一次（cwd 恰好在 `{B_CODE_HOME}` 下时两层会撞上，会去重）。两层都支持 `@include`：
+`@./relative`、`@~/home`、`@/absolute`、`@sub/file.md` 在文本任意位置展开，路径不存在时原样保留，嵌套最深 5 层。
+
+> 全局层随 `B_CODE_HOME` 迁移——换掉数据根就换一套全局提示词；想临时不带全局约定，把 `B_CODE_HOME` 指向另一个目录即可。
 
 ## MCP
 

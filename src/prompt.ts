@@ -1,8 +1,9 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { execSync, type ExecSyncOptionsWithStringEncoding } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { basePath } from './utils/paths.js';
 
 /**
  * 两段式 System Prompt（施工图 L4 prompt.ts）
@@ -54,6 +55,9 @@ You help with software engineering tasks using the tools available to you.
   (e.g. a staging URL, an auth rule, a pitfall), call save_memory to persist it
   across sessions. The user will confirm the write.
 - Keep it specific and minimal: one fact per memory. Do not save transient details.
+- Pass scope:"global" only for facts that hold across repositories (personal
+  preferences, credentials locations, tooling conventions); repo-specific facts stay
+  in the default project scope.
 
 # Asking the user
 - Whenever the conversation needs a user choice — a quiz with options, deciding
@@ -114,23 +118,50 @@ function buildDynamicContext(cwd: string, sections: DynamicSections = {}): strin
 
 const MAX_INCLUDE_DEPTH = 5;
 
+/** 指令文件名（全局层与项目层共用同一份清单，同层 CLAUDE.md 在前） */
+const INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
+
 /**
- * 项目指令文件（CLAUDE.md + AGENTS.md）向上查找合并；支持 @include 指令，
+ * 项目指令文件（全局层 + 项目层）合并；支持 @include 指令，
  * @ 引用允许出现在文本任意位置：@./relative / @~/home / @/absolute / @sub/file.md
  * 引用 = @ 后跟非空白的完整 token；路径不存在（或非文件）时原样保留（可选引用）。
  * 嵌套最深 5 层防循环引用。
+ *
+ * 两层结构：
+ *   1. 全局层  {B_CODE_HOME}/CLAUDE.md + {B_CODE_HOME}/AGENTS.md —— 所有项目都注入
+ *   2. 项目层  从 startDir 逐级向上到文件系统根
+ * 全局层在前（放进动态块的上游位置），项目层的约定读起来是"在全局之上再收紧"。
+ * 同一物理文件只注入一次：cwd 恰好在 B_CODE_HOME 下时两层会撞上。
  */
 export function loadClaudeMd(startDir: string = process.cwd()): string {
   const parts: string[] = [];
-  let dir = resolve(startDir);
+  const seen = new Set<string>();
 
+  const push = (file: string): void => {
+    let real: string;
+    try {
+      real = realpathSync(file);
+    } catch {
+      return;
+    }
+    if (seen.has(real)) return;
+    seen.add(real);
+    parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, [])}\n</file>`);
+  };
+
+  // 全局层：随数据根迁移（B_CODE_HOME 换掉即换一套全局提示词）
+  for (const name of INSTRUCTION_FILES) {
+    const file = join(basePath(), name);
+    if (existsSync(file)) push(file);
+  }
+
+  // 项目层：逐级向上
+  let dir = resolve(startDir);
   for (;;) {
     // 每个目录层级同时读取 CLAUDE.md 与 AGENTS.md，两套工具约定的指令文件都注入
-    for (const name of ['CLAUDE.md', 'AGENTS.md'] as const) {
+    for (const name of INSTRUCTION_FILES) {
       const file = join(dir, name);
-      if (existsSync(file)) {
-        parts.push(`<file key="${file}">\n${resolveIncludes(file, 0, [])}\n</file>`);
-      }
+      if (existsSync(file)) push(file);
     }
     const parent = dirname(dir);
     if (parent === dir) break; // 到根目录

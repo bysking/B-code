@@ -35,7 +35,10 @@ async function waitForFrame(
 }
 
 /** 写一段按键序列后等 ink 处理完（stdin 是同步 emit，等一帧让 React 提交渲染） */
-const press = async (frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> }, keys: string) => {
+const press = async (
+  frame: { press: (k: string) => Promise<void>; flush: () => Promise<void> },
+  keys: string,
+) => {
   await frame.press(keys);
   await wait(50);
   await frame.flush();
@@ -233,7 +236,7 @@ test('分步多选：再次 Enter 取消勾选，空选走 Review 标未选', as
   await frame.press('\r');
   await wait(50);
   await frame.flush();
-  assert.ok((frame.frame()).includes('○ 1. Vue'), '再次 Enter 取消勾选');
+  assert.ok(frame.frame().includes('○ 1. Vue'), '再次 Enter 取消勾选');
   // 空选直接完成本步 → Review 未选 → 提交
   await frame.press('[B');
   await wait(50);

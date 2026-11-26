@@ -111,10 +111,7 @@ test('左键拖选：能选中文本，且光标保持可见', async () => {
 
   await dragAlongRow('第一行文本');
 
-  assert.ok(
-    selectedText().includes('第一行文本'),
-    `应选中首行文本，实际：${JSON.stringify(selectedText())}`,
-  );
+  assert.ok(selectedText().includes('第一行文本'), `应选中首行文本，实际：${JSON.stringify(selectedText())}`);
   assert.equal(cursorVisible(), true, '拖选后输入框光标不该消失');
 });
 

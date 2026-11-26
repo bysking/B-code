@@ -123,7 +123,7 @@ export function applySettings(
 
 /** 启动创建默认数据目录树（对齐 Claude Code：首跑即有完整约定目录） */
 export function ensureDataDirs(base: string = basePath()): void {
-  for (const sub of ['sessions', 'logs', 'projects', 'skills', 'plans']) {
+  for (const sub of ['sessions', 'logs', 'projects', 'skills', 'plans', 'memory']) {
     try {
       mkdirSync(join(base, sub), { recursive: true });
     } catch {

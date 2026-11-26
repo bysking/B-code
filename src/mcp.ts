@@ -144,9 +144,7 @@ function flattenContent(content: unknown): string {
           // 图片块不把 base64 塞进上下文（会撑爆 token）——给出可辨识的占位
           return `[image ${c.mimeType ?? 'unknown'}${c.data ? `, ${Math.round(String(c.data).length / 1024)}KB` : ''}]`;
         case 'resource':
-          return typeof c.resource?.text === 'string'
-            ? c.resource.text
-            : JSON.stringify(c.resource ?? c);
+          return typeof c.resource?.text === 'string' ? c.resource.text : JSON.stringify(c.resource ?? c);
         default:
           return JSON.stringify(c);
       }
@@ -186,9 +184,7 @@ function createTransport(cfg: McpServerConfig): Transport {
 
   if (kind === 'http') {
     return new StreamableHTTPClientTransport(new URL(cfg.url!), {
-      ...(cfg.headers
-        ? { requestInit: { headers: cfg.headers } }
-        : {}),
+      ...(cfg.headers ? { requestInit: { headers: cfg.headers } } : {}),
     });
   }
 
@@ -225,10 +221,7 @@ export interface ConnectMcpOptions {
  * 失败一律抛错，由调用方（connectMcpServer）决定记日志还是提示用户——
  * 这里不做 fail-open，因为调用方需要区分"连上了几个工具"与"为什么连不上"。
  */
-export async function connectMcp(
-  cfg: McpServerConfig,
-  opts: ConnectMcpOptions = {},
-): Promise<McpConnection> {
+export async function connectMcp(cfg: McpServerConfig, opts: ConnectMcpOptions = {}): Promise<McpConnection> {
   const timeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const transport = createTransport(cfg);
 
@@ -240,10 +233,7 @@ export async function connectMcp(
   if (opts.host?.roots) capabilities.roots = { listChanged: true };
   if (opts.host?.elicit) capabilities.elicitation = {};
 
-  const client = new Client(
-    { name: 'b-code', version: '1.0.0' },
-    { capabilities },
-  );
+  const client = new Client({ name: 'b-code', version: '1.0.0' }, { capabilities });
 
   // stdio 传输的 stderr 转进日志系统（不写终端）。HTTP 传输没有这一步。
   if (transport instanceof StdioClientTransport) {
@@ -371,7 +361,7 @@ export async function connectMcp(
       }
     },
     pid() {
-      return transport instanceof StdioClientTransport ? transport.pid ?? undefined : undefined;
+      return transport instanceof StdioClientTransport ? (transport.pid ?? undefined) : undefined;
     },
     close() {
       // client.close() 会连带关掉 transport（含杀子进程）
@@ -434,11 +424,7 @@ function registerTools(
  * 资源聚合为单个只读工具 `mcp__<server>__read_resource`（参数 uri）。
  * server 不提供资源时跳过——不影响工具发现。
  */
-function registerResourceTool(
-  registry: Registry,
-  serverName: string,
-  conn: McpConnection,
-): void {
+function registerResourceTool(registry: Registry, serverName: string, conn: McpConnection): void {
   if (conn.resources.length === 0) return;
   const catalog = conn.resources
     .map((r) => `- ${r.uri}${r.description ? ` — ${r.description}` : ''}`)
@@ -531,8 +517,6 @@ export async function loadMcpServers(
   const configs = resolveMcpConfigs(cwd);
   // 并行连接：N 个 server 的挂载总耗时 ≈ 最慢者，且单个失败不影响其余与主流程
   await Promise.all(
-    Object.entries(configs).map(([serverName, cfg]) =>
-      connectMcpServer(registry, serverName, cfg, host),
-    ),
+    Object.entries(configs).map(([serverName, cfg]) => connectMcpServer(registry, serverName, cfg, host)),
   );
 }

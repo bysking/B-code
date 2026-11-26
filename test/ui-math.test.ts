@@ -63,7 +63,10 @@ test('splitMath：\\[…\\] 与 \\(…\\) 定界符', () => {
 
 test('splitMath：转义的 \\$ 不算公式', () => {
   const segs = splitMath('价格是 \\$100 不是公式');
-  assert.ok(segs.every((s) => s.kind === 'text'), '转义美元符号不应触发公式');
+  assert.ok(
+    segs.every((s) => s.kind === 'text'),
+    '转义美元符号不应触发公式',
+  );
 });
 
 test('splitMath：未闭合公式（流式半截）整段当公式，不丢内容', () => {
@@ -75,7 +78,10 @@ test('splitMath：未闭合公式（流式半截）整段当公式，不丢内�
 
 test('splitMath：空公式被忽略，不产生空白块', () => {
   const segs = splitMath('前 $$$$ 后');
-  assert.ok(segs.every((s) => s.kind === 'text'), '空公式不产生 math 段');
+  assert.ok(
+    segs.every((s) => s.kind === 'text'),
+    '空公式不产生 math 段',
+  );
 });
 
 test('splitMath：代码块里的 $ 不被误判为行内公式', () => {

@@ -34,12 +34,7 @@ import { oneLine } from './utils/format.js';
 import { mountTtyApp } from './ui/render.js';
 import { BUILTIN_SLASH_ITEMS } from './ui/slash.js';
 import { newSessionId, recentTurns, renderRecentTurns } from './session.js';
-import {
-  collectTurns,
-  defaultExportPath,
-  renderMarkdown,
-  renderForTerminal,
-} from './session-export.js';
+import { collectTurns, defaultExportPath, renderMarkdown, renderForTerminal } from './session-export.js';
 import type { SpinnerLike } from './ui.js';
 import type { Mode } from './permissions.js';
 import type { ClipboardImage } from './utils/clipboard.js';
@@ -165,7 +160,7 @@ const HELP_TEXT = [
   '  /plan /auto /yolo /default   切换权限模式',
   '  /skills          技能面板（空格启用/禁用）',
   '  /mcp             MCP 面板（空格启用/禁用，R 重连）',
-  '  /remember <事实> 保存长期记忆',
+  '  /remember <事实> 保存长期记忆（--global 存进跨项目共享的全局记忆）',
   '  exit | quit      退出',
   '快捷键:',
   '  Esc              硬中断当前对话（取消在飞请求/终止 shell）',
@@ -205,6 +200,21 @@ export function groupsAsWizard(
     question,
     options: g.options.map((o) => ({ label: o.label, value: o.value })),
   }));
+}
+
+/**
+ * 解析 `/remember` 的参数：`--global` 前置标记决定记忆落点。
+ *
+ *   /remember 单元测试一律用 vitest   → { fact: '单元测试一律用 vitest', scope: 'project' }
+ *   /remember --global 提交信息用中文 → { fact: '提交信息用中文', scope: 'global' }
+ *
+ * 标记只认前缀（事实正文里出现的 --global 不该改变落点）。
+ */
+export function parseRememberArgs(raw: string): { fact: string; scope: 'project' | 'global' } {
+  const trimmed = raw.trim();
+  const m = /^(?:--global|-g)\s+([\s\S]*)$/.exec(trimmed);
+  if (m) return { fact: (m[1] ?? '').trim(), scope: 'global' };
+  return { fact: trimmed, scope: 'project' };
 }
 
 /**
@@ -638,7 +648,9 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
       // 结束就退出，语义上比"立刻掐断"更符合用户敲 exit 的期待。
       if (queue.push(typeof input === 'string' ? input : input.text)) {
         syncQueue();
-        ctrl.pushOutput(`(已排队 · 当前轮结束后发送：${oneLine(typeof input === 'string' ? input : input.text, 60)})`);
+        ctrl.pushOutput(
+          `(已排队 · 当前轮结束后发送：${oneLine(typeof input === 'string' ? input : input.text, 60)})`,
+        );
       }
       return;
     }
@@ -858,10 +870,10 @@ async function runTtyCli(args: CliArgs, sessionId: string): Promise<void> {
         return;
       }
       if (trimmed.startsWith('/remember ')) {
-        const fact = trimmed.slice('/remember '.length).trim();
+        const { fact, scope } = parseRememberArgs(trimmed.slice('/remember '.length));
         const name = fact.split(/\W+/).filter(Boolean).slice(0, 4).join('_').toLowerCase() || 'fact';
-        saveMemory(name, fact, 'reference', fact);
-        ctrl.pushOutput(`(saved to memory: ${name})`);
+        saveMemory(name, fact, 'reference', fact, process.cwd(), scope);
+        ctrl.pushOutput(`(saved to ${scope} memory: ${name})`);
         return;
       }
 
@@ -1229,10 +1241,10 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         return;
       }
       if (input.startsWith('/remember ')) {
-        const fact = input.slice('/remember '.length).trim();
+        const { fact, scope } = parseRememberArgs(input.slice('/remember '.length));
         const name = fact.split(/\W+/).filter(Boolean).slice(0, 4).join('_').toLowerCase() || 'fact';
-        saveMemory(name, fact, 'reference', fact);
-        process.stdout.write(`(saved to memory: ${name})\n`);
+        saveMemory(name, fact, 'reference', fact, process.cwd(), scope);
+        process.stdout.write(`(saved to ${scope} memory: ${name})\n`);
         created.prompt();
         return;
       }

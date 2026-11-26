@@ -1,6 +1,12 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { parseCliArgs, choiceAsWizard, groupsAsWizard, finalAssistantText } from '../src/cli.js';
+import {
+  parseCliArgs,
+  choiceAsWizard,
+  groupsAsWizard,
+  finalAssistantText,
+  parseRememberArgs,
+} from '../src/cli.js';
 
 const base = {
   resume: false,
@@ -126,4 +132,30 @@ test('groupsAsWizard：tab 组转多步向导（每组一步）', () => {
   assert.equal(steps[0]?.title, '前端');
   assert.equal(steps[1]?.title, '后端');
   assert.equal(steps[0]?.options[1]?.label, 'Vue');
+});
+
+test('parseRememberArgs：缺省项目层，正文原样保留', () => {
+  assert.deepEqual(parseRememberArgs('单元测试一律用 vitest'), {
+    fact: '单元测试一律用 vitest',
+    scope: 'project',
+  });
+});
+
+test('parseRememberArgs：--global / -g 前缀切到全局层并剥掉标记', () => {
+  assert.deepEqual(parseRememberArgs('--global 提交信息用中文'), {
+    fact: '提交信息用中文',
+    scope: 'global',
+  });
+  assert.deepEqual(parseRememberArgs('-g 提交信息用中文'), { fact: '提交信息用中文', scope: 'global' });
+});
+
+test('parseRememberArgs：标记只认前缀，正文里的 --global 不改变落点', () => {
+  assert.deepEqual(parseRememberArgs('启动参数要带 --global'), {
+    fact: '启动参数要带 --global',
+    scope: 'project',
+  });
+});
+
+test('parseRememberArgs：只有标记时事实为空串（调用方回落 fact 名）', () => {
+  assert.deepEqual(parseRememberArgs('--global'), { fact: '--global', scope: 'project' });
 });

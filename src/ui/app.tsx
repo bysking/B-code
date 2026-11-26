@@ -177,16 +177,12 @@ export function App({
      * （GNOME Terminal / VS Code / iTerm2 默认都是这个）。
      */
     // Cmd+C（macOS）与 Ctrl+Shift+C（Linux/Windows 惯例）都触发复制
-    if (((e.meta || (e.ctrl && e.shift)) && e.name === 'c')) {
+    if ((e.meta || (e.ctrl && e.shift)) && e.name === 'c') {
       const sel = renderer.getSelection?.();
       const text = sel?.getSelectedText?.() ?? '';
       if (text) {
         const ok = renderer.copyToClipboardOSC52?.(text);
-        ctrl.pushOutput(
-          ok
-            ? `(已复制 ${text.length} 个字符到剪贴板)`
-            : '(复制失败：当前终端不支持 OSC52)',
-        );
+        ctrl.pushOutput(ok ? `(已复制 ${text.length} 个字符到剪贴板)` : '(复制失败：当前终端不支持 OSC52)');
         // 复制后清掉选中态：否则下一次拖动会接着上次的锚点继续扩选，
         // 表现为"再拖就选不中新的地方"
         renderer.clearSelection?.();
@@ -235,7 +231,11 @@ export function App({
     if (e.name === 'return' && e.ctrl) {
       const text = input.trim();
       const blocked = Boolean(
-        ctrl.askState || ctrl.askWizardState || ctrl.askTextState || ctrl.userTodoOpen || ctrl.capabilityPanel,
+        ctrl.askState ||
+        ctrl.askWizardState ||
+        ctrl.askTextState ||
+        ctrl.userTodoOpen ||
+        ctrl.capabilityPanel,
       );
       if (text && !blocked) {
         e.preventDefault();
@@ -534,12 +534,7 @@ export function App({
         focusable={false}
       >
         <box flexDirection="column">
-          <Transcript
-            turns={ctrl.turns}
-            output={ctrl.output}
-            initialOutput={initialOutput}
-            cols={termCols}
-          />
+          <Transcript turns={ctrl.turns} output={ctrl.output} initialOutput={initialOutput} cols={termCols} />
           {ctrl.busy && ctrl.busySince !== null ? (
             <box marginTop={1}>
               <BusyLine
@@ -561,10 +556,7 @@ export function App({
       ) : null}
 
       {ctrl.askTextState ? (
-        <AskInput
-          question={ctrl.askTextState.question}
-          onSubmit={(v) => ctrl.resolveAskText(v)}
-        />
+        <AskInput question={ctrl.askTextState.question} onSubmit={(v) => ctrl.resolveAskText(v)} />
       ) : null}
 
       {ctrl.slashOpen ? (
@@ -618,9 +610,7 @@ export function App({
           斜杠菜单/输出面板一展开就把滚动区顶高，提示会被挤出可见区
           （实测 22 行终端下完全看不到，用户以为 Ctrl+C 没反应）。 */}
       <box flexDirection="column" flexShrink={0}>
-        {quitArmed ? (
-          <text fg={COLORS.warning}>(再按一次 Ctrl+C 退出)</text>
-        ) : null}
+        {quitArmed ? <text fg={COLORS.warning}>(再按一次 Ctrl+C 退出)</text> : null}
         {ctrl.queuedPrompts.length > 0 ? (
           <text fg={COLORS.muted} attributes={attrs('dim')}>
             {' '}

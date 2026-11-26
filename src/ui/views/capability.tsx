@@ -99,18 +99,14 @@ export function CapabilityPanel({
       </text>
 
       {items.length === 0 ? (
-        <text fg={COLORS.muted}>
-          （{kind === 'skill' ? '没有可用技能' : '没有配置 MCP server'}）
-        </text>
+        <text fg={COLORS.muted}>（{kind === 'skill' ? '没有可用技能' : '没有配置 MCP server'}）</text>
       ) : (
         visible.map((it, i) => {
           const isActive = start + i === active;
           return (
             <text key={it.name} fg={isActive ? COLORS.accent : undefined} wrapMode="none">
               {isActive ? '❯ ' : '  '}
-              <span fg={it.enabled ? COLORS.success : COLORS.muted}>
-                {it.enabled ? '☑' : '☐'}
-              </span>{' '}
+              <span fg={it.enabled ? COLORS.success : COLORS.muted}>{it.enabled ? '☑' : '☐'}</span>{' '}
               <span attributes={it.enabled ? 0 : attrs('strikethrough')}>{it.name}</span>
               {it.detail ? <span fg={COLORS.muted}> {it.detail}</span> : null}
               {it.notice ? <span fg={COLORS.warning}> {it.notice}</span> : null}
@@ -128,9 +124,7 @@ export function CapabilityPanel({
       ) : null}
 
       <text fg={COLORS.muted} attributes={attrs('dim')}>
-        {kind === 'mcp'
-          ? '↑↓ 选择 · 空格 启停 · R 重连 · Esc 关闭'
-          : '↑↓ 选择 · 空格 启停 · Esc 关闭'}
+        {kind === 'mcp' ? '↑↓ 选择 · 空格 启停 · R 重连 · Esc 关闭' : '↑↓ 选择 · 空格 启停 · Esc 关闭'}
       </text>
     </box>
   );

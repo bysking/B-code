@@ -27,9 +27,24 @@ const TAB_LABEL: Record<PanelTab, string> = {
 /** 面板除内容外的固定占用：边框 2 + 标题 1 + 提示 1 */
 const PANEL_CHROME_ROWS = 4;
 
-/** 面板内容高度预算 */
+/** 面板内容高度预算（= 面板总高度，边框也算在内） */
 function contentRows(termRows: number): number {
   return Math.max(termRows - PANEL_CHROME_ROWS, 4);
+}
+
+/**
+ * 滚动区高度：面板总高度减去边框、标题、提示。
+ *
+ * **必须是显式数字，不能靠 `flexGrow` 撑。** 文字内容一多，flex 布局就会把
+ * 剩余空间全给滚动区——它先长到内容全高，再连标题、提示一起把外层 `height`
+ * 撑爆，于是标题被挤出屏幕顶部（日志几千行时 100% 复现，用户看到的第一行
+ * 直接是日志正文）。给了显式高度后滚动区自带裁剪，标题与提示永远留在原位。
+ *
+ * 减的必须是 PANEL_CHROME_ROWS（含边框 2）而不是"标题+提示 2"：外层给了
+ * `height` 之后，边框是从这个高度里扣掉的，漏掉边框就还是多占 2 行。
+ */
+function scrollRows(termRows: number): number {
+  return Math.max(contentRows(termRows) - PANEL_CHROME_ROWS, 1);
 }
 
 /** 把工具输出拆成可滚动的内容（一段标题 + 多行正文） */
@@ -185,7 +200,13 @@ export function OutputPanel({
       <text fg={COLORS.accent} attributes={attrs('bold')}>
         {title}
       </text>
-      <scrollbox ref={scrollerRef} style={{ flexGrow: 1 }} scrollY focusable={false}>
+      {/* 显式高度：靠 flexGrow 会被内容撑爆，把标题/提示挤出屏幕（见 scrollRows） */}
+      <scrollbox
+        ref={scrollerRef}
+        style={{ height: scrollRows(termRows), flexShrink: 0 }}
+        scrollY
+        focusable={false}
+      >
         {body}
       </scrollbox>
       <text fg={COLORS.muted} attributes={attrs('dim')}>

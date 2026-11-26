@@ -138,6 +138,41 @@ export function compactToolEcho(input: unknown): string {
 }
 
 /**
+ * 这次工具调用声明的必填参数有没有到齐，返回缺失的键名（齐了返回空数组）。
+ *
+ * ## 为什么要在执行前查一遍
+ *
+ * tool_use 的 `input` 会因为**流式中途断掉**而变成空对象：OpenAI 路径的
+ * `JSON.parse(arguments)` 解析失败就退回 `{}`（backend.ts 的 fromOpenAIResponse），
+ * Anthropic 路径的 `partialParse` 只解出半截。两种都表现为"工具收到了空参数"。
+ * 这类调用若照常往下走，代价远不止空跑一次：
+ *   - `write_file`/`edit_file` 会先弹一次「Allow edit_file? (y/n)」——用户在确认框里
+ *     看不到任何参数，只能盲选；选 y 是空跑，选 n 模型又以为是自己被拒绝；
+ *   - `ask_user` 会拿一个空问题去渲染交互层，整轮停在"等用户作答"上——这就是
+ *     "偶发卡住"最典型的形态。
+ * 所以在权限确认与 handler 之前先拦掉，回一句明确可重试的 tool_result。
+ *
+ * ## 判定口径
+ *
+ * 只认**参数键缺失**（不存在 / undefined / null），空字符串不算缺——
+ * `edit_file` 的 `new_string: ''` 是合法的"删掉这段文本"。
+ */
+export function missingRequiredArgs(
+  mp: import('./registry.js').MountPoint,
+  input: Record<string, any> | undefined,
+): string[] {
+  const schema = mp.inputSchema as { required?: unknown };
+  const required = Array.isArray(schema?.required) ? (schema.required as string[]) : [];
+  if (required.length === 0) return [];
+  if (!input || typeof input !== 'object') return [...required];
+  return required.filter((k) => {
+    if (!Object.prototype.hasOwnProperty.call(input, k)) return true;
+    const v = input[k];
+    return v === undefined || v === null;
+  });
+}
+
+/**
  * 单个参数值的压缩展示。
  *
  * 关键：体积标注（行数/字符数）放在**前缀之前**。若放在后面，超长内容的前缀
@@ -819,17 +854,44 @@ export class Agent {
         mp: import('./registry.js').MountPoint | undefined,
         input: Record<string, any>,
       ): Promise<void> => {
+        /**
+         * 「没跑成」的统一出口：写结果喂回模型，同时**仍然补一对 tool_start/tool_end**。
+         *
+         * 为什么非补不可：`tools_planned` 已经把整批工具挂进了 UI 的任务面板
+         * （状态 queued）。只 set 结果不发事件，那一项就永远停在"待执行"，
+         * 面板收不起来——用户看到的就是"卡在这一步不动"。
+         */
+        const fail = (msg: string): void => {
+          this.print(`  → ${tu.name}(${compactToolEcho(tu.input)})\n`);
+          this.events?.({ type: 'tool_start', id: tu.id, name: tu.name, input });
+          this.events?.({ type: 'tool_end', id: tu.id, name: tu.name, output: msg });
+          outputById.set(tu.id, msg);
+        };
+
+        if (!mp) {
+          // P5：循环唯一入口 = registry.resolve；未注册工具 fail-closed 拒绝
+          // （先判未注册：连 schema 都没有，谈不上"参数缺失"）
+          fail(`Unknown tool: ${tu.name}`);
+          return;
+        }
+        // 参数缺失守卫：必须跑在权限确认与 handler **之前**。
+        // 流式中途断掉会让 input 退化成 {}（OpenAI 侧 JSON.parse 失败、Anthropic 侧
+        // partialParse 只解出半截），此时照常往下走会弹出一个"看不见参数"的权限确认框，
+        // 或让 ask_user 拿空问题挂在交互层上等用户——两者都表现为卡住。
+        const missing = missingRequiredArgs(mp, input);
+        if (missing.length > 0) {
+          fail(
+            `Error: ${tu.name} was called without required argument(s): ${missing.join(', ')}. ` +
+              'The arguments arrived empty or truncated — call the tool again with the full arguments.',
+          );
+          return;
+        }
         // 工具调用的进度提示走 print 缝（与模型文本同一条 UI 通道）。
         // 必须截断：write_file/edit_file 的 input 里带着**整篇文件内容**，
         // 原样打印会变成一行几千字符的长文本，按终端宽度折成几十行 →
         // live 帧超过终端行数 → ink 整屏清屏（ESC[3J 连 scrollback 一起清），
         // 用户向上回看的位置被直接重置。见 compactToolEcho。
         this.print(`  → ${tu.name}(${compactToolEcho(tu.input)})\n`);
-        if (!mp) {
-          // P5：循环唯一入口 = registry.resolve；未注册工具 fail-closed 拒绝
-          outputById.set(tu.id, `Unknown tool: ${tu.name}`);
-          return;
-        }
         const decision = await decideExecution(mp, input, {
           mode: this.mode,
           allowlist: this.allowlist,

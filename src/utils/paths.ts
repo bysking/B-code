@@ -41,6 +41,8 @@ export const dirs = {
   logsDir: () => join(basePath(), 'logs'),
   /** 跨项目记忆根目录（P4 使用） */
   projectsDir: () => join(basePath(), 'projects'),
+  /** 全局记忆目录：所有项目都能召回（B_CODE_MEMORY_DIR 可覆盖，见 memory.ts） */
+  memoryDir: () => join(basePath(), 'memory'),
   /** 用户级技能目录（随 B_CODE_HOME 迁移；P4 使用） */
   skillsDir: () => join(basePath(), 'skills'),
   /** 用户级 MCP 服务器配置（P5 使用） */

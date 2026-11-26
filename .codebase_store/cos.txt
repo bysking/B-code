@@ -1,0 +1,7 @@
+#COS-ROOT-MANIFEST: 1
+#Format-Version: cognition-volumes/v1
+#Locale: zh-CN
+#Project: B-code
+#Global-Invariants: 语义只由宿主模型创作，程序绝不生成、预填或判断；写入前必须能读回自己写的字节，否则整批拒绝；S 字段两问准入：能推断的不写，删了不出事的不写；配额上限在程序里，改索引文本放宽不了
+#Volume: id=meta kind=meta path=cos.meta.txt format=meta-v1 depends=- state=enabled
+#Volume: id=code kind=code path=cos.code.txt format=object-fras-v2 depends=meta state=enabled

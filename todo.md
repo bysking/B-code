@@ -1,4 +1,5 @@
 【todo】右键复制后无法再选中文本（等 OpenTUI 上游修复，细节见下方专项记录）
+【todo】检查是否支持 B_CODE_HOME/AGENTS.md 全局系统提示词 和 B_CODE_HOME/memory/xxx.md 全局记忆（全局记忆目录支持配置环境变量修改成指定目录）
 
 ---
 
@@ -7,17 +8,17 @@
 全部 9 项已落地，`bun test` 661 用例全绿（61 个文件），`bun run typecheck` 干净。
 
 
-| # | 项                             | 落点                                                                                           |
-| --- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 1 | 思考中 `/skills` `/mcp` 打不开 | `src/prompt-queue.ts` 分流 + `cli.handleLocal`（忙碌期立刻执行）                               |
-| 2 | 忙碌期输入队列 + 强插          | `PromptQueue` + `Ctrl+Enter`（`onInterruptAndSend`）                                           |
-| 3 | 输入历史逐条上翻               | `app.tsx` 去掉 `input === ''` 硬条件 + `navigatingRef` 防重置                                  |
-| 4 | 默认 auto 模式                 | `initialMode()` 兜底 `auto`，新增 `--default`；controller 同步                                 |
-| 5 | Ctrl+O 打开即贴底              | `output-panel.tsx` 的 `scrollTo(Infinity)` + `afterLayout`                                     |
-| 6 | `/todo_clear`                  | `user-todo.ts:clearAllUserTodos` + `agent.ts:clearTodoList`（两份一起清）+ cli 分发 + 斜杠菜单 |
-| 7 | MCP 异步启动                   | `runTtyCli` 改为挂载后 `void agent.initMcp()`                                                  |
-| 8 | `/btw`（旁支只读提问）         | `agent.runBtwThread` + `cli.runBtwCommand`（`/fork` 已按需求移除）                             |
-| 9 | ↑ 撤回排队输入 + 光标贴末尾    | `PromptQueue.shiftLast` + cli `onRecallQueued` + `app.tsx` `queueRecallRef`；`input.tsx` 改用 `measureText` 定位光标 |
+| # | 项                             | 落点                                                                                                                 |
+| --- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1 | 思考中 `/skills` `/mcp` 打不开 | `src/prompt-queue.ts` 分流 + `cli.handleLocal`（忙碌期立刻执行）                                                     |
+| 2 | 忙碌期输入队列 + 强插          | `PromptQueue` + `Ctrl+Enter`（`onInterruptAndSend`）                                                                 |
+| 3 | 输入历史逐条上翻               | `app.tsx` 去掉 `input === ''` 硬条件 + `navigatingRef` 防重置                                                        |
+| 4 | 默认 auto 模式                 | `initialMode()` 兜底 `auto`，新增 `--default`；controller 同步                                                       |
+| 5 | Ctrl+O 打开即贴底              | `output-panel.tsx` 的 `scrollTo(Infinity)` + `afterLayout`                                                           |
+| 6 | `/todo_clear`                  | `user-todo.ts:clearAllUserTodos` + `agent.ts:clearTodoList`（两份一起清）+ cli 分发 + 斜杠菜单                       |
+| 7 | MCP 异步启动                   | `runTtyCli` 改为挂载后 `void agent.initMcp()`                                                                        |
+| 8 | `/btw`（旁支只读提问）         | `agent.runBtwThread` + `cli.runBtwCommand`（`/fork` 已按需求移除）                                                   |
+| 9 | ↑ 撤回排队输入 + 光标贴末尾   | `PromptQueue.shiftLast` + cli `onRecallQueued` + `app.tsx` `queueRecallRef`；`input.tsx` 改用 `measureText` 定位光标 |
 
 新增测试：`prompt-queue` / `ui-input-history` / `ui-interrupt-send` /
 `mode-default` / `user-todo-clear` / `btw` / `ui-queue-recall`。

@@ -19,15 +19,13 @@ test('readClipboardImage：有图片时返回 base64 数据', async () => {
   try {
     const { execSync } = await import('node:child_process');
     // 1x1 蓝色 PNG 的 base64
-    const bluePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const bluePngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     // 写入临时文件
-    execSync(
-      `echo "${bluePngBase64}" | base64 -d > /tmp/bcode_test_paste.png`,
-      { timeout: 3000 },
-    );
+    execSync(`echo "${bluePngBase64}" | base64 -d > /tmp/bcode_test_paste.png`, { timeout: 3000 });
     // 复制到剪贴板
     execSync(
-      'osascript -e \'set theImage to (read (POSIX file "/tmp/bcode_test_paste.png") as «class PNGf»)\' -e \'set the clipboard to theImage\'',
+      "osascript -e 'set theImage to (read (POSIX file \"/tmp/bcode_test_paste.png\") as «class PNGf»)' -e 'set the clipboard to theImage'",
       { timeout: 5000 },
     );
     execSync('rm -f /tmp/bcode_test_paste.png', { timeout: 2000 });
@@ -98,10 +96,7 @@ test('Windows：powershell 参数与脚本内容正确', async () => {
   );
   assert.ok(src.includes("'-EncodedCommand'"), '必须走 -EncodedCommand（避开引号解析）');
   assert.ok(src.includes("'-NoProfile'"), '必须 -NoProfile（用户 profile 可能污染输出）');
-  assert.ok(
-    src.includes("stdio: ['ignore', 'pipe', 'pipe']"),
-    'stdio 必须收敛，否则子进程输出会打进备用屏',
-  );
+  assert.ok(src.includes("stdio: ['ignore', 'pipe', 'pipe']"), 'stdio 必须收敛，否则子进程输出会打进备用屏');
 
   // 2) 脚本内容：取 script 数组的源码块（`const script = [ ... ].join('; ')`）
   const block = /const script = \[([\s\S]*?)\]\.join\(/.exec(src)?.[1] ?? '';

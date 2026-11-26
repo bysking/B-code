@@ -36,8 +36,7 @@ export function ModeBar({
       {updateInfo ? (
         <box flexDirection="row">
           <text fg={COLORS.warning}>
-            ⬆️ 发现新版本 v{updateInfo.current} → v{updateInfo.latest}，运行 npm i -g
-            @bysking/b-code 升级
+            ⬆️ 发现新版本 v{updateInfo.current} → v{updateInfo.latest}，运行 npm i -g @bysking/b-code 升级
           </text>
         </box>
       ) : null}
